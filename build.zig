@@ -43,11 +43,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zignet_dep = b.dependency("ZigNet", .{});
-    const raknet_mod = zignet_dep.module("Raknet");
-
     const binarystream_dep = b.dependency("BinaryStream", .{});
     const binarystream_mod = binarystream_dep.module("BinaryStream");
+
+    const raknet_mod = b.addModule("Raknet", .{
+        .root_source_file = b.path("libs/ZigNet/src/root.zig"),
+    });
+
+    raknet_mod.addImport("BinaryStream", binarystream_mod);
 
     const zlib_dep = b.dependency("zlib", .{
         .target = target,
@@ -63,13 +66,13 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .target = target,
             .optimize = .ReleaseFast,
+            .link_libcpp = true,
         }),
     });
 
-    leveldb_lib.addIncludePath(b.path("libs/leveldb/src"));
-    leveldb_lib.addIncludePath(b.path("libs/leveldb/src/include"));
-    leveldb_lib.linkLibCpp();
-    leveldb_lib.linkLibrary(zlib_dep.artifact("z"));
+    leveldb_lib.root_module.addIncludePath(b.path("libs/leveldb/src"));
+    leveldb_lib.root_module.addIncludePath(b.path("libs/leveldb/src/include"));
+    leveldb_lib.root_module.linkLibrary(zlib_dep.artifact("z"));
 
     const platform_flags: []const []const u8 = if (is_windows)
         &.{ "-std=c++17", "-DLEVELDB_PLATFORM_WINDOWS", "-D_UNICODE", "-DUNICODE", "-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX" }
@@ -79,20 +82,20 @@ pub fn build(b: *std.Build) void {
         &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FDATASYNC=1", "-DHAVE_O_CLOEXEC=1" };
 
     for (leveldb_sources) |src| {
-        leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{src})), .flags = platform_flags });
+        leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{src})), .flags = platform_flags });
     }
 
     const env_file: []const u8 = if (is_windows) "util/env_windows.cc" else "util/env_posix.cc";
-    leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{env_file})), .flags = platform_flags });
+    leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{env_file})), .flags = platform_flags });
 
     const nbt_mod = b.addModule("nbt", .{
-        .root_source_file = b.path("src/nbt/root.zig"),
+        .root_source_file = b.path("libs/Nbt/src/root.zig"),
         .target = target,
     });
     nbt_mod.addImport("BinaryStream", binarystream_mod);
 
     const protocol_mod = b.addModule("protocol", .{
-        .root_source_file = b.path("src/protocol/root.zig"),
+        .root_source_file = b.path("libs/Protocol/src/root.zig"),
         .target = target,
     });
     protocol_mod.addImport("BinaryStream", binarystream_mod);
@@ -123,6 +126,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libcpp = true,
             .imports = &.{
                 .{ .name = "conduit", .module = conduit_mod },
                 .{ .name = "protocol", .module = protocol_mod },
@@ -132,11 +136,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.linkLibrary(zlib_dep.artifact("z"));
-    exe.linkLibrary(leveldb_lib);
-    exe.linkLibCpp();
+    exe.root_module.linkLibrary(zlib_dep.artifact("z"));
+    exe.root_module.linkLibrary(leveldb_lib);
     if (is_windows) {
-        exe.linkSystemLibrary("winmm");
+        exe.root_module.linkSystemLibrary("winmm", .{});
     }
     // exe.root_module.strip = true;
     b.installArtifact(exe);
@@ -155,6 +158,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/conduit/chest-test-root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libcpp = true,
         .imports = &.{
             .{ .name = "BinaryStream", .module = binarystream_mod },
             .{ .name = "Raknet", .module = raknet_mod },
@@ -168,9 +172,8 @@ pub fn build(b: *std.Build) void {
         chest_test_mod.linkSystemLibrary("psapi", .{});
     }
     const chest_tests = b.addTest(.{ .root_module = chest_test_mod });
-    chest_tests.linkLibrary(leveldb_lib);
-    chest_tests.linkLibrary(zlib_dep.artifact("z"));
-    chest_tests.linkLibCpp();
+    chest_tests.root_module.linkLibrary(leveldb_lib);
+    chest_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
     const run_chest_tests = b.addRunArtifact(chest_tests);
 
     const test_step = b.step("test", "Run tests");
