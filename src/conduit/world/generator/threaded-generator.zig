@@ -10,31 +10,29 @@ const GenerationRequest = struct {
     result: ?*Chunk = null,
     err: bool = false,
     completed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    mutex: std.Thread.Mutex = .{},
-    condition: std.Thread.Condition = .{},
+    mutex: std.Io.Mutex = .init,
+    condition: std.Io.Condition = .init,
 };
 
 pub const ThreadedGenerator = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     generator: TerrainGenerator,
-    pool: std.Thread.Pool,
+    pool: std.Io.Group,
 
-    pub fn init(allocator: std.mem.Allocator, generator: TerrainGenerator, thread_count: ?usize) !*ThreadedGenerator {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, generator: TerrainGenerator) !*ThreadedGenerator {
         const self = try allocator.create(ThreadedGenerator);
         self.* = .{
+            .io = io,
             .allocator = allocator,
             .generator = generator,
-            .pool = undefined,
+            .pool = .init,
         };
-        try self.pool.init(.{
-            .allocator = allocator,
-            .n_jobs = thread_count,
-        });
         return self;
     }
 
     pub fn deinit(self: *ThreadedGenerator) void {
-        self.pool.deinit();
+        self.pool.cancel(self.io);
         self.generator.deinit();
         self.allocator.destroy(self);
     }
@@ -51,32 +49,42 @@ pub const ThreadedGenerator = struct {
             .generator = self.generator,
         };
 
-        self.pool.spawn(runGeneration, .{&request});
+        try self.pool.concurrent(self.io, runGeneration, .{ self.io, &request });
 
-        request.mutex.lock();
-        defer request.mutex.unlock();
+        try request.mutex.lock(self.io);
+        defer request.mutex.unlock(self.io);
         while (!request.completed.load(.acquire)) {
-            request.condition.wait(&request.mutex);
+            request.condition.wait(self.io, &request.mutex);
         }
 
         if (request.err) return error.GenerationFailed;
         return request.result.?;
     }
 
-    fn runGeneration(request: *GenerationRequest) void {
+    fn runGeneration(io: std.Io, request: *GenerationRequest) void {
         const chunk = request.generator.generate(request.allocator, request.x, request.z) catch {
-            request.mutex.lock();
+            request.mutex.lock(io) catch |err| {
+                std.log.err("failed to acquire lock: {}", .{err});
+                request.err = true;
+                request.condition.signal();
+                return;
+            };
             request.err = true;
             request.completed.store(true, .release);
             request.condition.signal();
-            request.mutex.unlock();
+            request.mutex.unlock(io);
             return;
         };
 
-        request.mutex.lock();
+        request.mutex.lock(io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            request.err = true;
+            request.condition.signal();
+            return;
+        };
         request.result = chunk;
         request.completed.store(true, .release);
         request.condition.signal();
-        request.mutex.unlock();
+        request.mutex.unlock(io);
     }
 };

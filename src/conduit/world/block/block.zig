@@ -13,14 +13,14 @@ pub const Block = struct {
     position: Protocol.BlockPosition,
     dimension: *Dimension,
     allocator: std.mem.Allocator,
-    traits: std.ArrayListUnmanaged(BlockTraitInstance),
+    traits: std.ArrayList(BlockTraitInstance),
 
     pub fn init(allocator: std.mem.Allocator, dimension: *Dimension, position: Protocol.BlockPosition) Block {
         return .{
             .position = position,
             .dimension = dimension,
             .allocator = allocator,
-            .traits = .{},
+            .traits = .empty,
         };
     }
 

@@ -221,13 +221,13 @@ pub const EntityTraitFactory = *const fn (std.mem.Allocator) error{OutOfMemory}!
 
 const FactoryList = std.ArrayListUnmanaged(EntityTraitFactory);
 
-var entity_trait_registry: std.StringHashMapUnmanaged(FactoryList) = .{};
+var entity_trait_registry: std.StringHashMapUnmanaged(FactoryList) = .empty;
 var registry_allocator: std.mem.Allocator = undefined;
 var registry_initialized: bool = false;
 
 pub fn initEntityTraitRegistry(allocator: std.mem.Allocator) void {
     registry_allocator = allocator;
-    entity_trait_registry = .{};
+    entity_trait_registry = .empty;
     registry_initialized = true;
 }
 
@@ -245,7 +245,7 @@ pub fn registerTraitForEntities(comptime entities: []const []const u8, factory: 
     inline for (entities) |entity_id| {
         const gop = try entity_trait_registry.getOrPut(registry_allocator, entity_id);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{};
+            gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(registry_allocator, factory);
     }

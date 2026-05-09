@@ -60,26 +60,28 @@ fn recommendedWorkerCountForCpu(cpu_count: usize) usize {
 }
 
 pub const ThreadedTaskQueue = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     pending: std.ArrayList(ThreadedTask),
     completed: std.ArrayList(ThreadedTask),
-    pending_mutex: std.Thread.Mutex,
-    pending_cond: std.Thread.Condition,
-    completed_mutex: std.Thread.Mutex,
+    pending_mutex: std.Io.Mutex,
+    pending_cond: std.Io.Condition,
+    completed_mutex: std.Io.Mutex,
     workers: []?std.Thread,
     running: bool,
     configured_worker_count: usize,
     detected_cpu_count: usize,
     active_worker_count: usize,
 
-    pub fn init(allocator: std.mem.Allocator, configured_worker_count: usize) ThreadedTaskQueue {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, configured_worker_count: usize) ThreadedTaskQueue {
         return .{
+            .io = io,
             .allocator = allocator,
             .pending = std.ArrayList(ThreadedTask){ .items = &.{}, .capacity = 0 },
             .completed = std.ArrayList(ThreadedTask){ .items = &.{}, .capacity = 0 },
-            .pending_mutex = .{},
-            .pending_cond = .{},
-            .completed_mutex = .{},
+            .pending_mutex = .init,
+            .pending_cond = .init,
+            .completed_mutex = .init,
             .workers = &.{},
             .running = false,
             .configured_worker_count = configured_worker_count,
@@ -109,44 +111,56 @@ pub const ThreadedTaskQueue = struct {
     }
 
     pub fn enqueue(self: *ThreadedTaskQueue, task: ThreadedTask) !void {
-        self.pending_mutex.lock();
-        defer self.pending_mutex.unlock();
+        try self.pending_mutex.lock(self.io);
+        defer self.pending_mutex.unlock(self.io);
         try self.pending.append(self.allocator, task);
-        self.pending_cond.signal();
+        self.pending_cond.signal(self.io);
     }
 
     pub fn drainCompleted(self: *ThreadedTaskQueue, budget_ns: u64) void {
-        const drain_start = std.time.nanoTimestamp();
+        const drain_start = std.Io.Timestamp.now(self.io, .awake);
         while (true) {
-            self.completed_mutex.lock();
+            self.completed_mutex.lock(self.io) catch |err| {
+                std.log.err("failed to acquire lock: {}", .{err});
+            };
             if (self.completed.items.len == 0) {
-                self.completed_mutex.unlock();
+                self.completed_mutex.unlock(self.io);
                 return;
             }
             const task = self.completed.swapRemove(0);
-            self.completed_mutex.unlock();
+            self.completed_mutex.unlock(self.io);
 
             if (task.callback) |cb| cb(task.ctx);
 
-            const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - drain_start));
+            const elapsed: u64 = @intCast(@max(0, drain_start.durationTo(.now(self.io, .awake)).nanoseconds));
             if (elapsed >= budget_ns) return;
         }
     }
 
     pub fn clearPending(self: *ThreadedTaskQueue) void {
-        self.pending_mutex.lock();
+        self.pending_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+        };
+
         for (self.pending.items) |task| {
             if (task.cleanup) |c_fn| c_fn(task.ctx);
         }
         self.pending.clearRetainingCapacity();
-        self.pending_mutex.unlock();
+        self.pending_mutex.unlock(self.io);
     }
 
     pub fn stop(self: *ThreadedTaskQueue) void {
-        self.pending_mutex.lock();
+        self.pending_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            for (self.workers) |*w| {
+                if (w.*) |t| t.join();
+            }
+            return;
+        };
+
         self.running = false;
-        self.pending_cond.broadcast();
-        self.pending_mutex.unlock();
+        self.pending_cond.broadcast(self.io);
+        self.pending_mutex.unlock(self.io);
 
         for (self.workers) |*w| {
             if (w.*) |t| {
@@ -171,24 +185,35 @@ pub const ThreadedTaskQueue = struct {
 
     fn workerLoop(self: *ThreadedTaskQueue) void {
         while (true) {
-            self.pending_mutex.lock();
+            self.pending_mutex.lock(self.io) catch |err| {
+                std.log.err("failed to acquire lock: {}", .{err});
+                continue;
+            };
             while (self.pending.items.len == 0 and self.running) {
-                self.pending_cond.wait(&self.pending_mutex);
+                self.pending_cond.wait(self.io, &self.pending_mutex) catch |err| {
+                    std.log.err("worker condition wait failed: {}", .{err});
+                    return;
+                };
             }
             if (!self.running and self.pending.items.len == 0) {
-                self.pending_mutex.unlock();
+                self.pending_mutex.unlock(self.io);
                 return;
             }
             const task = self.pending.swapRemove(0);
-            self.pending_mutex.unlock();
+            self.pending_mutex.unlock(self.io);
 
             task.work(task.ctx);
 
-            self.completed_mutex.lock();
+            self.completed_mutex.lock(self.io) catch |err| {
+                std.log.err("failed to acquire lock: {}", .{err});
+                if (task.cleanup) |c_fn| c_fn(task.ctx);
+                continue;
+            };
+
             self.completed.append(self.allocator, task) catch {
                 if (task.cleanup) |c_fn| c_fn(task.ctx);
             };
-            self.completed_mutex.unlock();
+            self.completed_mutex.unlock(self.io);
         }
     }
 };
@@ -231,7 +256,7 @@ test "task queue completeness with swapRemove" {
         ctx.* = .{ .counter = &completed_count };
     }
 
-    var queue = ThreadedTaskQueue.init(allocator, 0);
+    var queue = ThreadedTaskQueue.init(std.testing.io, allocator, 0);
     defer queue.deinit();
     try queue.start();
 

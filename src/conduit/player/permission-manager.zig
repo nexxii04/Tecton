@@ -9,14 +9,16 @@ pub const PermissionGroup = struct {
 };
 
 pub const PermissionManager = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     groups: std.StringHashMap(*PermissionGroup),
     player_groups: std.StringHashMap([]const u8),
     default_group: []const u8,
     path: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, path: []const u8, default_group: []const u8) PermissionManager {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, path: []const u8, default_group: []const u8) PermissionManager {
         var mgr = PermissionManager{
+            .io = io,
             .allocator = allocator,
             .groups = std.StringHashMap(*PermissionGroup).init(allocator),
             .player_groups = std.StringHashMap([]const u8).init(allocator),
@@ -111,9 +113,12 @@ pub const PermissionManager = struct {
     }
 
     fn load(self: *PermissionManager) void {
-        const file = std.fs.cwd().openFile(self.path, .{}) catch return;
-        defer file.close();
-        const data = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return;
+        const file = std.Io.Dir.cwd().openFile(self.io, self.path, .{}) catch return;
+        defer file.close(self.io);
+
+        var read_buf: [4096]u8 = undefined;
+        var reader = file.reader(self.io, &read_buf).interface;
+        const data = reader.allocRemaining(self.allocator, .limited(1024 * 1024)) catch return;
         defer self.allocator.free(data);
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, data, .{}) catch return;
@@ -175,16 +180,18 @@ pub const PermissionManager = struct {
     }
 
     fn save(self: *PermissionManager) void {
-        const file = std.fs.cwd().createFile(self.path, .{}) catch return;
-        defer file.close();
+        const file = std.Io.Dir.cwd().openFile(self.io, self.path, .{}) catch return;
+        defer file.close(self.io);
 
-        file.writeAll("{\n  \"groups\": {\n") catch return;
+        var write_buf: [4096]u8 = undefined;
+        var writer = file.writer(self.io, &write_buf).interface;
+        writer.writeAll("{\n  \"groups\": {\n") catch return;
         var gi: usize = 0;
         var git = self.groups.iterator();
         while (git.next()) |entry| {
             var buf: [128]u8 = undefined;
             const header = std.fmt.bufPrint(&buf, "    \"{s}\": [\n", .{entry.key_ptr.*}) catch continue;
-            file.writeAll(header) catch continue;
+            writer.writeAll(header) catch continue;
 
             var pi: usize = 0;
             const perm_count = entry.value_ptr.*.permissions.count();
@@ -193,19 +200,19 @@ pub const PermissionManager = struct {
                 var pbuf: [256]u8 = undefined;
                 const comma: []const u8 = if (pi + 1 < perm_count) "," else "";
                 const line = std.fmt.bufPrint(&pbuf, "      \"{s}\"{s}\n", .{ perm.*, comma }) catch continue;
-                file.writeAll(line) catch continue;
+                writer.writeAll(line) catch continue;
                 pi += 1;
             }
 
             gi += 1;
             if (gi < self.groups.count()) {
-                file.writeAll("    ],\n") catch continue;
+                writer.writeAll("    ],\n") catch continue;
             } else {
-                file.writeAll("    ]\n") catch continue;
+                writer.writeAll("    ]\n") catch continue;
             }
         }
 
-        file.writeAll("  },\n  \"players\": {\n") catch return;
+        writer.writeAll("  },\n  \"players\": {\n") catch return;
         var pli: usize = 0;
         var plit = self.player_groups.iterator();
         while (plit.next()) |entry| {
@@ -213,8 +220,8 @@ pub const PermissionManager = struct {
             pli += 1;
             const comma: []const u8 = if (pli < self.player_groups.count()) "," else "";
             const line = std.fmt.bufPrint(&buf, "    \"{s}\": \"{s}\"{s}\n", .{ entry.key_ptr.*, entry.value_ptr.*, comma }) catch continue;
-            file.writeAll(line) catch continue;
+            writer.writeAll(line) catch continue;
         }
-        file.writeAll("  }\n}\n") catch return;
+        writer.writeAll("  }\n}\n") catch return;
     }
 };

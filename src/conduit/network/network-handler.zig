@@ -43,7 +43,7 @@ pub const NetworkHandler = struct {
     allocator: std.mem.Allocator,
     options: CompressionOptions,
     packet_queue: std.ArrayList(QueuedPacket),
-    packet_queue_mutex: std.Thread.Mutex,
+    packet_queue_mutex: std.Io.Mutex,
 
     pub fn init(c: *Conduit) !*NetworkHandler {
         const self = try c.allocator.create(NetworkHandler);
@@ -55,7 +55,7 @@ pub const NetworkHandler = struct {
                 .compressionThreshold = 255,
             },
             .packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 },
-            .packet_queue_mutex = .{},
+            .packet_queue_mutex = .init,
         };
         self.conduit.*.raknet.setConnectCallback(onConnect, self);
         self.conduit.*.raknet.setDisconnectCallback(onDisconnect, self);
@@ -79,26 +79,35 @@ pub const NetworkHandler = struct {
     pub fn onPacket(conn: *Raknet.Connection, payload: []const u8, context: ?*anyopaque) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
         const copy = self.allocator.dupe(u8, payload) catch return;
-        self.packet_queue_mutex.lock();
-        defer self.packet_queue_mutex.unlock();
+
+        self.packet_queue_mutex.lock(self.conduit.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
+        defer self.packet_queue_mutex.unlock(self.conduit.io);
+
         self.packet_queue.append(self.allocator, .{ .conn = conn, .payload = copy }) catch {
             self.allocator.free(copy);
         };
     }
 
     pub fn drainPackets(self: *NetworkHandler, budget_ns: u64, max_packets: usize) PacketDrainResult {
-        self.packet_queue_mutex.lock();
+        self.packet_queue_mutex.lock(self.conduit.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return .{ .processed = 0, .remaining = self.packet_queue.items.len };
+        };
+
         var queue = self.packet_queue;
         self.packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 };
-        self.packet_queue_mutex.unlock();
+        self.packet_queue_mutex.unlock(self.conduit.io);
 
-        const drain_start = std.time.nanoTimestamp();
+        const drain_start = std.Io.Timestamp.now(self.conduit.io, .awake);
         var processed: usize = 0;
         var remaining_start: usize = queue.items.len;
 
         while (processed < queue.items.len) : (processed += 1) {
             if (processed >= max_packets) break;
-            const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - drain_start));
+            const elapsed: u64 = @intCast(@max(0, drain_start.durationTo(.now(self.conduit.io, .awake)).toMilliseconds()));
             if (elapsed >= budget_ns) break;
 
             const entry = queue.items[processed];
@@ -110,8 +119,12 @@ pub const NetworkHandler = struct {
 
         remaining_start = processed;
         if (remaining_start < queue.items.len) {
-            self.packet_queue_mutex.lock();
-            defer self.packet_queue_mutex.unlock();
+            self.packet_queue_mutex.lock(self.conduit.io) catch |err| {
+                std.log.err("failed to acquire lock: {}", .{err});
+                return .{ .processed = 0, .remaining = self.packet_queue.items.len };
+            };
+
+            defer self.packet_queue_mutex.unlock(self.conduit.io);
 
             var merged = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 };
             merged.ensureTotalCapacity(self.allocator, (queue.items.len - remaining_start) + self.packet_queue.items.len) catch {

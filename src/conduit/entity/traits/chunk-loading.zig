@@ -42,7 +42,7 @@ fn getPlayer(entity: *Entity) ?*Player {
 fn onTick(state: *State, entity: *Entity) void {
     const player = getPlayer(entity) orelse return;
     if (!player.spawned) return;
-    const player_count = player.network.conduit.getPlayerCount();
+    const player_count = player.network.conduit.getPlayerCount() catch return;
     const visibility_interval: u8 = if (player_count <= 16)
         VISIBILITY_UPDATE_INTERVAL
     else if (player_count <= 48)
@@ -129,7 +129,7 @@ fn updatePlayerVisibility(player: *Player) void {
         }
     }
 
-    var stale = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    var stale = std.ArrayList(i64).empty;
     defer stale.deinit(allocator);
     var it = player.visible_players.keyIterator();
     while (it.next()) |rid| {
@@ -490,7 +490,7 @@ fn workerReadBlockData(
 ) ChunkBlockData {
     var result = ChunkBlockData{ .parsed_entities = &.{}, .trait_positions = &.{} };
 
-    var positions = std.ArrayList(TraitBlockPos){ .items = &.{}, .capacity = 0 };
+    var positions = std.ArrayList(TraitBlockPos).empty;
 
     const dim_index: i32 = switch (dim_type) {
         .Overworld => 0,
@@ -733,7 +733,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
 
     const dimension: ?*Dimension = work.dimension;
 
-    var t0 = std.time.nanoTimestamp();
+    var t0 = std.Io.Timestamp.now(work.conduit.io, .awake);
     for (0..work.count) |i| {
         if (work.chunks[i]) |chunk| {
             if (dimension) |dim| {
@@ -766,10 +766,10 @@ fn onBatchComplete(ctx: *anyopaque) void {
             }
         }
     }
-    var t1 = std.time.nanoTimestamp();
-    work.conduit.profiler.record(.batch_chunks, @intCast(@max(0, t1 - t0)));
+    var t1 = std.Io.Timestamp.now(work.conduit.io, .awake);
+    work.conduit.profiler.record(.batch_chunks, @intCast(@max(0, t0.durationTo(t1).nanoseconds)));
 
-    t0 = std.time.nanoTimestamp();
+    t0 = std.Io.Timestamp.now(work.conduit.io, .awake);
     if (work.send_chunk_packets) {
         if (dimension) |dim| {
             for (0..work.count) |i| {
@@ -793,10 +793,10 @@ fn onBatchComplete(ctx: *anyopaque) void {
         }
     }
 
-    t1 = std.time.nanoTimestamp();
-    work.conduit.profiler.record(.batch_send, @intCast(@max(0, t1 - t0)));
+    t1 = std.Io.Timestamp.now(work.conduit.io, .awake);
+    work.conduit.profiler.record(.batch_send, @intCast(@max(0, t0.durationTo(t1).nanoseconds)));
 
-    t0 = std.time.nanoTimestamp();
+    t0 = std.Io.Timestamp.now(work.conduit.io, .awake);
     if (dimension) |dim| {
         for (0..work.count) |i| {
             if (work.chunks[i] == null or !work.in_simulation[i]) continue;
@@ -809,8 +809,8 @@ fn onBatchComplete(ctx: *anyopaque) void {
             sendChunkBlockActorData(allocator, dim, player, work);
         }
     }
-    t1 = std.time.nanoTimestamp();
-    work.conduit.profiler.record(.batch_block_data, @intCast(@max(0, t1 - t0)));
+    t1 = std.Io.Timestamp.now(work.conduit.io, .awake);
+    work.conduit.profiler.record(.batch_block_data, @intCast(@max(0, t0.durationTo(t1).nanoseconds)));
 }
 
 fn applyParsedBlockData(allocator: std.mem.Allocator, dim: *Dimension, data: *ChunkBlockData) void {

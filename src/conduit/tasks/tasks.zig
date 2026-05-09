@@ -1,4 +1,5 @@
 const std = @import("std");
+const Timestamp = std.Io.Timestamp;
 
 pub const TaskFn = *const fn (ctx: *anyopaque) bool;
 
@@ -49,13 +50,13 @@ pub const TaskQueue = struct {
         }
     }
 
-    pub fn runUntil(self: *TaskQueue, tick_start: i128, budget_ns: u64) bool {
+    pub fn runUntil(self: *TaskQueue, io: std.Io, tick_start: Timestamp, budget_ns: u64) bool {
         var did_work = false;
         const max_tasks_this_run = self.tasks.items.len;
         var tasks_run: usize = 0;
         var idx: usize = 0;
         while (self.tasks.items.len > 0 and tasks_run < max_tasks_this_run) {
-            const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - tick_start));
+            const elapsed: u64 = @intCast(@max(0, tick_start.durationTo(.now(io, .awake)).nanoseconds));
             if (elapsed >= budget_ns) break;
 
             if (idx >= self.tasks.items.len) idx = 0;
@@ -125,8 +126,8 @@ test "task queue runs cleanup when task completes" {
         .cleanup = cleanup,
     });
 
-    const tick_start = std.time.nanoTimestamp();
-    _ = queue.runUntil(tick_start, std.math.maxInt(u64));
+    const tick_start = Timestamp.now(std.testing.io, .awake);
+    _ = queue.runUntil(std.testing.io, tick_start, std.math.maxInt(u64));
 
     try std.testing.expect(ran);
     try std.testing.expectEqual(@as(usize, 1), cleaned);

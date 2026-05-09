@@ -60,9 +60,13 @@ fn onTick(state: *State, entity: *Entity) void {
 
     const conduit = dimension.world.conduit;
 
-    conduit.players_mutex.lock();
+    conduit.players_mutex.lock(conduit.io) catch |err| {
+        std.log.err("failed to acquire lock: {}", .{err});
+        return;
+    };
+
     const player_count = conduit.players.count();
-    conduit.players_mutex.unlock();
+    conduit.players_mutex.unlock(conduit.io);
 
     if (player_count == 0) return;
 

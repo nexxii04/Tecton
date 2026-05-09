@@ -9,7 +9,9 @@ pub fn Emitter() type {
         const Self = @This();
 
         const ListenerArrays = blk: {
-            var fields: [event_fields.len * 3]std.builtin.Type.StructField = undefined;
+            var field_names: [event_fields.len * 3][]const u8 = undefined;
+            var field_types: [event_fields.len * 3]type = undefined;
+
             for (event_fields, 0..) |field, i| {
                 const e: Event = @enumFromInt(field.value);
                 const EventT = Event.DataType(e);
@@ -17,34 +19,22 @@ pub fn Emitter() type {
                 const OnFn = *const fn (*const EventT) void;
                 const AfterFn = *const fn (*const EventT, bool) void;
 
-                fields[i * 3] = .{
-                    .name = field.name ++ "_before",
-                    .type = std.ArrayListUnmanaged(BeforeFn),
-                    .default_value_ptr = null,
-                    .is_comptime = false,
-                    .alignment = @alignOf(std.ArrayListUnmanaged(BeforeFn)),
-                };
-                fields[i * 3 + 1] = .{
-                    .name = field.name ++ "_on",
-                    .type = std.ArrayListUnmanaged(OnFn),
-                    .default_value_ptr = null,
-                    .is_comptime = false,
-                    .alignment = @alignOf(std.ArrayListUnmanaged(OnFn)),
-                };
-                fields[i * 3 + 2] = .{
-                    .name = field.name ++ "_after",
-                    .type = std.ArrayListUnmanaged(AfterFn),
-                    .default_value_ptr = null,
-                    .is_comptime = false,
-                    .alignment = @alignOf(std.ArrayListUnmanaged(AfterFn)),
-                };
+                field_names[i * 3] = field.name ++ "_before";
+                field_names[i * 3 + 1] = field.name ++ "_on";
+                field_names[i * 3 + 2] = field.name ++ "_after";
+
+                field_types[i * 3] = std.ArrayList(BeforeFn);
+                field_types[i * 3 + 1] = std.ArrayList(OnFn);
+                field_types[i * 3 + 2] = std.ArrayList(AfterFn);
             }
-            break :blk @Type(.{ .@"struct" = .{
-                .layout = .auto,
-                .fields = &fields,
-                .decls = &.{},
-                .is_tuple = false,
-            } });
+
+            break :blk @Struct(
+                .auto,
+                null,
+                &field_names,
+                &field_types,
+                &@splat(.{}),
+            );
         };
 
         allocator: std.mem.Allocator,
@@ -53,9 +43,9 @@ pub fn Emitter() type {
         pub fn init(allocator: std.mem.Allocator) Self {
             var listeners: ListenerArrays = undefined;
             inline for (event_fields) |field| {
-                @field(listeners, field.name ++ "_before") = .{};
-                @field(listeners, field.name ++ "_on") = .{};
-                @field(listeners, field.name ++ "_after") = .{};
+                @field(listeners, field.name ++ "_before") = .empty;
+                @field(listeners, field.name ++ "_on") = .empty;
+                @field(listeners, field.name ++ "_after") = .empty;
             }
             return .{ .allocator = allocator, .listeners = listeners };
         }

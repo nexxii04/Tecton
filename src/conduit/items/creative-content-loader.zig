@@ -135,7 +135,7 @@ fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !WriteItemsRe
 fn decodeBase64(allocator: std.mem.Allocator, b64: []const u8) ![]const u8 {
     if (b64.len == 0) return error.EmptyInput;
     const decoder = std.base64.standard.decoderWithIgnore("");
-    const size = try decoder.calcSizeUpperBound(b64.len);
+    const size = decoder.calcSizeUpperBound(b64.len);
     const buf = try allocator.alloc(u8, size);
     const decoded_len = try decoder.decode(buf, b64);
     return try allocator.realloc(buf, decoded_len);

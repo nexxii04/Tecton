@@ -139,7 +139,7 @@ const MetadataEntry = struct {
 fn parseNbtFromBase64(allocator: std.mem.Allocator, input: []const u8) !NBT.Tag {
     if (input.len == 0) return NBT.Tag{ .Compound = NBT.CompoundTag.init(allocator, null) };
     const decoder = std.base64.standard.decoderWithIgnore("");
-    const size = try decoder.calcSizeUpperBound(input.len);
+    const size = decoder.calcSizeUpperBound(input.len);
     const buf = try allocator.alloc(u8, size);
     defer allocator.free(buf);
     const decoded_len = try decoder.decode(buf, input);

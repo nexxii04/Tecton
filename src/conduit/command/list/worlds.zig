@@ -49,17 +49,16 @@ fn handle(raw: *anyopaque) void {
     const trimmed = std.mem.trim(u8, ctx.args, " ");
 
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var writer = std.Io.Writer.fixed(&buf);
 
     if (trimmed.len == 0) {
-        std.fmt.format(writer, "Worlds (§v{d}§r):", .{conduit.worlds.count()}) catch return;
+        std.Io.Writer.print(&writer, "Worlds (§v{d}§r):", .{conduit.worlds.count()}) catch return;
         var it = conduit.worlds.valueIterator();
         while (it.next()) |world| {
-            std.fmt.format(writer, "\n  §v{s}§r:", .{world.*.identifier}) catch return;
+            std.Io.Writer.print(&writer, "\n  §v{s}§r:", .{world.*.identifier}) catch return;
             var dim_it = world.*.dimensions.valueIterator();
             while (dim_it.next()) |dim| {
-                std.fmt.format(writer, "\n    §b{s}§r (§7spawn: §a{d}§7,§a{d}§7,§a{d}§r)", .{
+                std.Io.Writer.print(&writer, "\n    §b{s}§r (§7spawn: §a{d}§7,§a{d}§7,§a{d}§r)", .{
                     dim.*.identifier,
                     dim.*.spawn_position.x,
                     dim.*.spawn_position.y,
@@ -67,7 +66,7 @@ fn handle(raw: *anyopaque) void {
                 }) catch return;
             }
         }
-        ctx.sendOutput(true, fbs.getWritten());
+        ctx.sendOutput(true, writer.buffered());
         return;
     }
 
@@ -85,7 +84,7 @@ fn handle(raw: *anyopaque) void {
     const tps_color: []const u8 = if (tps_ratio >= 0.975) "§a" else if (tps_ratio >= 0.75) "§e" else "§c";
     const slow_color: []const u8 = if (conduit.profiler.slow_ticks == 0) "§a" else if (slow_pct < 5.0) "§e" else "§c";
 
-    std.fmt.format(writer, "§6World: §f{s}\n§7TPS: {s}{d:.1}§7/§f{d:.1} §7MSPT: §f{d:.2}ms §7RakNet: §f{d:.2}ms §7Game: §f{d:.2}ms §7SlowTicks: {s}{d} §7({d:.1}%%)", .{
+    std.Io.Writer.print(&writer, "§6World: §f{s}\n§7TPS: {s}{d:.1}§7/§f{d:.1} §7MSPT: §f{d:.2}ms §7RakNet: §f{d:.2}ms §7Game: §f{d:.2}ms §7SlowTicks: {s}{d} §7({d:.1}%%)", .{
         world.identifier,
         tps_color,
         conduit.current_tps,
@@ -105,7 +104,7 @@ fn handle(raw: *anyopaque) void {
         for (snapshots) |player| {
             if (player.entity.dimension == dim.*) player_count += 1;
         }
-        std.fmt.format(writer, "\n §b{s} §8[§7{s}§8]\n  §8Spawn: §f{d},{d},{d} §8SimDist: §f{d}\n  §8Chunks: §f{d} §8Entities: §f{d} §8Players: §f{d}", .{
+        std.Io.Writer.print(&writer, "\n §b{s} §8[§7{s}§8]\n  §8Spawn: §f{d},{d},{d} §8SimDist: §f{d}\n  §8Chunks: §f{d} §8Entities: §f{d} §8Players: §f{d}", .{
             dim.*.identifier,
             @tagName(dim.*.dimension_type),
             dim.*.spawn_position.x,
@@ -117,5 +116,5 @@ fn handle(raw: *anyopaque) void {
             player_count,
         }) catch return;
     }
-    ctx.sendOutput(true, fbs.getWritten());
+    ctx.sendOutput(true, writer.buffered());
 }

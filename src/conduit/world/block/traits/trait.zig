@@ -204,19 +204,19 @@ pub const DynamicTraitEntry = struct {
     factory: TraitFactory,
 };
 
-const FactoryList = std.ArrayListUnmanaged(TraitFactory);
+const FactoryList = std.ArrayList(TraitFactory);
 
-var trait_registry: std.StringHashMapUnmanaged(FactoryList) = .{};
-var trait_id_registry: std.StringHashMapUnmanaged(TraitFactory) = .{};
-var dynamic_traits: std.ArrayListUnmanaged(DynamicTraitEntry) = .{};
+var trait_registry: std.StringHashMapUnmanaged(FactoryList) = .empty;
+var trait_id_registry: std.StringHashMapUnmanaged(TraitFactory) = .empty;
+var dynamic_traits: std.ArrayListUnmanaged(DynamicTraitEntry) = .empty;
 var registry_allocator: std.mem.Allocator = undefined;
 var registry_initialized: bool = false;
 
 pub fn initTraitRegistry(allocator: std.mem.Allocator) void {
     registry_allocator = allocator;
-    trait_registry = .{};
-    trait_id_registry = .{};
-    dynamic_traits = .{};
+    trait_registry = .empty;
+    trait_id_registry = .empty;
+    dynamic_traits = .empty;
     registry_initialized = true;
 }
 
@@ -236,7 +236,7 @@ pub fn registerTraitForBlocks(comptime blocks: []const []const u8, factory: Trai
     inline for (blocks) |block_id| {
         const gop = try trait_registry.getOrPut(registry_allocator, block_id);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{};
+            gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(registry_allocator, factory);
     }

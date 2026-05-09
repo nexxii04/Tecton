@@ -96,7 +96,7 @@ pub const CommandContext = struct {
             if (p.spawned) spawned_count += 1;
         }
         if (spawned_count == 0) return null;
-        const seed: u64 = @bitCast(std.time.milliTimestamp());
+        const seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Timestamp.now(self.network.conduit.io, .real).nanoseconds)));
         const idx = seed % spawned_count;
         var i: usize = 0;
         for (snapshots) |p| {

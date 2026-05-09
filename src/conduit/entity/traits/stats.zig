@@ -26,7 +26,7 @@ const Psapi = if (is_windows) struct {
     extern "psapi" fn GetProcessMemoryInfo(hProcess: std.os.windows.HANDLE, ppsmemCounters: *PROCESS_MEMORY_COUNTERS, cb: u32) callconv(.winapi) i32;
 } else struct {};
 
-fn getMemoryMB() f64 {
+fn getMemoryMB(io: std.Io) f64 {
     if (comptime is_windows) {
         var counters: PROCESS_MEMORY_COUNTERS = std.mem.zeroes(PROCESS_MEMORY_COUNTERS);
         counters.cb = @sizeOf(PROCESS_MEMORY_COUNTERS);
@@ -36,10 +36,13 @@ fn getMemoryMB() f64 {
         }
         return 0;
     } else {
-        const file = std.fs.openFileAbsolute("/proc/self/statm", .{}) catch return 0;
-        defer file.close();
+        const file = std.Io.Dir.openFileAbsolute(io, "/proc/self/statm", .{}) catch return 0;
+        defer file.close(io);
+
         var buf: [128]u8 = undefined;
-        const len = file.read(&buf) catch return 0;
+        var read_buf: [64]u8 = undefined;
+        var reader = file.reader(io, &read_buf);
+        const len = reader.interface.readSliceShort(&buf) catch return 0;
         const content = buf[0..len];
         var iter = std.mem.splitScalar(u8, content, ' ');
         _ = iter.next();
@@ -66,7 +69,7 @@ fn onTick(state: *State, entity: *Entity) void {
 
     const player = getPlayer(entity) orelse return;
     const conduit: *Conduit = player.network.conduit;
-    const player_count = conduit.getPlayerCount();
+    const player_count = conduit.getPlayerCount() catch return;
     const update_interval: u64 = if (player_count <= 8)
         20
     else if (player_count <= 32)
@@ -79,7 +82,7 @@ fn onTick(state: *State, entity: *Entity) void {
     const target_tps = conduit.targetTps();
     const mspt = conduit.current_mspt;
     if (last_memory_sample_tick != conduit.tick_count) {
-        cached_memory_mb = getMemoryMB();
+        cached_memory_mb = getMemoryMB(conduit.io);
         last_memory_sample_tick = conduit.tick_count;
     }
     const mem = cached_memory_mb;

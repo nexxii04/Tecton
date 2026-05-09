@@ -1,46 +1,48 @@
 const std = @import("std");
-const Events = @import("events/root.zig");
+const Timestamp = std.Io.Timestamp;
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
-const Raknet = @import("Raknet");
+const NBT = @import("nbt");
 const Protocol = @import("protocol");
-const NetworkHandler = @import("./network/root.zig").NetworkHandler;
-const Player = @import("./player/player.zig").Player;
-const World = @import("./world/world.zig").World;
-const Generator = @import("./world/generator/root.zig");
-const ServerProperties = @import("./config.zig").ServerProperties;
-const EntityType = @import("./entity/entity-type.zig").EntityType;
-const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
-const Entity = @import("./entity/entity.zig").Entity;
+const Raknet = @import("Raknet");
+
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
-
-const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
-const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
-const initRegistries = @import("./world/block/root.zig").initRegistries;
-const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
-const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
-const BarrelTrait = @import("./world/block/traits/barrel.zig").BarrelTrait;
-const UpperBlockTrait = @import("./world/block/traits/upper-block.zig").UpperBlockTrait;
-const OpenBitTrait = @import("./world/block/traits/open-bit.zig").OpenBitTrait;
-const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
-const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
-
+const ServerProperties = @import("./config.zig").ServerProperties;
+const shouldEmitVerboseStartupLogs = @import("./config.zig").shouldEmitVerboseStartupLogs;
+const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
+const EntityType = @import("./entity/entity-type.zig").EntityType;
+const Entity = @import("./entity/entity.zig").Entity;
 const EntityTraits = @import("./entity/traits/root.zig");
 const GravityTrait = EntityTraits.GravityTrait;
 const HealthTrait = EntityTraits.HealthTrait;
-
-const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
+const ItemPalette = @import("./items/item-palette.zig");
+const BanManager = @import("./network/ban-manager.zig").BanManager;
+const NetworkHandler = @import("./network/root.zig").NetworkHandler;
+const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
+const Player = @import("./player/player.zig").Player;
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 const ThreadedTaskQueue = @import("./tasks/threaded-tasks.zig").ThreadedTaskQueue;
 const WorkerCountResolution = @import("./tasks/threaded-tasks.zig").WorkerCountResolution;
 const resolveWorkerCount = @import("./tasks/threaded-tasks.zig").resolveWorkerCount;
 const totalServerThreadCount = @import("./tasks/threaded-tasks.zig").totalServerThreadCount;
-const shouldEmitVerboseStartupLogs = @import("./config.zig").shouldEmitVerboseStartupLogs;
 const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
-const BanManager = @import("./network/ban-manager.zig").BanManager;
-const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
+const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
+const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
+const initRegistries = @import("./world/block/root.zig").initRegistries;
+const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
+const BarrelTrait = @import("./world/block/traits/barrel.zig").BarrelTrait;
+const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
+const OpenBitTrait = @import("./world/block/traits/open-bit.zig").OpenBitTrait;
+const UpperBlockTrait = @import("./world/block/traits/upper-block.zig").UpperBlockTrait;
+const Generator = @import("./world/generator/root.zig");
+const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
+const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
+const World = @import("./world/world.zig").World;
+const Events = @import("events/root.zig");
 
 pub const Conduit = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     config: ServerProperties,
     events: Events.Events,
@@ -48,7 +50,7 @@ pub const Conduit = struct {
     network: *NetworkHandler,
     players: std.AutoHashMap(i64, *Player),
     connection_map: std.AutoHashMap(usize, *Player),
-    players_mutex: std.Thread.Mutex,
+    players_mutex: std.Io.Mutex = .init,
     snapshot_buf: std.ArrayList(*Player),
     worlds: std.StringHashMap(*World),
     player_entity_type: EntityType,
@@ -64,7 +66,7 @@ pub const Conduit = struct {
     current_mspt: f64 = 0.0,
     current_raknet_mspt: f64 = 0.0,
     current_game_mspt: f64 = 0.0,
-    last_tick_started_at: ?i128 = null,
+    last_tick_started_at: ?Timestamp = null,
     tasks: TaskQueue,
     threaded_tasks: ThreadedTaskQueue,
     profiler: TickProfiler,
@@ -72,13 +74,15 @@ pub const Conduit = struct {
     ban_manager: BanManager,
     permission_manager: PermissionManager,
 
-    pub fn init(allocator: std.mem.Allocator) !Conduit {
-        const config = try ServerProperties.load(allocator, "server.properties");
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) !Conduit {
+        Raknet.Logger.init(allocator);
+        const config = try ServerProperties.load(io, allocator, "server.properties");
         return Conduit{
+            .io = io,
             .allocator = allocator,
             .config = config,
             .events = Events.Events.init(allocator),
-            .raknet = try Raknet.Server.init(.{
+            .raknet = try Raknet.Server.init(io, .{
                 .address = config.address,
                 .port = config.port,
                 .tick_rate = @intCast(config.max_tps),
@@ -98,7 +102,6 @@ pub const Conduit = struct {
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
             .connection_map = std.AutoHashMap(usize, *Player).init(allocator),
-            .players_mutex = std.Thread.Mutex{},
             .snapshot_buf = std.ArrayList(*Player){ .items = &.{}, .capacity = 0 },
             .worlds = std.StringHashMap(*World).init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
@@ -110,11 +113,11 @@ pub const Conduit = struct {
             .current_raknet_mspt = 0.0,
             .current_game_mspt = 0.0,
             .tasks = TaskQueue.init(allocator),
-            .threaded_tasks = ThreadedTaskQueue.init(allocator, config.worker_threads),
+            .threaded_tasks = ThreadedTaskQueue.init(io, allocator, config.worker_threads),
             .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
-            .ban_manager = BanManager.init(allocator, "banned-players.json"),
-            .permission_manager = PermissionManager.init(allocator, "permissions.json", config.default_group),
+            .ban_manager = BanManager.init(io, allocator, "banned-players.json"),
+            .permission_manager = PermissionManager.init(io, allocator, "permissions.json", config.default_group),
         };
     }
 
@@ -168,44 +171,44 @@ pub const Conduit = struct {
             }
         }
 
-        if (std.fs.cwd().openDir("worlds", .{ .iterate = true })) |worlds_dir_val| {
+        if (std.Io.Dir.cwd().openDir(self.io, "worlds", .{ .iterate = true })) |worlds_dir_val| {
             var worlds_dir = worlds_dir_val;
-            defer worlds_dir.close();
+            defer worlds_dir.close(self.io);
             var dir_it = worlds_dir.iterate();
-            while (dir_it.next() catch null) |entry| {
+            while (dir_it.next(self.io) catch null) |entry| {
                 if (entry.kind != .directory) continue;
                 var path_buf: [512]u8 = undefined;
                 const db_path = std.fmt.bufPrintZ(&path_buf, "worlds/{s}/db", .{entry.name}) catch continue;
-                std.fs.cwd().makePath(db_path) catch {};
+                std.Io.Dir.cwd().createDirPath(self.io, db_path) catch {};
                 const provider = LevelDBProvider.init(self.allocator, db_path) catch |err| {
                     Raknet.Logger.ERROR("Failed to open world '{s}': {any}", .{ entry.name, err });
                     continue;
                 };
-                const props = Generator.GeneratorProperties.init(null, .Overworld);
+                const props = Generator.GeneratorProperties.init(self.io, null, .Overworld);
                 const superflat = Generator.SuperflatGenerator.init(self.allocator, props) catch continue;
-                const threaded = Generator.ThreadedGenerator.init(self.allocator, superflat.asGenerator(), null) catch continue;
+                const threaded = Generator.ThreadedGenerator.init(self.io, self.allocator, superflat.asGenerator()) catch continue;
                 const world = self.createWorld(entry.name, provider.asProvider()) catch continue;
                 const dim = world.createDimension("overworld", .Overworld, threaded) catch continue;
                 dim.simulation_distance = @intCast(self.config.simulation_distance);
                 var level_dat_buf: [512]u8 = undefined;
                 const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "worlds/{s}/level.dat", .{entry.name}) catch continue;
-                if (readLevelDatSpawn(self.allocator, level_dat_path)) |spawn| {
+                if (readLevelDatSpawn(self.io, self.allocator, level_dat_path)) |spawn| {
                     dim.spawn_position = spawn;
                     Raknet.Logger.INFO("World '{s}' spawn: {d}, {d}, {d}", .{ entry.name, spawn.x, spawn.y, spawn.z });
                 } else |_| {}
                 Raknet.Logger.INFO("Loaded world: {s}", .{entry.name});
             }
         } else |_| {
-            std.fs.cwd().makeDir("worlds") catch {};
+            std.Io.Dir.cwd().createDir(self.io, "worlds", .default_dir) catch {};
         }
 
         if (self.worlds.count() == 0) {
             Raknet.Logger.INFO("No worlds found, creating default world", .{});
-            std.fs.cwd().makePath("worlds/world/db") catch {};
+            std.Io.Dir.cwd().createDirPath(self.io, "worlds/world/db") catch {};
             const leveldb_provider = try LevelDBProvider.init(self.allocator, "worlds/world/db");
-            const props = Generator.GeneratorProperties.init(null, .Overworld);
+            const props = Generator.GeneratorProperties.init(self.io, null, .Overworld);
             const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
-            const threaded = try Generator.ThreadedGenerator.init(self.allocator, superflat.asGenerator(), null);
+            const threaded = try Generator.ThreadedGenerator.init(self.io, self.allocator, superflat.asGenerator());
             const world = try self.createWorld("world", leveldb_provider.asProvider());
             const dim = try world.createDimension("overworld", .Overworld, threaded);
             dim.simulation_distance = @intCast(self.config.simulation_distance);
@@ -276,23 +279,29 @@ pub const Conduit = struct {
     }
 
     pub fn getPlayerByConnection(self: *Conduit, connection: *Raknet.Connection) ?*Player {
-        self.players_mutex.lock();
-        defer self.players_mutex.unlock();
+        self.players_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return null;
+        };
+        defer self.players_mutex.unlock(self.io);
         if (self.connection_map.count() == 0) return null;
         return self.connection_map.get(@intFromPtr(connection));
     }
 
     pub fn addPlayer(self: *Conduit, player: *Player) !void {
-        self.players_mutex.lock();
-        defer self.players_mutex.unlock();
+        try self.players_mutex.lock(self.io);
+        defer self.players_mutex.unlock(self.io);
         try self.players.put(player.entity.runtime_id, player);
         try self.connection_map.put(@intFromPtr(player.connection), player);
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
 
     pub fn removePlayer(self: *Conduit, player: *Player) void {
-        self.players_mutex.lock();
-        defer self.players_mutex.unlock();
+        self.players_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
+        defer self.players_mutex.unlock(self.io);
         _ = self.players.remove(player.entity.runtime_id);
         _ = self.connection_map.remove(@intFromPtr(player.connection));
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
@@ -310,8 +319,12 @@ pub const Conduit = struct {
     }
 
     pub fn getPlayerSnapshots(self: *Conduit) []*Player {
-        self.players_mutex.lock();
-        defer self.players_mutex.unlock();
+        self.players_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return &.{};
+        };
+
+        defer self.players_mutex.unlock(self.io);
         self.snapshot_buf.clearRetainingCapacity();
         var it = self.players.valueIterator();
         while (it.next()) |p| {
@@ -320,9 +333,9 @@ pub const Conduit = struct {
         return self.snapshot_buf.items;
     }
 
-    pub fn getPlayerCount(self: *Conduit) usize {
-        self.players_mutex.lock();
-        defer self.players_mutex.unlock();
+    pub fn getPlayerCount(self: *Conduit) !usize {
+        try self.players_mutex.lock(self.io);
+        defer self.players_mutex.unlock(self.io);
         return self.players.count();
     }
 
@@ -332,14 +345,15 @@ pub const Conduit = struct {
 
     fn onTick(context: ?*anyopaque) void {
         const self = @as(*Conduit, @ptrCast(@alignCast(context)));
-        const work_start = std.time.nanoTimestamp();
+        const work_start = Timestamp.now(self.io, .awake);
         const target_tps_u64 = @max(@as(u64, 1), @as(u64, self.config.max_tps));
         const tick_budget_ns: u64 = std.time.ns_per_s / target_tps_u64;
         const metrics_window_ticks = target_tps_u64;
         self.profiler.tick_budget_ns = tick_budget_ns;
 
         if (self.last_tick_started_at) |last_tick_started_at| {
-            const interval_ns: u64 = @intCast(@max(0, work_start - last_tick_started_at));
+            const elapsed = work_start.durationTo(last_tick_started_at).nanoseconds;
+            const interval_ns: u64 = @intCast(@max(0, elapsed));
             self.tick_interval_accumulator += interval_ns;
             self.tick_interval_samples += 1;
         }
@@ -347,7 +361,7 @@ pub const Conduit = struct {
 
         self.tick_count += 1;
 
-        const raknet_ns = self.raknet.last_connection_tick_ns;
+        const raknet_ns: u64 = @intCast(@max(0, self.raknet.last_connection_tick_ns.nanoseconds));
         self.raknet_time_accumulator += raknet_ns;
         self.profiler.record(.raknet_tick, raknet_ns);
 
@@ -360,16 +374,16 @@ pub const Conduit = struct {
             });
         }
 
-        var phase_start = std.time.nanoTimestamp();
+        var phase_start = Timestamp.now(self.io, .awake);
         const snapshots = self.getPlayerSnapshots();
         for (snapshots) |player| {
             if (!player.spawned) continue;
             player.entity.fireEvent(.Tick, .{&player.entity});
         }
-        var phase_end = std.time.nanoTimestamp();
-        self.profiler.record(.player_tick, @intCast(@max(0, phase_end - phase_start)));
+        var phase_end = phase_start.durationTo(.now(self.io, .awake));
+        self.profiler.record(.player_tick, @intCast(@max(0, phase_end.nanoseconds)));
 
-        phase_start = std.time.nanoTimestamp();
+        phase_start = Timestamp.now(self.io, .awake);
         var worlds_it = self.worlds.valueIterator();
         while (worlds_it.next()) |world| {
             var dims_it = world.*.dimensions.valueIterator();
@@ -381,29 +395,30 @@ pub const Conduit = struct {
                 dim.*.flushPendingRemovals();
             }
         }
-        phase_end = std.time.nanoTimestamp();
-        self.profiler.record(.world_tick, @intCast(@max(0, phase_end - phase_start)));
+        phase_end = phase_start.durationTo(.now(self.io, .awake));
+        self.profiler.record(.world_tick, @intCast(@max(0, phase_end.nanoseconds)));
 
         const drain_budget = tick_budget_ns * 15 / 100;
 
-        phase_start = std.time.nanoTimestamp();
+        phase_start = Timestamp.now(self.io, .awake);
         self.threaded_tasks.drainCompleted(drain_budget);
-        phase_end = std.time.nanoTimestamp();
-        self.profiler.record(.drain_completed_1, @intCast(@max(0, phase_end - phase_start)));
+        phase_end = phase_start.durationTo(.now(self.io, .awake));
+        self.profiler.record(.drain_completed_1, @intCast(@max(0, phase_end.nanoseconds)));
 
-        phase_start = std.time.nanoTimestamp();
-        _ = self.tasks.runUntil(work_start, tick_budget_ns * 50 / 100);
-        phase_end = std.time.nanoTimestamp();
-        const tasks_ns: u64 = @intCast(@max(0, phase_end - phase_start));
+        phase_start = Timestamp.now(self.io, .awake);
+        _ = self.tasks.runUntil(self.io, work_start, tick_budget_ns * 50 / 100);
+        phase_end = phase_start.durationTo(.now(self.io, .awake));
+        const tasks_ns: u64 = @intCast(@max(0, phase_end.nanoseconds));
         self.tasks_time_accumulator += tasks_ns;
         self.profiler.record(.main_tasks, tasks_ns);
 
-        phase_start = std.time.nanoTimestamp();
+        phase_start = Timestamp.now(self.io, .awake);
         self.threaded_tasks.drainCompleted(drain_budget);
-        phase_end = std.time.nanoTimestamp();
-        self.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end - phase_start)));
+        phase_end = phase_start.durationTo(.now(self.io, .awake));
+        self.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end.nanoseconds)));
 
-        const work_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - work_start));
+        const work_end = work_start.durationTo(.now(self.io, .awake));
+        const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
         const total_tick_ns = raknet_ns + work_ns;
         self.work_time_accumulator += work_ns;
         self.profiler.recordTick(total_tick_ns);
@@ -478,14 +493,9 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
-        self.profiler.writeReport("dump/tick-profile.txt");
-
-        self.raknet.running = false;
-        self.raknet.socket.stop();
-        if (self.raknet.tick_thread) |thread| {
-            thread.join();
-            self.raknet.tick_thread = null;
-        }
+        Raknet.Logger.INFO("saved dump data", .{});
+        self.profiler.writeReport(self.io, "dump/tick-profile.txt");
+        Raknet.Logger.INFO("saved dump data", .{});
 
         self.threaded_tasks.clearPending();
         self.threaded_tasks.stop();
@@ -527,12 +537,13 @@ pub const Conduit = struct {
     }
 };
 
-const NBT = @import("nbt");
+fn readLevelDatSpawn(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Protocol.BlockPosition {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-fn readLevelDatSpawn(allocator: std.mem.Allocator, path: []const u8) !Protocol.BlockPosition {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-    const data = try file.readToEndAlloc(allocator, 8 * 1024 * 1024);
+    var read_buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const data = try reader.interface.allocRemaining(allocator, .limited(8 * 1024 * 1024));
     defer allocator.free(data);
     if (data.len < 8) return error.InvalidLevelDat;
 

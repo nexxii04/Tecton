@@ -6,9 +6,9 @@ pub const GeneratorProperties = struct {
     seed: u64,
     dimension_type: DimensionType,
 
-    pub fn init(seed: ?u64, dimension_type: DimensionType) GeneratorProperties {
+    pub fn init(io: std.Io, seed: ?u64, dimension_type: DimensionType) GeneratorProperties {
         return .{
-            .seed = seed orelse @intCast(@as(u64, @bitCast(std.time.timestamp()))),
+            .seed = seed orelse @as(u64, @truncate(@as(u96, @bitCast(std.Io.Timestamp.now(io, .real).nanoseconds)))),
             .dimension_type = dimension_type,
         };
     }

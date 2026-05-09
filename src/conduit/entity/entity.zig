@@ -24,7 +24,7 @@ pub const Entity = struct {
     head_yaw: f32,
     flags: EntityActorFlags,
     attributes: Attributes,
-    traits: std.ArrayListUnmanaged(EntityTraitInstance),
+    traits: std.ArrayList(EntityTraitInstance),
     dimension: ?*Dimension,
     name_tag: []const u8 = "",
     nametag_always_visible: bool = false,
@@ -42,7 +42,7 @@ pub const Entity = struct {
             .head_yaw = 0.0,
             .flags = EntityActorFlags.init(),
             .attributes = Attributes.init(allocator),
-            .traits = .{},
+            .traits = .empty,
             .dimension = dimension,
         };
     }

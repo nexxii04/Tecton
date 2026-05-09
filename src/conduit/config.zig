@@ -2,8 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Raknet = @import("Raknet");
 
-pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
-    return mode == .Debug;
+pub fn shouldEmitVerboseStartupLogs(_: std.builtin.OptimizeMode) bool {
+    return true;
+    // mode == .Debug;
 }
 
 pub const ServerProperties = struct {
@@ -19,7 +20,7 @@ pub const ServerProperties = struct {
     default_group: []const u8 = "operator",
 
     allocator: std.mem.Allocator,
-    _allocated_strings: std.ArrayListUnmanaged([]const u8) = .{},
+    _allocated_strings: std.ArrayList([]const u8) = .empty,
 
     const comments = .{
         .address = "What address should the server run on",
@@ -34,30 +35,33 @@ pub const ServerProperties = struct {
         .default_group = "Default permission group for new players",
     };
 
-    pub fn load(allocator: std.mem.Allocator, path: []const u8) !ServerProperties {
+    pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !ServerProperties {
         var self = ServerProperties{ .allocator = allocator };
 
-        const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 if (shouldEmitVerboseStartupLogs(builtin.mode)) {
                     Raknet.Logger.INFO("server.properties not found, creating with defaults", .{});
                 }
-                try self.save(path);
+                try self.save(io, path);
                 return self;
             },
             else => return err,
         };
-        defer file.close();
+        defer file.close(io);
 
         if (shouldEmitVerboseStartupLogs(builtin.mode)) {
             Raknet.Logger.INFO("Loading server.properties", .{});
         }
-        const content = try file.readToEndAlloc(allocator, 1024 * 64);
+
+        var read_buf: [4096]u8 = undefined;
+        var reader = file.reader(io, &read_buf);
+        const content = try reader.interface.allocRemaining(allocator, .limited(1024 * 64));
         defer allocator.free(content);
 
         var iter = std.mem.splitScalar(u8, content, '\n');
         while (iter.next()) |raw_line| {
-            const line = std.mem.trimRight(u8, raw_line, "\r");
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
             if (line.len == 0 or line[0] == '#') continue;
 
             const sep = std.mem.indexOfScalar(u8, line, '=') orelse continue;
@@ -100,7 +104,7 @@ pub const ServerProperties = struct {
         return error.UnknownProperty;
     }
 
-    pub fn save(self: *const ServerProperties, path: []const u8) !void {
+    pub fn save(self: *const ServerProperties, io: std.Io, path: []const u8) !void {
         var buf: [4096]u8 = undefined;
         var pos: usize = 0;
 
@@ -132,9 +136,14 @@ pub const ServerProperties = struct {
             pos += line.len;
         }
 
-        const file = try std.fs.cwd().createFile(path, .{});
-        defer file.close();
-        file.writeAll(buf[0..pos]) catch return error.WriteError;
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+        defer file.close(io);
+        var write_buf: [4098]u8 = undefined;
+        var writer = file.writer(io, &write_buf);
+        writer.interface.writeAll(buf[0..pos]) catch return error.WriteError;
+        writer.interface.flush() catch |err| {
+            std.log.err("failed to flush writer: {}", .{err});
+        };
     }
 
     pub fn deinit(self: *ServerProperties) void {

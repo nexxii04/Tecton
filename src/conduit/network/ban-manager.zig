@@ -13,14 +13,16 @@ pub const BanEntry = struct {
 };
 
 pub const BanManager = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     entries: std.ArrayList(BanEntry),
     path: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, path: []const u8) BanManager {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, path: []const u8) BanManager {
         var mgr = BanManager{
+            .io = io,
             .allocator = allocator,
-            .entries = std.ArrayList(BanEntry){ .items = &.{}, .capacity = 0 },
+            .entries = .empty,
             .path = path,
         };
         mgr.load();
@@ -86,9 +88,12 @@ pub const BanManager = struct {
     }
 
     fn load(self: *BanManager) void {
-        const file = std.fs.cwd().openFile(self.path, .{}) catch return;
-        defer file.close();
-        const data = file.readToEndAlloc(self.allocator, 1024 * 1024) catch return;
+        const file = std.Io.Dir.cwd().openFile(self.io, self.path, .{}) catch return;
+        defer file.close(self.io);
+
+        var read_buf: [4096]u8 = undefined;
+        var reader = file.reader(self.io, &read_buf);
+        const data = reader.interface.allocRemaining(self.allocator, .limited(1024 * 1024)) catch return;
         defer self.allocator.free(data);
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, data, .{}) catch return;
@@ -120,36 +125,41 @@ pub const BanManager = struct {
     }
 
     fn save(self: *BanManager) void {
-        const file = std.fs.cwd().createFile(self.path, .{}) catch return;
-        defer file.close();
-        file.writeAll("[\n") catch return;
+        const file = std.Io.Dir.cwd().openFile(self.io, self.path, .{}) catch return;
+        defer file.close(self.io);
+
+        var writer = file.writer(self.io, &.{});
+        writer.interface.writeAll("[\n") catch return;
         for (self.entries.items, 0..) |entry, i| {
-            file.writeAll("  {\n") catch return;
-            writeField(file, "uuid", entry.uuid);
-            writeField(file, "name", entry.name);
-            writeField(file, "created", entry.created);
-            writeField(file, "source", entry.source);
-            writeField(file, "expires", entry.expires);
-            writeLastField(file, "reason", entry.reason);
+            writer.interface.writeAll("  {\n") catch return;
+            writeField(&writer.interface, "uuid", entry.uuid);
+            writeField(&writer.interface, "name", entry.name);
+            writeField(&writer.interface, "created", entry.created);
+            writeField(&writer.interface, "source", entry.source);
+            writeField(&writer.interface, "expires", entry.expires);
+            writeLastField(&writer.interface, "reason", entry.reason);
             if (i + 1 < self.entries.items.len) {
-                file.writeAll("  },\n") catch return;
+                writer.interface.writeAll("  },\n") catch return;
             } else {
-                file.writeAll("  }\n") catch return;
+                writer.interface.writeAll("  }\n") catch return;
             }
         }
-        file.writeAll("]\n") catch return;
+        writer.interface.writeAll("]\n") catch return;
+        writer.interface.flush() catch |err| {
+            std.log.err("failed to flush writer: {}", .{err});
+        };
     }
 
-    fn writeField(file: std.fs.File, key: []const u8, val: []const u8) void {
+    fn writeField(writer: *std.Io.Writer, key: []const u8, val: []const u8) void {
         var buf: [512]u8 = undefined;
         const written = std.fmt.bufPrint(&buf, "    \"{s}\": \"{s}\",\n", .{ key, val }) catch return;
-        file.writeAll(written) catch {};
+        writer.writeAll(written) catch {};
     }
 
-    fn writeLastField(file: std.fs.File, key: []const u8, val: []const u8) void {
+    fn writeLastField(writer: *std.Io.Writer, key: []const u8, val: []const u8) void {
         var buf: [512]u8 = undefined;
         const written = std.fmt.bufPrint(&buf, "    \"{s}\": \"{s}\"\n", .{ key, val }) catch return;
-        file.writeAll(written) catch {};
+        writer.writeAll(written) catch {};
     }
 
     fn getStr(obj: std.json.ObjectMap, key: []const u8) []const u8 {

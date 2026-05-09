@@ -20,7 +20,7 @@ pub const ItemStack = struct {
     metadata: u32,
     nbt: ?CompoundTag,
     networkStackId: i32,
-    traits: std.ArrayListUnmanaged(ItemStackTraitInstance),
+    traits: std.ArrayList(ItemStackTraitInstance),
 
     pub const Options = struct {
         stackSize: u16 = 1,
@@ -37,7 +37,7 @@ pub const ItemStack = struct {
             .metadata = opts.metadata,
             .nbt = opts.nbt,
             .networkStackId = id,
-            .traits = .{},
+            .traits = .empty,
         };
     }
 

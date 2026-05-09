@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const leveldb_sources = &[_][]const u8{
     "db/builder.cc",
@@ -40,7 +41,12 @@ const leveldb_sources = &[_][]const u8{
 };
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const default_target: std.Target.Query = if (builtin.os.tag == .linux)
+        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }
+    else
+        .{};
+
+    const target = b.standardTargetOptions(.{ .default_target = default_target });
     const optimize = b.standardOptimizeOption(.{});
 
     const binarystream_dep = b.dependency("BinaryStream", .{});

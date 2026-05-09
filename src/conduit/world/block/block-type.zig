@@ -34,9 +34,9 @@ pub const BlockType = struct {
         const block_type = try allocator.create(BlockType);
         block_type.* = BlockType{
             .identifier = try allocator.dupe(u8, identifier),
-            .permutations = .{},
+            .permutations = .empty,
             .perm_by_hash = std.AutoHashMap(i32, *BlockPermutation).init(allocator),
-            .states = .{},
+            .states = .empty,
             .allocator = allocator,
         };
         return block_type;
