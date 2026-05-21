@@ -58,6 +58,11 @@ pub const Dimension = struct {
         dimension_type: Protocol.DimensionType,
         generator: ?*ThreadedGenerator,
     ) Dimension {
+        const spawn: Protocol.BlockPosition = if (generator) |gen|
+            gen.generator.spawnPoint()
+        else
+            Protocol.BlockPosition{ .x = 0, .y = 32767, .z = 0 };
+
         return Dimension{
             .world = world,
             .allocator = allocator,
@@ -70,11 +75,7 @@ pub const Dimension = struct {
             .chunk_packet_cache = std.AutoHashMap(ChunkHash, CachedPacket).init(allocator),
             .chunk_generations = std.AutoHashMap(ChunkHash, u64).init(allocator),
             .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
-            .spawn_position = Protocol.BlockPosition{
-                .x = 0,
-                .y = 32767,
-                .z = 0,
-            },
+            .spawn_position = spawn,
             .simulation_distance = 4,
             .generator = generator,
         };

@@ -1,8 +1,9 @@
-const Raknet = @import("Raknet");
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
+const Raknet = @import("Raknet");
+
 const inventory = @import("../../entity/traits/inventory.zig");
+const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 
 pub fn handleMobEquipment(
     network: *NetworkHandler,
@@ -11,7 +12,7 @@ pub fn handleMobEquipment(
 ) !void {
     _ = try stream.readVarInt();
     _ = try stream.readVarLong();
-    Protocol.NetworkItemStackDescriptor.skip(stream) catch {};
+    Protocol.NetworkItemStackDescriptor.skipShort(stream) catch {};
     const slot = try stream.readUint8();
     const selected_slot = try stream.readUint8();
     _ = try stream.readInt8();

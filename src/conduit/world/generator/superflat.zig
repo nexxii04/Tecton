@@ -1,6 +1,9 @@
 const std = @import("std");
-const Chunk = @import("../chunk/chunk.zig").Chunk;
+
+const Protocol = @import("protocol");
+
 const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const Chunk = @import("../chunk/chunk.zig").Chunk;
 const TerrainGenerator = @import("./terrain-generator.zig").TerrainGenerator;
 const GeneratorProperties = @import("./terrain-generator.zig").GeneratorProperties;
 
@@ -37,6 +40,7 @@ pub const SuperflatGenerator = struct {
     const vtable = TerrainGenerator.VTable{
         .generate = generate,
         .deinitFn = deinitErased,
+        .spawn = spawnPoint,
     };
 
     fn generate(ptr: *anyopaque, allocator: std.mem.Allocator, x: i32, z: i32) anyerror!*Chunk {
@@ -58,6 +62,14 @@ pub const SuperflatGenerator = struct {
 
         chunk.dirty = false;
         return chunk;
+    }
+
+    fn spawnPoint(_: *anyopaque) Protocol.BlockPosition {
+        return .{
+            .x = 0,
+            .y = -58,
+            .z = 0,
+        };
     }
 
     fn deinitErased(ptr: *anyopaque) void {

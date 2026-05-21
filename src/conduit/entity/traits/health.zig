@@ -28,7 +28,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
 
         const packet = Protocol.ActorEventPacket{
             .runtimeEntityId = @bitCast(entity.runtime_id),
-            .event = .Hurt,
+            .event = .HurtAnimation,
             .data = 0,
         };
         const serialized = packet.serialize(&stream) catch return;
@@ -70,7 +70,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
 
         const death_packet = Protocol.ActorEventPacket{
             .runtimeEntityId = @bitCast(entity.runtime_id),
-            .event = .Death,
+            .event = .DeathAnimation,
             .data = 0,
         };
         const serialized = death_packet.serialize(&stream) catch return;

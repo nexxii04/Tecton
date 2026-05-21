@@ -91,7 +91,7 @@ pub const Conduit = struct {
                     .game_type = .MCPE,
                     .level_name = config.motd,
                     .protocol = Protocol.PROTOCOL,
-                    .version = "26.1",
+                    .version = "26.2",
                     .player_count = 0,
                     .max_players = @intCast(config.max_players),
                     .guid = 0,
@@ -493,9 +493,7 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
-        Raknet.Logger.INFO("saved dump data", .{});
         self.profiler.writeReport(self.io, "dump/tick-profile.txt");
-        Raknet.Logger.INFO("saved dump data", .{});
 
         self.threaded_tasks.clearPending();
         self.threaded_tasks.stop();

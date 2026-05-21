@@ -9,7 +9,6 @@ pub fn handleNetworkSettings(
     stream: *BinaryStream,
 ) !void {
     const request = try Protocol.RequestNetworkSettingsPacket.deserialize(stream);
-    Raknet.Logger.INFO("client has protocol {d} and server {d}", .{ request.protocol, Protocol.PROTOCOL });
     if (request.protocol != Protocol.PROTOCOL) {
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
