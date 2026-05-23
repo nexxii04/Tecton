@@ -130,6 +130,8 @@ fn handleItemUseTransaction(
     const snapshots = network.conduit.getPlayerSnapshots();
     for (snapshots) |p| {
         if (!p.spawned) continue;
+        if (p.entity.runtime_id == player.entity.runtime_id) continue;
+
         var s = BinaryStream.init(network.allocator, null, null);
         defer s.deinit();
         const update = Protocol.UpdateBlockPacket{
