@@ -223,7 +223,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .personaDisabled = false,
         .customSkinsDisabled = false,
         .emoteChatMuted = false,
-        .gameVersion = "1.21.50",
+        .gameVersion = "26.20",
         .limitedWorldWidth = 0,
         .limitedWorldLength = 0,
         .isNewNether = true,
