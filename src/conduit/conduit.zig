@@ -35,6 +35,7 @@ const BarrelTrait = @import("./world/block/traits/barrel.zig").BarrelTrait;
 const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
 const OpenBitTrait = @import("./world/block/traits/open-bit.zig").OpenBitTrait;
 const UpperBlockTrait = @import("./world/block/traits/upper-block.zig").UpperBlockTrait;
+const WallConnectionTrait = @import("./world/block/traits/wall-connection.zig").WallConnectionTrait;
 const Generator = @import("./world/generator/root.zig");
 const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
 const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
@@ -128,6 +129,7 @@ pub const Conduit = struct {
         try BarrelTrait.register();
         try UpperBlockTrait.registerForState("upper_block_bit");
         try OpenBitTrait.registerForState("open_bit");
+        try WallConnectionTrait.register();
         const count = try loadBlockPermutations(self.allocator);
         if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
             Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
