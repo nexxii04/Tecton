@@ -85,7 +85,7 @@ fn onAttach(state: *State, block: *Block) void {
         const pos = block.position.relative(face);
         const adj_block = block.dimension.getBlockPtr(pos) orelse continue;
 
-        if (adj_block.traits.items.len == 0) {
+        if (!adj_block.hasTrait("wall_connection")) {
             applyTraitsForBlock(block.allocator, block.dimension, pos) catch {};
         }
 
