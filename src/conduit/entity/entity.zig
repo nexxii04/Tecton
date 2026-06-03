@@ -120,6 +120,8 @@ pub const Entity = struct {
 
     pub fn despawn(self: *Entity) void {
         self.fireEvent(.Despawn, .{self});
-        // TODO: remove from dimension entity list
+        if (self.dimension) |dim| {
+            dim.removeEntity(self);
+        }
     }
 };
