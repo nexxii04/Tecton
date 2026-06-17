@@ -49,15 +49,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{ .default_target = default_target });
     const optimize = b.standardOptimizeOption(.{});
 
-    const binarystream_dep = b.dependency("BinaryStream", .{});
-    const binarystream_mod = binarystream_dep.module("BinaryStream");
-
-    const raknet_mod = b.addModule("Raknet", .{
-        .root_source_file = b.path("libs/ZigNet/src/root.zig"),
-    });
-
-    raknet_mod.addImport("BinaryStream", binarystream_mod);
-
     const zlib_dep = b.dependency("zlib", .{
         .target = target,
         .optimize = optimize,
@@ -94,18 +85,29 @@ pub fn build(b: *std.Build) void {
     const env_file: []const u8 = if (is_windows) "util/env_windows.cc" else "util/env_posix.cc";
     leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{env_file})), .flags = platform_flags });
 
-    const nbt_mod = b.addModule("nbt", .{
-        .root_source_file = b.path("libs/Nbt/src/root.zig"),
+    const binarystream_dep = b.dependency("BinaryStream", .{
         .target = target,
+        .optimize = optimize,
     });
-    nbt_mod.addImport("BinaryStream", binarystream_mod);
+    const binarystream_mod = binarystream_dep.module("BinaryStream");
 
-    const protocol_mod = b.addModule("protocol", .{
-        .root_source_file = b.path("libs/Protocol/src/root.zig"),
-        .target = target,
+    const raknet_mod = b.addModule("Raknet", .{
+        .root_source_file = b.path("libs/ZigNet/src/root.zig"),
     });
-    protocol_mod.addImport("BinaryStream", binarystream_mod);
-    protocol_mod.addImport("nbt", nbt_mod);
+
+    raknet_mod.addImport("BinaryStream", binarystream_mod);
+
+    const nbt_dep = b.dependency("nbt", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const nbt_mod = nbt_dep.module("nbt");
+
+    const protocol_dep = b.dependency("protocol", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const protocol_mod = protocol_dep.module("Protocol");
 
     const leveldb_mod = b.addModule("leveldb", .{
         .root_source_file = b.path("libs/leveldb/leveldb.zig"),

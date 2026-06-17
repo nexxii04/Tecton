@@ -8,14 +8,20 @@
             .url = "git+https://github.com/allyourcodebase/zlib.git#d3b5519d3b73616a6bfece0712f080029d2a9244",
             .hash = "zlib-1.3.2-ZZQ7lc8NAAAHm9MDfplvwoesXvk4tVm6VCsiI8KnIbT0",
         },
-        .BinaryStream = .{
-            .path = "libs/BinaryStream",
-        },
         .ZigNet = .{
             .path = "libs/ZigNet",
         },
-        .Protocol = .{
-            .path = "libs/Protocol",
+        .protocol = .{
+            .url = "git+https://github.com/VantStudios/Protocol.git#24cdaa1b60190f3d17f8335cf0191ed23e7582c8",
+            .hash = "protocol-0.0.0-129wXhqHbQDtD3nnHxr5HJ4DBPb04blfTIYxcFnS77HS",
+        },
+        .BinaryStream = .{
+            .url = "git+https://github.com/VantStudios/BinaryStream?ref=master#b86fa752f49db4472d1480aeb0c8cc83462d8b39",
+            .hash = "BinaryStream-0.0.0-gn8mmnJZAQAnFC-kkrSOzigRqEgMsHddZlmmGELc0jAv",
+        },
+        .nbt = .{
+            .url = "git+https://github.com/VantStudios/Nbt.git#dbd31d6265cd0dcc6e659822ec2cedd72613c0e8",
+            .hash = "nbt-0.0.0-lsUufBrRAADisGBZm4XFayu1qBm1yBV_OQA7ffTtUwod",
         },
     },
     .paths = .{

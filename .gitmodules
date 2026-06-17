@@ -1,12 +1,3 @@
-[submodule "libs/BinaryStream"]
-	path = libs/BinaryStream
-	url = https://github.com/VantStudios/BinaryStream.git
-[submodule "libs/Nbt"]
-	path = libs/Nbt
-	url = https://github.com/VantStudios/Nbt.git
-[submodule "libs/Protocol"]
-	path = libs/Protocol
-	url = https://github.com/VantStudios/Protocol
 [submodule "libs/ZigNet"]
 	path = libs/ZigNet
 	url = https://github.com/VantStudios/ZigNet
