@@ -84,7 +84,7 @@ fn onInteract(state: *State, block: *Block, player: *Player) bool {
     _ = container.show(player, block.position);
 
     setOpenBit(block, true);
-    sendSound(block, .BarrelOpen);
+    sendSound(block, .block_barrel_open);
     return false;
 }
 
@@ -96,7 +96,7 @@ fn onBreak(state: *State, block: *Block, _: ?*Player) bool {
         }
     }
     setOpenBit(block, false);
-    sendSound(block, .BarrelClose);
+    sendSound(block, .block_barrel_close);
     return true;
 }
 
@@ -140,7 +140,7 @@ fn setOpenBit(block: *Block, open: bool) void {
     }
 }
 
-fn sendSound(block: *Block, event: Protocol.LevelSoundEvent) void {
+fn sendSound(block: *Block, event: Protocol.SoundEvent) void {
     const conduit = block.dimension.world.conduit;
     const snapshots = conduit.getPlayerSnapshots();
     const perm = block.getPermutation(0) catch return;

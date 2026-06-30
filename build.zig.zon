@@ -12,8 +12,8 @@
             .path = "libs/ZigNet",
         },
         .protocol = .{
-            .url = "git+https://github.com/VantStudios/Protocol.git#24cdaa1b60190f3d17f8335cf0191ed23e7582c8",
-            .hash = "protocol-0.0.0-129wXhqHbQDtD3nnHxr5HJ4DBPb04blfTIYxcFnS77HS",
+            .url = "git+https://github.com/VantStudios/Protocol.git#dfafe22a21d21d2ea03b5b16fb73b3ac0c4df581",
+            .hash = "protocol-0.0.0-129wXs4pbgBOZsBR-pRXvPP7dj6K3oIPRjwkDvtNtd3S",
         },
         .BinaryStream = .{
             .url = "git+https://github.com/VantStudios/BinaryStream?ref=master#b86fa752f49db4472d1480aeb0c8cc83462d8b39",

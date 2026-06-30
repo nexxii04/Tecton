@@ -95,7 +95,7 @@ fn sendCloseAt(network: *NetworkHandler, block: *@import("../../world/block/bloc
             var s = BinaryStream.init(network.allocator, null, null);
             defer s.deinit();
             const sound_packet = Protocol.LevelSoundEventPacket{
-                .event = .ChestClosed,
+                .event = .chest_closed,
                 .position = .{
                     .x = @floatFromInt(position.x),
                     .y = @floatFromInt(position.y),
@@ -150,7 +150,7 @@ fn sendBarrelClose(network: *NetworkHandler, block: *@import("../../world/block/
             var s = BinaryStream.init(network.allocator, null, null);
             defer s.deinit();
             const sound = Protocol.LevelSoundEventPacket{
-                .event = .BarrelClose,
+                .event = .block_barrel_close,
                 .position = .{
                     .x = @floatFromInt(position.x),
                     .y = @floatFromInt(position.y),

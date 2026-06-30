@@ -272,7 +272,7 @@ fn onInteract(state: *State, block: *Block, player: *Player) bool {
     sendActorData(block, player);
     _ = container.show(player, block.position);
     sendBlockEvent(block, 1);
-    sendSound(block, .ChestOpen);
+    sendSound(block, .chest_open);
     if (resolvedPairPosition(state, block)) |pair_pos| {
         sendBlockEventAt(block, pair_pos, 1);
     }
@@ -341,7 +341,7 @@ fn onBreak(state: *State, block: *Block, _: ?*Player) bool {
         }
     }
     sendBlockEvent(block, 0);
-    sendSound(block, .ChestClosed);
+    sendSound(block, .chest_closed);
     return true;
 }
 
@@ -432,7 +432,7 @@ fn sendBlockEventAt(block: *Block, position: Protocol.BlockPosition, data: i32) 
     }
 }
 
-fn sendSound(block: *Block, event: Protocol.LevelSoundEvent) void {
+fn sendSound(block: *Block, event: Protocol.SoundEvent) void {
     const conduit = block.dimension.world.conduit;
     const snapshots = conduit.getPlayerSnapshots();
     const perm = block.getPermutation(0) catch return;

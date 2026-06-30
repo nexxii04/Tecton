@@ -232,6 +232,8 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .experimentalGameplayOverride = false,
         .chatRestrictionLevel = 0,
         .disablePlayerInteractions = false,
+        .server_editor_connection_policy = 0,
+        .allow_anonimous_block_drops_in_editor_worlds = false,
         .levelIdentifier = "Conduit",
         .levelName = state.network.conduit.raknet.options.advertisement.level_name,
         .premiumWorldTemplateId = "00000000-0000-0000-0000-000000000000",
@@ -250,6 +252,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .clientSideGeneration = false,
         .blockNetworkIdsAreHashes = true,
         .serverControlledSounds = true,
+        .is_logging_chat = false,
         .containsServerJoinInfo = false,
         .serverTelemetryData = Protocol.ServerTelemetryData.init(
             "Conduit",

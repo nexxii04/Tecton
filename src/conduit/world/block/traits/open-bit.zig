@@ -71,12 +71,12 @@ fn onInteract(_: *State, block: *Block, _: *Player) bool {
     return false;
 }
 
-fn soundEvent(identifier: []const u8, open: bool) Protocol.LevelSoundEvent {
+fn soundEvent(identifier: []const u8, open: bool) Protocol.SoundEvent {
     if (std.mem.indexOf(u8, identifier, "trapdoor") != null)
-        return if (open) .TrapdoorOpen else .TrapdoorClose;
+        return if (open) .trapdoor_close else .trapdoor_close;
     if (std.mem.indexOf(u8, identifier, "fence_gate") != null)
-        return if (open) .FenceGateOpen else .FenceGateClose;
-    return if (open) .DoorOpen else .DoorClose;
+        return if (open) .fence_gate_open else .fence_gate_close;
+    return if (open) .door_open else .door_close;
 }
 
 pub const OpenBitTrait = trait_mod.BlockTrait(State, .{
