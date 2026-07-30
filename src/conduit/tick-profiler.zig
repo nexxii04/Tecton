@@ -7,6 +7,12 @@ const Phase = enum {
     drain_completed_1,
     main_tasks,
     drain_completed_2,
+    packet_drain,
+    packet_dispatch,
+    handler_player_auth,
+    handler_chunk_request,
+    handler_inventory,
+    handler_other,
     total,
     batch_chunks,
     batch_send,
@@ -100,9 +106,11 @@ pub const TickProfiler = struct {
         writer.interface.writeAll(line) catch return;
 
         const names = [_][]const u8{
-            "raknet_tick",       "player_tick",  "world_tick",
-            "drain_completed_1", "main_tasks",   "drain_completed_2",
-            "total",             "batch_chunks", "batch_send",
+            "raknet_tick",           "player_tick",       "world_tick",
+            "drain_completed_1",     "main_tasks",        "drain_completed_2",
+            "packet_drain",          "packet_dispatch",   "handler_player_auth",
+            "handler_chunk_request", "handler_inventory", "handler_other",
+            "total",                 "batch_chunks",      "batch_send",
             "batch_block_data",
         };
 

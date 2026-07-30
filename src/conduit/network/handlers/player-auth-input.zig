@@ -1,17 +1,20 @@
-const Raknet = @import("Raknet");
 const std = @import("std");
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const MoveDeltaFlags = Protocol.MoveDeltaFlags;
+const Raknet = @import("Raknet");
+
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
+const Events = @import("../../events/types.zig");
+const ItemType = @import("../../items/item-type.zig").ItemType;
+const Player = @import("../../player/player.zig").Player;
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
-const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
 const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").resolveWithPlacement;
 const PlacementContext = @import("../../world/block/traits/rotation.zig").PlacementContext;
 const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
-const Events = @import("../../events/types.zig");
-const ItemType = @import("../../items/item-type.zig").ItemType;
+const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
+const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 
 pub fn handlePlayerAuthInput(
     network: *NetworkHandler,
@@ -51,20 +54,19 @@ pub fn handlePlayerAuthInput(
         }
     }
 
-    var move_stream = BinaryStream.init(network.allocator, null, null);
-    defer move_stream.deinit();
+    network.scratch_stream.reset();
 
     const move_packet = Protocol.MoveActorDeltaPacket{
         .runtime_id = @intCast(player.entity.runtime_id),
         .flags = MoveDeltaFlags.All,
-        .x = packet.position.x,
-        .y = packet.position.y,
-        .z = packet.position.z,
-        .pitch = packet.rotation.x,
-        .yaw = packet.rotation.y,
-        .head_yaw = packet.headYaw,
+        .x = player.entity.position.x,
+        .y = player.entity.position.y,
+        .z = player.entity.position.z,
+        .pitch = player.entity.rotation.x,
+        .yaw = player.entity.rotation.y,
+        .head_yaw = player.entity.head_yaw,
     };
-    const serialized = try move_packet.serialize(&move_stream);
+    const serialized = try move_packet.serialize(&network.scratch_stream);
 
     const snapshots = network.conduit.getPlayerSnapshots();
     for (snapshots) |other| {
@@ -74,8 +76,6 @@ pub fn handlePlayerAuthInput(
         try network.sendPacket(other.connection, serialized);
     }
 }
-
-const Player = @import("../../player/player.zig").Player;
 
 fn handleItemUseTransaction(
     network: *NetworkHandler,
@@ -127,19 +127,20 @@ fn handleItemUseTransaction(
     }
 
     const network_id: u32 = @bitCast(permutation.network_id);
-    const snapshots = network.conduit.getPlayerSnapshots();
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        if (p.entity.runtime_id == player.entity.runtime_id) continue;
-
-        var s = BinaryStream.init(network.allocator, null, null);
-        defer s.deinit();
+    {
+        network.scratch_stream.reset();
         const update = Protocol.UpdateBlockPacket{
             .position = pos,
             .networkBlockId = network_id,
         };
-        const serialized = try update.serialize(&s);
-        try network.sendPacket(p.connection, serialized);
+        const serialized = try update.serialize(&network.scratch_stream);
+
+        const snapshots = network.conduit.getPlayerSnapshots();
+        for (snapshots) |p| {
+            if (!p.spawned) continue;
+            if (p.entity.runtime_id == player.entity.runtime_id) continue;
+            try network.sendPacket(p.connection, serialized);
+        }
     }
 }
 
@@ -217,18 +218,18 @@ fn handleBlockAction(
 
             broadcastLevelEvent(network, .ParticlesDestroyBlock, pos.toVector3f(), @bitCast(perm.network_id));
 
-            const air_id: u32 = @bitCast(air.network_id);
-            const snapshots = network.conduit.getPlayerSnapshots();
-            for (snapshots) |p| {
-                if (!p.spawned) continue;
-                var s = BinaryStream.init(network.allocator, null, null);
-                defer s.deinit();
+            {
+                network.scratch_stream.reset();
                 const update = Protocol.UpdateBlockPacket{
                     .position = pos,
-                    .networkBlockId = air_id,
+                    .networkBlockId = @bitCast(air.network_id),
                 };
-                const serialized = try update.serialize(&s);
-                try network.sendPacket(p.connection, serialized);
+                const serialized = try update.serialize(&network.scratch_stream);
+                const snapshots = network.conduit.getPlayerSnapshots();
+                for (snapshots) |p| {
+                    if (!p.spawned) continue;
+                    try network.sendPacket(p.connection, serialized);
+                }
             }
         },
         else => {},
@@ -236,14 +237,13 @@ fn handleBlockAction(
 }
 
 fn broadcastLevelEvent(network: *NetworkHandler, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
-    var s = BinaryStream.init(network.allocator, null, null);
-    defer s.deinit();
+    network.scratch_stream.reset();
     const pkt = Protocol.LevelEventPacket{
         .event = event,
         .position = position,
         .data = data,
     };
-    const serialized = pkt.serialize(&s) catch return;
+    const serialized = pkt.serialize(&network.scratch_stream) catch return;
     const snapshots = network.conduit.getPlayerSnapshots();
     for (snapshots) |p| {
         if (!p.spawned) continue;

@@ -1,31 +1,32 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const protocol = @import("protocol");
 const Packet = protocol.Packet;
+const Raknet = @import("Raknet");
 
 const Conduit = @import("../conduit.zig").Conduit;
-const Compression = @import("./compression/root.zig").Compression;
 const CompressionOptions = @import("./compression/options.zig").CompressionOptions;
-
-const handleNetworkSettings = @import("./handlers/request-network-settings.zig").handleNetworkSettings;
-const handleLogin = @import("./handlers/login.zig").handleLogin;
-const handleResourcePack = @import("./handlers/resource-packs-response.zig").handleResourcePack;
-const handleTextPacket = @import("./handlers/text.zig").handleTextPacket;
-const handleRequestChunkRadius = @import("./handlers/request-chunk-radius.zig").handleRequestChunkRadius;
-const handleSetLocalPlayerAsInitialized = @import("./handlers/set-local-player-as-initialized.zig").handleSetLocalPlayerAsInitialized;
-const handlePlayerAuthInput = @import("./handlers/player-auth-input.zig").handlePlayerAuthInput;
+const Compression = @import("./compression/root.zig").Compression;
+const DecompressResult = @import("./compression/root.zig").DecompressResult;
 const handleAnimate = @import("./handlers/animate.zig").handleAnimate;
+const handleBlockPickRequest = @import("./handlers/block-pick-request.zig").handleBlockPickRequest;
 const handleClientCacheStatus = @import("./handlers/client-cache-status.zig").handleClientCacheStatus;
-const handleInteract = @import("./handlers/interact.zig").handleInteract;
-const handleMobEquipment = @import("./handlers/mob-equipment.zig").handleMobEquipment;
-const handlePacketViolationWarning = @import("./handlers/packet-violation-warning.zig").handlePacketViolationWarning;
+const handleCommandRequest = @import("./handlers/command-request.zig").handleCommandRequest;
 const handleContainerClose = @import("./handlers/container-close.zig").handleContainerClose;
+const handleInteract = @import("./handlers/interact.zig").handleInteract;
 const handleInventoryTransaction = @import("./handlers/inventory-transaction.zig").handleInventoryTransaction;
 const handleItemStackRequest = @import("./handlers/item-stack-request.zig").handleItemStackRequest;
+const handleLogin = @import("./handlers/login.zig").handleLogin;
+const handleMobEquipment = @import("./handlers/mob-equipment.zig").handleMobEquipment;
+const handlePacketViolationWarning = @import("./handlers/packet-violation-warning.zig").handlePacketViolationWarning;
 const handlePlayerAction = @import("./handlers/player-action.zig").handlePlayerAction;
-const handleCommandRequest = @import("./handlers/command-request.zig").handleCommandRequest;
-const handleBlockPickRequest = @import("./handlers/block-pick-request.zig").handleBlockPickRequest;
+const handlePlayerAuthInput = @import("./handlers/player-auth-input.zig").handlePlayerAuthInput;
+const handleRequestChunkRadius = @import("./handlers/request-chunk-radius.zig").handleRequestChunkRadius;
+const handleNetworkSettings = @import("./handlers/request-network-settings.zig").handleNetworkSettings;
+const handleResourcePack = @import("./handlers/resource-packs-response.zig").handleResourcePack;
+const handleSetLocalPlayerAsInitialized = @import("./handlers/set-local-player-as-initialized.zig").handleSetLocalPlayerAsInitialized;
+const handleTextPacket = @import("./handlers/text.zig").handleTextPacket;
 const PlayerLog = @import("./player-log.zig");
 
 const QueuedPacket = struct {
@@ -38,12 +39,23 @@ const PacketDrainResult = struct {
     remaining: usize,
 };
 
+const DecompressWork = struct {
+    conn: *Raknet.Connection,
+    raw: []u8,
+    allocator: std.mem.Allocator,
+    handler: *NetworkHandler,
+    decompressed: ?DecompressResult = null,
+};
+
 pub const NetworkHandler = struct {
     conduit: *Conduit,
     allocator: std.mem.Allocator,
     options: CompressionOptions,
     packet_queue: std.ArrayList(QueuedPacket),
     packet_queue_mutex: std.Io.Mutex,
+    decompress_pool: std.heap.MemoryPool(DecompressWork),
+    decompress_pending: usize = 0,
+    scratch_stream: BinaryStream,
 
     pub fn init(c: *Conduit) !*NetworkHandler {
         const self = try c.allocator.create(NetworkHandler);
@@ -56,7 +68,11 @@ pub const NetworkHandler = struct {
             },
             .packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 },
             .packet_queue_mutex = .init,
+            .decompress_pool = undefined,
+            .scratch_stream = undefined,
         };
+        self.decompress_pool = try std.heap.MemoryPool(DecompressWork).initCapacity(c.allocator, 1024);
+        self.scratch_stream = BinaryStream.init(c.allocator, null, null);
         self.conduit.*.raknet.setConnectCallback(onConnect, self);
         self.conduit.*.raknet.setDisconnectCallback(onDisconnect, self);
         return self;
@@ -82,6 +98,7 @@ pub const NetworkHandler = struct {
 
         self.packet_queue_mutex.lock(self.conduit.io) catch |err| {
             std.log.err("failed to acquire lock: {}", .{err});
+            self.allocator.free(copy);
             return;
         };
         defer self.packet_queue_mutex.unlock(self.conduit.io);
@@ -92,71 +109,51 @@ pub const NetworkHandler = struct {
     }
 
     pub fn drainPackets(self: *NetworkHandler, budget_ns: u64, max_packets: usize) PacketDrainResult {
+        _ = budget_ns;
+        _ = max_packets;
+
         self.packet_queue_mutex.lock(self.conduit.io) catch |err| {
             std.log.err("failed to acquire lock: {}", .{err});
             return .{ .processed = 0, .remaining = self.packet_queue.items.len };
         };
 
         var queue = self.packet_queue;
-        self.packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 };
+        self.packet_queue = .empty;
         self.packet_queue_mutex.unlock(self.conduit.io);
 
-        const drain_start = std.Io.Timestamp.now(self.conduit.io, .awake);
-        var processed: usize = 0;
-        var remaining_start: usize = queue.items.len;
-
-        while (processed < queue.items.len) : (processed += 1) {
-            if (processed >= max_packets) break;
-            const elapsed: u64 = @intCast(@max(0, drain_start.durationTo(.now(self.conduit.io, .awake)).toMilliseconds()));
-            if (elapsed >= budget_ns) break;
-
-            const entry = queue.items[processed];
-            defer self.allocator.free(entry.payload);
-            self.onGamePacket(entry.conn, entry.payload) catch |err| {
-                Raknet.Logger.ERROR("Failed to handle encapsulated {any}", .{err});
+        var enqueued: usize = 0;
+        for (queue.items) |entry| {
+            const work = self.decompress_pool.create(self.allocator) catch {
+                self.allocator.free(entry.payload);
+                continue;
             };
+            work.* = .{
+                .conn = entry.conn,
+                .raw = entry.payload,
+                .allocator = self.allocator,
+                .handler = self,
+                .decompressed = null,
+            };
+            self.conduit.threaded_tasks.enqueue(.{
+                .work = decompressTask,
+                .callback = decompressCallback,
+                .cleanup = decompressCleanup,
+                .ctx = @ptrCast(work),
+            }) catch {
+                self.allocator.free(entry.payload);
+                self.decompress_pool.destroy(work);
+                continue;
+            };
+            enqueued += 1;
         }
 
-        remaining_start = processed;
-        if (remaining_start < queue.items.len) {
-            self.packet_queue_mutex.lock(self.conduit.io) catch |err| {
-                std.log.err("failed to acquire lock: {}", .{err});
-                return .{ .processed = 0, .remaining = self.packet_queue.items.len };
-            };
-
-            defer self.packet_queue_mutex.unlock(self.conduit.io);
-
-            var merged = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 };
-            merged.ensureTotalCapacity(self.allocator, (queue.items.len - remaining_start) + self.packet_queue.items.len) catch {
-                for (queue.items[remaining_start..]) |entry| self.allocator.free(entry.payload);
-                queue.deinit(self.allocator);
-                return .{ .processed = processed, .remaining = self.packet_queue.items.len };
-            };
-            merged.appendSlice(self.allocator, queue.items[remaining_start..]) catch {
-                for (queue.items[remaining_start..]) |entry| self.allocator.free(entry.payload);
-                queue.deinit(self.allocator);
-                return .{ .processed = processed, .remaining = self.packet_queue.items.len };
-            };
-            merged.appendSlice(self.allocator, self.packet_queue.items) catch {
-                for (queue.items[remaining_start..]) |entry| self.allocator.free(entry.payload);
-                merged.deinit(self.allocator);
-                queue.deinit(self.allocator);
-                return .{ .processed = processed, .remaining = self.packet_queue.items.len };
-            };
-
-            if (self.packet_queue.capacity > 0) self.packet_queue.deinit(self.allocator);
-            self.packet_queue = merged;
-        }
-
+        self.decompress_pending += enqueued;
         queue.deinit(self.allocator);
-        return .{ .processed = processed, .remaining = self.packet_queue.items.len };
+        return .{ .processed = enqueued, .remaining = 0 };
     }
 
-    pub fn onGamePacket(self: *NetworkHandler, conn: *Raknet.Connection, payload: []const u8) !void {
-        const decompressed = try Compression.decompress(payload, self.options, self.allocator);
-        defer decompressed.deinit();
-
-        for (decompressed.packets) |packet| {
+    fn dispatchPackets(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) void {
+        for (packets) |packet| {
             if (packet.len == 0) continue;
 
             var stream = BinaryStream.init(self.allocator, packet, null);
@@ -166,131 +163,149 @@ pub const NetworkHandler = struct {
             stream.offset = 0;
 
             switch (id) {
-                Packet.RequestNetworkSettings => handleNetworkSettings(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("RequestNetworkSettings error: {any}", .{err});
+                Packet.RequestNetworkSettings => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleNetworkSettings(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("RequestNetworkSettings error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.Login => handleLogin(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("LoginPacket error: {any}", .{err});
+                Packet.Login => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleLogin(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("LoginPacket error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.ResourcePackResponse => handleResourcePack(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("ResourcePackResponse error: {any}", .{err});
+                Packet.ResourcePackResponse => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleResourcePack(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("ResourcePackResponse error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.Text => handleTextPacket(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("Text error: {any}", .{err});
+                Packet.Text => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleTextPacket(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("Text error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.RequestChunkRadius => handleRequestChunkRadius(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("RequestChunkRadius error: {any}", .{err});
+                Packet.RequestChunkRadius => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleRequestChunkRadius(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("RequestChunkRadius error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_chunk_request, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.SetLocalPlayerAsInitialized => handleSetLocalPlayerAsInitialized(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("SetLocalPlayerAsInitialized error: {any}", .{err});
+                Packet.SetLocalPlayerAsInitialized => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleSetLocalPlayerAsInitialized(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("SetLocalPlayerAsInitialized error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.PlayerAuthInput => handlePlayerAuthInput(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("PlayerAuthInput error: {any}", .{err});
+                Packet.PlayerAuthInput => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handlePlayerAuthInput(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("PlayerAuthInput error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_player_auth, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.Animate => handleAnimate(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("Animate error: {any}", .{err});
+                Packet.Animate => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleAnimate(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("Animate error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.ClientCacheStatus => handleClientCacheStatus(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("ClientCacheStatus error: {any}", .{err});
+                Packet.ClientCacheStatus => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleClientCacheStatus(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("ClientCacheStatus error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.Interact => handleInteract(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("Interact error: {any}", .{err});
+                Packet.Interact => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleInteract(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("Interact error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.MobEquipment => handleMobEquipment(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("MobEquipment error: {any}", .{err});
+                Packet.MobEquipment => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleMobEquipment(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("MobEquipment error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.ContainerClose => handleContainerClose(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("ContainerClose error: {any}", .{err});
+                Packet.ContainerClose => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleContainerClose(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("ContainerClose error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.InventoryTransaction => handleInventoryTransaction(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("InventoryTransaction error: {any}", .{err});
+                Packet.InventoryTransaction => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleInventoryTransaction(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("InventoryTransaction error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_inventory, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.ItemStackRequest => handleItemStackRequest(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("ItemStackRequest error: {any}", .{err});
+                Packet.ItemStackRequest => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleItemStackRequest(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("ItemStackRequest error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_inventory, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.PlayerAction => handlePlayerAction(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("PlayerAction error: {any}", .{err});
+                Packet.PlayerAction => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handlePlayerAction(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("PlayerAction error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.CommandRequest => handleCommandRequest(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("CommandRequest error: {any}", .{err});
+                Packet.CommandRequest => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleCommandRequest(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("CommandRequest error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.PacketViolationWarning => handlePacketViolationWarning(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("PacketViolationWarning error: {any}", .{err});
+                Packet.PacketViolationWarning => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handlePacketViolationWarning(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("PacketViolationWarning error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
-                Packet.BlockPickRequest => handleBlockPickRequest(
-                    self,
-                    conn,
-                    &stream,
-                ) catch |err| {
-                    Raknet.Logger.ERROR("BlockPickRequest error: {any}", .{err});
+                Packet.BlockPickRequest => {
+                    const h_start = std.Io.Timestamp.now(self.conduit.io, .awake);
+                    handleBlockPickRequest(self, conn, &stream) catch |err| {
+                        Raknet.Logger.ERROR("BlockPickRequest error: {any}", .{err});
+                    };
+                    const h_end = h_start.durationTo(.now(self.conduit.io, .awake));
+                    self.conduit.profiler.record(.handler_other, @intCast(@max(0, h_end.nanoseconds)));
                 },
                 Packet.EmoteList,
                 Packet.ServerboundLoadingScreenPacket,
@@ -299,6 +314,50 @@ pub const NetworkHandler = struct {
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }
         }
+    }
+
+    pub fn onGamePacket(self: *NetworkHandler, conn: *Raknet.Connection, payload: []const u8) !void {
+        const decompressed = try Compression.decompress(payload, self.options, self.allocator);
+        defer decompressed.deinit();
+        self.dispatchPackets(conn, decompressed.packets);
+    }
+
+    fn decompressTask(ctx: *anyopaque) void {
+        const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
+        work.decompressed = Compression.decompress(work.raw, work.handler.options, work.allocator) catch |err| {
+            std.log.err("decompress failed: {}", .{err});
+            work.allocator.free(work.raw);
+            work.raw = &.{};
+            return;
+        };
+        work.allocator.free(work.raw);
+        work.raw = &.{};
+    }
+
+    fn decompressCallback(ctx: *anyopaque) void {
+        const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
+        if (work.decompressed) |result| {
+            const io = work.handler.conduit.io;
+            const pd_start = std.Io.Timestamp.now(io, .awake);
+            work.handler.dispatchPackets(work.conn, result.packets);
+            const pd_end = pd_start.durationTo(.now(io, .awake));
+            work.handler.conduit.profiler.record(.packet_dispatch, @intCast(@max(0, pd_end.nanoseconds)));
+            result.deinit();
+        }
+        work.handler.decompress_pending -= 1;
+        work.handler.decompress_pool.destroy(work);
+    }
+
+    fn decompressCleanup(ctx: *anyopaque) void {
+        const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
+        if (work.decompressed) |result| {
+            result.deinit();
+        }
+        if (work.raw.len > 0) {
+            work.allocator.free(work.raw);
+        }
+        work.handler.decompress_pending -= 1;
+        work.handler.decompress_pool.destroy(work);
     }
 
     pub fn sendUncompressedPacket(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
@@ -332,6 +391,8 @@ pub const NetworkHandler = struct {
     pub fn deinit(self: *NetworkHandler) void {
         for (self.packet_queue.items) |entry| self.allocator.free(entry.payload);
         self.packet_queue.deinit(self.allocator);
+        self.decompress_pool.deinit(self.allocator);
+        self.scratch_stream.deinit();
         self.allocator.destroy(self);
     }
 };

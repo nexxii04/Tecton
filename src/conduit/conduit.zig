@@ -367,12 +367,16 @@ pub const Conduit = struct {
         self.raknet_time_accumulator += raknet_ns;
         self.profiler.record(.raknet_tick, raknet_ns);
 
-        const packet_drain_budget = tick_budget_ns * 20 / 100;
-        const packet_drain = self.network.drainPackets(packet_drain_budget, 64);
-        if (packet_drain.remaining > 256 and self.tick_count % target_tps_u64 == 0) {
-            Raknet.Logger.WARN("Network packet backlog: processed={d} remaining={d}", .{
-                packet_drain.processed,
-                packet_drain.remaining,
+        const packet_drain_budget = tick_budget_ns * 5 / 100;
+        {
+            const pd_start = Timestamp.now(self.io, .awake);
+            _ = self.network.drainPackets(packet_drain_budget, 64);
+            const pd_end = pd_start.durationTo(.now(self.io, .awake));
+            self.profiler.record(.packet_drain, @intCast(@max(0, pd_end.nanoseconds)));
+        }
+        if (self.network.decompress_pending > 256 and self.tick_count % target_tps_u64 == 0) {
+            Raknet.Logger.WARN("Network packet backlog: pending={d}", .{
+                self.network.decompress_pending,
             });
         }
 
