@@ -14,6 +14,8 @@ AGENTS.md
 .build
 .test
 .claude
+.agents/
+skills-lock.json
 
 zig-out-verify
 
