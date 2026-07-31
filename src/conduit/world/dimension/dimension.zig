@@ -369,7 +369,7 @@ pub const Dimension = struct {
     }
 
     pub fn spawnItemEntity(self: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !*Entity {
-        const stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = count });
+        const stack = ItemStack.init(self.allocator, item_type, .{ .stack_size = count });
         return self.spawnItemStackEntity(stack, position, pickup_delay, velocity);
     }
 

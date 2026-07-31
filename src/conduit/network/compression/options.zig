@@ -1,6 +1,6 @@
 const Protocol = @import("protocol");
 
 pub const CompressionOptions = struct {
-    compressionMethod: Protocol.CompressionMethod,
-    compressionThreshold: u16,
+    compression_method: Protocol.CompressionMethod,
+    compression_threshold: u16,
 };

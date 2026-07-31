@@ -76,7 +76,7 @@ pub const Container = struct {
         if (self.storage[idx]) |*old| old.deinit();
         self.storage[idx] = item;
 
-        if (item.stackSize == 0 or std.mem.eql(u8, item.item_type.identifier, "minecraft:air")) {
+        if (item.stack_size == 0 or std.mem.eql(u8, item.item_type.identifier, "minecraft:air")) {
             self.storage[idx] = null;
         }
 
@@ -99,16 +99,16 @@ pub const Container = struct {
     }
 
     pub fn addItem(self: *Container, item: ItemStack) bool {
-        var remaining: u16 = item.stackSize;
+        var remaining: u16 = item.stack_size;
 
         if (item.item_type.stackable) {
             for (self.storage, 0..) |*slot, i| {
                 if (remaining == 0) break;
                 if (slot.*) |*existing| {
-                    if (existing.isStackCompatible(&item) and existing.stackSize < existing.item_type.max_stack_size) {
-                        const space = existing.item_type.max_stack_size - existing.stackSize;
+                    if (existing.isStackCompatible(&item) and existing.stack_size < existing.item_type.max_stack_size) {
+                        const space = existing.item_type.max_stack_size - existing.stack_size;
                         const to_add = @min(space, remaining);
-                        existing.stackSize += to_add;
+                        existing.stack_size += to_add;
                         remaining -= to_add;
                         self.updateSlot(@intCast(i));
                     }
@@ -133,9 +133,9 @@ pub const Container = struct {
     pub fn removeItem(self: *Container, slot: u32, amount: u16) void {
         const idx = slot % self.getSize();
         const item = &(self.storage[idx] orelse return);
-        const removed = @min(amount, item.stackSize);
-        item.stackSize -= removed;
-        if (item.stackSize == 0) {
+        const removed = @min(amount, item.stack_size);
+        item.stack_size -= removed;
+        if (item.stack_size == 0) {
             item.deinit();
             self.storage[idx] = null;
         }
@@ -145,12 +145,12 @@ pub const Container = struct {
     pub fn takeItem(self: *Container, slot: u32, amount: u16) ?ItemStack {
         const idx = slot % self.getSize();
         const item = self.storage[idx] orelse return null;
-        if (amount >= item.stackSize) {
+        if (amount >= item.stack_size) {
             self.storage[idx] = null;
             self.updateSlot(idx);
             return item;
         }
-        self.storage[idx].?.stackSize -= amount;
+        self.storage[idx].?.stack_size -= amount;
         self.updateSlot(idx);
         return item.cloneWithCount(self.allocator, amount) catch return null;
     }
@@ -299,7 +299,7 @@ test "takeItem preserves item nbt when splitting a stack" {
         NBT.Tag{ .Compound = NBT.CompoundTag.init(allocator, null) },
     );
     try stone.register();
-    var item = ItemStack.init(allocator, stone, .{ .stackSize = 5 });
+    var item = ItemStack.init(allocator, stone, .{ .stack_size = 5 });
     const display = try Display.DisplayTrait.create(allocator, .{});
     try item.addTrait(display);
     try Display.setDisplayName(&item, "Named Stone");
@@ -308,10 +308,10 @@ test "takeItem preserves item nbt when splitting a stack" {
     var split = container.takeItem(0, 2) orelse return error.TestUnexpectedResult;
     defer split.deinit();
 
-    try std.testing.expectEqual(@as(u16, 2), split.stackSize);
+    try std.testing.expectEqual(@as(u16, 2), split.stack_size);
     try std.testing.expectEqualStrings("Named Stone", Display.getDisplayName(&split) orelse return error.TestUnexpectedResult);
 
     const remaining = container.getItem(0) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u16, 3), remaining.stackSize);
+    try std.testing.expectEqual(@as(u16, 3), remaining.stack_size);
     try std.testing.expectEqualStrings("Named Stone", Display.getDisplayName(remaining) orelse return error.TestUnexpectedResult);
 }

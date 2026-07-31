@@ -39,7 +39,7 @@ fn resolveTransferContainer(
 fn canMergeStacks(a: *const ItemStack, b: *const ItemStack) bool {
     return a.item_type.stackable and
         a.isStackCompatible(b) and
-        b.stackSize < b.item_type.max_stack_size;
+        b.stack_size < b.item_type.max_stack_size;
 }
 
 fn applyTransferAction(src: *Container, source_slot: u32, dst: *Container, destination_slot: u32, count: u16) !void {
@@ -47,15 +47,15 @@ fn applyTransferAction(src: *Container, source_slot: u32, dst: *Container, desti
 
     if (dst.getItemMut(destination_slot)) |existing| {
         if (canMergeStacks(&item, existing)) {
-            const space = existing.item_type.max_stack_size - existing.stackSize;
-            const to_add = @min(space, item.stackSize);
-            existing.stackSize += to_add;
+            const space = existing.item_type.max_stack_size - existing.stack_size;
+            const to_add = @min(space, item.stack_size);
+            existing.stack_size += to_add;
             dst.updateSlot(destination_slot);
 
-            const remaining = item.stackSize - to_add;
+            const remaining = item.stack_size - to_add;
             if (remaining > 0) {
                 var remainder = item;
-                remainder.stackSize = remaining;
+                remainder.stack_size = remaining;
                 src.setItem(source_slot, remainder);
             } else {
                 var consumed = item;
@@ -75,7 +75,7 @@ fn applyTransferAction(src: *Container, source_slot: u32, dst: *Container, desti
 
 fn applyDropAction(src: *Container, source_slot: u32, count: u16) !ItemStack {
     const item = src.getItem(source_slot) orelse return error.DropFailed;
-    const drop_count = @min(if (count == 0) @as(u16, 1) else count, item.stackSize);
+    const drop_count = @min(if (count == 0) @as(u16, 1) else count, item.stack_size);
     return src.takeItem(source_slot, drop_count) orelse error.DropFailed;
 }
 
@@ -132,7 +132,7 @@ pub fn handleItemStackRequest(
                     const network_id = cc.getNetworkIdByCreativeIndex(c.creative_item_network_id) orelse continue;
                     const item_type = ItemType.getByNetworkId(network_id) orelse continue;
                     const item = ItemStack.init(player.entity.allocator, item_type, .{
-                        .stackSize = item_type.max_stack_size,
+                        .stack_size = item_type.max_stack_size,
                     });
                     cursor_state.container.base.setItem(0, item);
                 },
@@ -190,14 +190,14 @@ test "transfer action merges matching stacks into occupied destination" {
 
     const stone = ItemType.get("minecraft:stone") orelse return error.TestUnexpectedResult;
 
-    src.setItem(5, ItemStack.init(allocator, stone, .{ .stackSize = 1 }));
-    dst.setItem(0, ItemStack.init(allocator, stone, .{ .stackSize = 10 }));
+    src.setItem(5, ItemStack.init(allocator, stone, .{ .stack_size = 1 }));
+    dst.setItem(0, ItemStack.init(allocator, stone, .{ .stack_size = 10 }));
 
     try applyTransferAction(&src, 5, &dst, 0, 1);
 
     try std.testing.expect(src.getItem(5) == null);
     const cursor = dst.getItem(0) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u16, 11), cursor.stackSize);
+    try std.testing.expectEqual(@as(u16, 11), cursor.stack_size);
 }
 
 test "drop action removes only requested amount from source stack" {
@@ -207,15 +207,15 @@ test "drop action removes only requested amount from source stack" {
     defer src.deinit();
 
     const stone = ItemType.get("minecraft:stone") orelse return error.TestUnexpectedResult;
-    src.setItem(9, ItemStack.init(allocator, stone, .{ .stackSize = 32 }));
+    src.setItem(9, ItemStack.init(allocator, stone, .{ .stack_size = 32 }));
 
     var dropped = try applyDropAction(&src, 9, 1);
     defer dropped.deinit();
 
     try std.testing.expectEqual(stone, dropped.item_type);
-    try std.testing.expectEqual(@as(u16, 1), dropped.stackSize);
+    try std.testing.expectEqual(@as(u16, 1), dropped.stack_size);
     const remaining = src.getItem(9) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u16, 31), remaining.stackSize);
+    try std.testing.expectEqual(@as(u16, 31), remaining.stack_size);
 }
 
 test "drop spawn position is relative to player feet, not above head" {

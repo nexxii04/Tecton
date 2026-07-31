@@ -21,7 +21,7 @@ pub const TerrainGenerator = struct {
     pub const VTable = struct {
         generate: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator, x: i32, z: i32) anyerror!*Chunk,
         spawn: *const fn (ptr: *anyopaque) Protocol.BlockPosition,
-        deinitFn: *const fn (ptr: *anyopaque) void,
+        deinit_fn: *const fn (ptr: *anyopaque) void,
     };
 
     pub fn generate(self: TerrainGenerator, allocator: std.mem.Allocator, x: i32, z: i32) !*Chunk {
@@ -33,6 +33,6 @@ pub const TerrainGenerator = struct {
     }
 
     pub fn deinit(self: TerrainGenerator) void {
-        self.vtable.deinitFn(self.ptr);
+        self.vtable.deinit_fn(self.ptr);
     }
 };

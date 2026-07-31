@@ -170,7 +170,7 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
         defer stream.deinit();
         const packet = Protocol.PlayerSkinPacket{
             .uuid = target.uuid,
-            .skin = &target.loginData.client_data,
+            .skin = &target.login_data.client_data,
         };
         const serialized = packet.serialize(&stream, allocator) catch return;
         viewer.network.sendPacket(viewer.connection, serialized) catch {};
@@ -916,7 +916,7 @@ fn sendLiveBlockActorDataForChunk(allocator: std.mem.Allocator, player: *Player,
     for (dim.getBlocksInChunk(cx, cz)) |block| {
         var has_serialize = false;
         for (block.traits.items) |inst| {
-            if (inst.vtable.onSerialize != null) {
+            if (inst.vtable.on_serialize != null) {
                 has_serialize = true;
                 break;
             }
@@ -1318,7 +1318,7 @@ fn ringCoord(cx: i32, cz: i32, ring: i32, idx: i32) [2]i32 {
 
 pub const ChunkLoadingTrait = EntityTrait(State, .{
     .identifier = "chunk_loading",
-    .onTick = onTick,
+    .on_tick = onTick,
 });
 
 test "two-tier chunk classification matches squared distance formula" {

@@ -30,7 +30,7 @@ pub fn handleInventoryTransaction(
             const dimension = player.entity.dimension orelse return;
             const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse return;
             const item = inv_state.container.base.getItem(inv_state.selected_slot) orelse return;
-            const count = @min(if (data.drop_count == 0) @as(u16, 1) else data.drop_count, item.stackSize);
+            const count = @min(if (data.drop_count == 0) @as(u16, 1) else data.drop_count, item.stack_size);
             const dropped = item.cloneWithCount(player.entity.allocator, count) catch return;
 
             const throw_vel = PlayerMath.playerDropVelocity(player.entity.rotation);
@@ -102,7 +102,7 @@ fn handleUseItem(
             if (temp_block.traits.items.len > 0) {
                 const result = temp_block.fireEvent(.Interact, .{ &temp_block, player });
                 for (temp_block.traits.items) |instance| {
-                    if (instance.vtable.destroyFn) |f| f(instance.ctx, player.entity.allocator);
+                    if (instance.vtable.destroy_fn) |f| f(instance.ctx, player.entity.allocator);
                 }
                 temp_block.traits.deinit(player.entity.allocator);
                 if (!result) return;

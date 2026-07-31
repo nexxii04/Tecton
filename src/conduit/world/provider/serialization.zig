@@ -24,7 +24,7 @@ const HealthTrait = @import("../../entity/traits/health.zig").HealthTrait;
 pub fn serializeItemStack(allocator: std.mem.Allocator, item: *const ItemStack) !CompoundTag {
     var tag = CompoundTag.init(allocator, null);
     try tag.set("Name", .{ .String = StringTag.init(try allocator.dupe(u8, item.item_type.identifier), null) });
-    try tag.set("Count", .{ .Byte = ByteTag.init(@intCast(@min(item.stackSize, 127)), null) });
+    try tag.set("Count", .{ .Byte = ByteTag.init(@intCast(@min(item.stack_size, 127)), null) });
     try tag.set("Damage", .{ .Short = ShortTag.init(@intCast(item.metadata), null) });
     if (item.nbt) |nbt| {
         if (nbt.get("tag")) |tag_entry| {
@@ -91,7 +91,7 @@ pub fn deserializeItemStack(allocator: std.mem.Allocator, tag: *const CompoundTa
     };
 
     return ItemStack.init(allocator, item_type, .{
-        .stackSize = count,
+        .stack_size = count,
         .metadata = metadata,
         .nbt = nbt_data,
     });

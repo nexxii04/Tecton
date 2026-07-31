@@ -81,5 +81,5 @@ fn soundEvent(identifier: []const u8, open: bool) Protocol.SoundEvent {
 
 pub const OpenBitTrait = trait_mod.BlockTrait(State, .{
     .identifier = "open_bit",
-    .onInteract = &onInteract,
+    .on_interact = &onInteract,
 });

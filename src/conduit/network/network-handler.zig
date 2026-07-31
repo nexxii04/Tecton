@@ -63,8 +63,8 @@ pub const NetworkHandler = struct {
             .conduit = c,
             .allocator = c.allocator,
             .options = .{
-                .compressionMethod = protocol.CompressionMethod.Zlib,
-                .compressionThreshold = 255,
+                .compression_method = protocol.CompressionMethod.Zlib,
+                .compression_threshold = 255,
             },
             .packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 },
             .packet_queue_mutex = .init,
@@ -362,7 +362,7 @@ pub const NetworkHandler = struct {
 
     pub fn sendUncompressedPacket(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
         const packets = [_][]const u8{packet};
-        const options = CompressionOptions{ .compressionMethod = .NotPresent, .compressionThreshold = 255 };
+        const options = CompressionOptions{ .compression_method = .NotPresent, .compression_threshold = 255 };
         const compressed = try Compression.compress(&packets, options, self.allocator);
         defer self.allocator.free(compressed);
         conn.sendReliableMessage(compressed, .Normal);

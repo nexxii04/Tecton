@@ -171,10 +171,10 @@ pub const BarrelTrait = trait_mod.BlockTrait(State, .{
     .blocks = &.{
         "minecraft:barrel",
     },
-    .onAttach = &onAttach,
-    .onDetach = &onDetach,
-    .onInteract = &onInteract,
-    .onBreak = &onBreak,
-    .onSerialize = &onSerialize,
-    .onDeserialize = &onDeserialize,
+    .on_attach = &onAttach,
+    .on_detach = &onDetach,
+    .on_interact = &onInteract,
+    .on_break = &onBreak,
+    .on_serialize = &onSerialize,
+    .on_deserialize = &onDeserialize,
 });

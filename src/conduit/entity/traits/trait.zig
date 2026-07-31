@@ -38,34 +38,34 @@ pub const Event = enum {
 
     pub fn fieldName(comptime event: Event) []const u8 {
         return switch (event) {
-            .Attach => "onAttach",
-            .Detach => "onDetach",
-            .Tick => "onTick",
-            .Spawn => "onSpawn",
-            .Despawn => "onDespawn",
-            .Damage => "onDamage",
-            .Death => "onDeath",
-            .Interact => "onInteract",
-            .ContainerUpdate => "onContainerUpdate",
-            .Serialize => "onSerialize",
-            .Deserialize => "onDeserialize",
+            .Attach => "on_attach",
+            .Detach => "on_detach",
+            .Tick => "on_tick",
+            .Spawn => "on_spawn",
+            .Despawn => "on_despawn",
+            .Damage => "on_damage",
+            .Death => "on_death",
+            .Interact => "on_interact",
+            .ContainerUpdate => "on_container_update",
+            .Serialize => "on_serialize",
+            .Deserialize => "on_deserialize",
         };
     }
 };
 
 pub const EntityTraitVTable = struct {
-    onAttach: ?Event.VTableFnType(.Attach) = null,
-    onDetach: ?Event.VTableFnType(.Detach) = null,
-    onTick: ?Event.VTableFnType(.Tick) = null,
-    onSpawn: ?Event.VTableFnType(.Spawn) = null,
-    onDespawn: ?Event.VTableFnType(.Despawn) = null,
-    onDamage: ?Event.VTableFnType(.Damage) = null,
-    onDeath: ?Event.VTableFnType(.Death) = null,
-    onInteract: ?Event.VTableFnType(.Interact) = null,
-    onContainerUpdate: ?Event.VTableFnType(.ContainerUpdate) = null,
-    onSerialize: ?Event.VTableFnType(.Serialize) = null,
-    onDeserialize: ?Event.VTableFnType(.Deserialize) = null,
-    destroyFn: ?*const fn (*anyopaque, std.mem.Allocator) void = null,
+    on_attach: ?Event.VTableFnType(.Attach) = null,
+    on_detach: ?Event.VTableFnType(.Detach) = null,
+    on_tick: ?Event.VTableFnType(.Tick) = null,
+    on_spawn: ?Event.VTableFnType(.Spawn) = null,
+    on_despawn: ?Event.VTableFnType(.Despawn) = null,
+    on_damage: ?Event.VTableFnType(.Damage) = null,
+    on_death: ?Event.VTableFnType(.Death) = null,
+    on_interact: ?Event.VTableFnType(.Interact) = null,
+    on_container_update: ?Event.VTableFnType(.ContainerUpdate) = null,
+    on_serialize: ?Event.VTableFnType(.Serialize) = null,
+    on_deserialize: ?Event.VTableFnType(.Deserialize) = null,
+    destroy_fn: ?*const fn (*anyopaque, std.mem.Allocator) void = null,
 
     pub fn get(self: *const EntityTraitVTable, comptime event: Event) ?Event.VTableFnType(event) {
         return @field(self, event.fieldName());
@@ -89,7 +89,7 @@ pub fn EntityTrait(comptime State: type, comptime config: EntityTraitConfig(Stat
 
         pub const vtable = blk: {
             var vt = buildVTable(State, config);
-            vt.destroyFn = &struct {
+            vt.destroy_fn = &struct {
                 fn destroy(ctx: *anyopaque, allocator: std.mem.Allocator) void {
                     const state: *State = @ptrCast(@alignCast(ctx));
                     allocator.destroy(state);
@@ -203,17 +203,17 @@ pub fn EntityTraitConfig(comptime State: type) type {
         tags: []const []const u8 = &.{},
         components: []const []const u8 = &.{},
         default_state: ?State = null,
-        onAttach: ?*const fn (*State, *Entity) void = null,
-        onDetach: ?*const fn (*State, *Entity) void = null,
-        onTick: ?*const fn (*State, *Entity) void = null,
-        onSpawn: ?*const fn (*State, *Entity) void = null,
-        onDespawn: ?*const fn (*State, *Entity) void = null,
-        onDamage: ?*const fn (*State, *Entity, f32) void = null,
-        onDeath: ?*const fn (*State, *Entity) void = null,
-        onInteract: ?*const fn (*State, *Entity, *Player) bool = null,
-        onContainerUpdate: ?*const fn (*State, *Entity, *Container) void = null,
-        onSerialize: ?*const fn (*State, *CompoundTag) void = null,
-        onDeserialize: ?*const fn (*State, *const CompoundTag) void = null,
+        on_attach: ?*const fn (*State, *Entity) void = null,
+        on_detach: ?*const fn (*State, *Entity) void = null,
+        on_tick: ?*const fn (*State, *Entity) void = null,
+        on_spawn: ?*const fn (*State, *Entity) void = null,
+        on_despawn: ?*const fn (*State, *Entity) void = null,
+        on_damage: ?*const fn (*State, *Entity, f32) void = null,
+        on_death: ?*const fn (*State, *Entity) void = null,
+        on_interact: ?*const fn (*State, *Entity, *Player) bool = null,
+        on_container_update: ?*const fn (*State, *Entity, *Container) void = null,
+        on_serialize: ?*const fn (*State, *CompoundTag) void = null,
+        on_deserialize: ?*const fn (*State, *const CompoundTag) void = null,
     };
 }
 

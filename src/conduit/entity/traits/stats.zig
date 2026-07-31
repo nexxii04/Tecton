@@ -104,5 +104,5 @@ fn onTick(state: *State, entity: *Entity) void {
 
 pub const StatsTrait = EntityTrait(State, .{
     .identifier = "stats",
-    .onTick = onTick,
+    .on_tick = onTick,
 });

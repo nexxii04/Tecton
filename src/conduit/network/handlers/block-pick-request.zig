@@ -83,7 +83,7 @@ pub fn handleBlockPickRequest(
     }
 
     const item = ItemStack.init(player.entity.allocator, item_type, .{
-        .stackSize = 64,
+        .stack_size = 64,
         .nbt = nbt_tag,
     });
     inv.setItem(dest_slot, item);

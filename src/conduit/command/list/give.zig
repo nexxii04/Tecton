@@ -72,7 +72,7 @@ fn handle(raw: *anyopaque) void {
 
     for (targets) |target| {
         const inv_state = target.entity.getTraitState(InventoryTrait.InventoryTrait) orelse continue;
-        const item = ItemStack.init(ctx.allocator, item_type, .{ .stackSize = amount, .metadata = data });
+        const item = ItemStack.init(ctx.allocator, item_type, .{ .stack_size = amount, .metadata = data });
         if (inv_state.container.addItem(item)) given += 1;
     }
 

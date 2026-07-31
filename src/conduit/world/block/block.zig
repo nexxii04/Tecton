@@ -26,22 +26,22 @@ pub const Block = struct {
 
     pub fn deinit(self: *Block) void {
         for (self.traits.items) |instance| {
-            if (instance.vtable.onDetach) |f| f(instance.ctx, self);
-            if (instance.vtable.destroyFn) |f| f(instance.ctx, self.allocator);
+            if (instance.vtable.on_detach) |f| f(instance.ctx, self);
+            if (instance.vtable.destroy_fn) |f| f(instance.ctx, self.allocator);
         }
         self.traits.deinit(self.allocator);
     }
 
     pub fn addTrait(self: *Block, instance: BlockTraitInstance) !void {
         try self.traits.append(self.allocator, instance);
-        if (instance.vtable.onAttach) |f| f(instance.ctx, self);
+        if (instance.vtable.on_attach) |f| f(instance.ctx, self);
     }
 
     pub fn removeTrait(self: *Block, id: []const u8) void {
         for (self.traits.items, 0..) |instance, i| {
             if (std.mem.eql(u8, instance.identifier, id)) {
-                if (instance.vtable.onDetach) |f| f(instance.ctx, self);
-                if (instance.vtable.destroyFn) |f| f(instance.ctx, self.allocator);
+                if (instance.vtable.on_detach) |f| f(instance.ctx, self);
+                if (instance.vtable.destroy_fn) |f| f(instance.ctx, self.allocator);
                 _ = self.traits.swapRemove(i);
                 return;
             }

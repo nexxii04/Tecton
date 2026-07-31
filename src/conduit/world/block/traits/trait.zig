@@ -35,30 +35,30 @@ pub const Event = enum {
 
     pub fn fieldName(comptime event: Event) []const u8 {
         return switch (event) {
-            .Attach => "onAttach",
-            .Detach => "onDetach",
-            .Tick => "onTick",
-            .Place => "onPlace",
-            .Break => "onBreak",
-            .Interact => "onInteract",
-            .Update => "onUpdate",
-            .Serialize => "onSerialize",
-            .Deserialize => "onDeserialize",
+            .Attach => "on_attach",
+            .Detach => "on_detach",
+            .Tick => "on_tick",
+            .Place => "on_place",
+            .Break => "on_break",
+            .Interact => "on_interact",
+            .Update => "on_update",
+            .Serialize => "on_serialize",
+            .Deserialize => "on_deserialize",
         };
     }
 };
 
 pub const BlockTraitVTable = struct {
-    onAttach: ?Event.VTableFnType(.Attach) = null,
-    onDetach: ?Event.VTableFnType(.Detach) = null,
-    onTick: ?Event.VTableFnType(.Tick) = null,
-    onPlace: ?Event.VTableFnType(.Place) = null,
-    onBreak: ?Event.VTableFnType(.Break) = null,
-    onInteract: ?Event.VTableFnType(.Interact) = null,
-    onUpdate: ?Event.VTableFnType(.Update) = null,
-    onSerialize: ?Event.VTableFnType(.Serialize) = null,
-    onDeserialize: ?Event.VTableFnType(.Deserialize) = null,
-    destroyFn: ?*const fn (*anyopaque, std.mem.Allocator) void = null,
+    on_attach: ?Event.VTableFnType(.Attach) = null,
+    on_detach: ?Event.VTableFnType(.Detach) = null,
+    on_tick: ?Event.VTableFnType(.Tick) = null,
+    on_place: ?Event.VTableFnType(.Place) = null,
+    on_break: ?Event.VTableFnType(.Break) = null,
+    on_interact: ?Event.VTableFnType(.Interact) = null,
+    on_update: ?Event.VTableFnType(.Update) = null,
+    on_serialize: ?Event.VTableFnType(.Serialize) = null,
+    on_deserialize: ?Event.VTableFnType(.Deserialize) = null,
+    destroy_fn: ?*const fn (*anyopaque, std.mem.Allocator) void = null,
 
     pub fn get(self: *const BlockTraitVTable, comptime event: Event) ?Event.VTableFnType(event) {
         return @field(self, event.fieldName());
@@ -80,7 +80,7 @@ pub fn BlockTrait(comptime State: type, comptime config: BlockTraitConfig(State)
 
         pub const vtable = blk: {
             var vt = buildVTable(State, config);
-            vt.destroyFn = &struct {
+            vt.destroy_fn = &struct {
                 fn destroy(ctx: *anyopaque, allocator: std.mem.Allocator) void {
                     const state: *State = @ptrCast(@alignCast(ctx));
                     allocator.destroy(state);
@@ -186,15 +186,15 @@ pub fn BlockTraitConfig(comptime State: type) type {
     return struct {
         identifier: []const u8,
         blocks: []const []const u8 = &.{},
-        onAttach: ?*const fn (*State, *Block) void = null,
-        onDetach: ?*const fn (*State, *Block) void = null,
-        onTick: ?*const fn (*State, *Block) void = null,
-        onPlace: ?*const fn (*State, *Block, *Player) bool = null,
-        onBreak: ?*const fn (*State, *Block, ?*Player) bool = null,
-        onInteract: ?*const fn (*State, *Block, *Player) bool = null,
-        onUpdate: ?*const fn (*State, *Block) void = null,
-        onSerialize: ?*const fn (*State, *CompoundTag) void = null,
-        onDeserialize: ?*const fn (*State, *const CompoundTag) void = null,
+        on_attach: ?*const fn (*State, *Block) void = null,
+        on_detach: ?*const fn (*State, *Block) void = null,
+        on_tick: ?*const fn (*State, *Block) void = null,
+        on_place: ?*const fn (*State, *Block, *Player) bool = null,
+        on_break: ?*const fn (*State, *Block, ?*Player) bool = null,
+        on_interact: ?*const fn (*State, *Block, *Player) bool = null,
+        on_update: ?*const fn (*State, *Block) void = null,
+        on_serialize: ?*const fn (*State, *CompoundTag) void = null,
+        on_deserialize: ?*const fn (*State, *const CompoundTag) void = null,
     };
 }
 

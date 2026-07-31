@@ -139,6 +139,6 @@ pub const HealthTrait = EntityTrait(State, .{
         .current = 20.0,
         .max = 20.0,
     },
-    .onAttach = onAttach,
-    .onDamage = onDamage,
+    .on_attach = onAttach,
+    .on_damage = onDamage,
 });

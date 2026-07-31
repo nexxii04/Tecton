@@ -25,6 +25,6 @@ fn onDetach(state: *State, _: *Entity) void {
 
 pub const CursorTrait = EntityTrait(State, .{
     .identifier = "cursor",
-    .onAttach = onAttach,
-    .onDetach = onDetach,
+    .on_attach = onAttach,
+    .on_detach = onDetach,
 });

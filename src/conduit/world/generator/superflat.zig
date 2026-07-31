@@ -39,7 +39,7 @@ pub const SuperflatGenerator = struct {
 
     const vtable = TerrainGenerator.VTable{
         .generate = generate,
-        .deinitFn = deinitErased,
+        .deinit_fn = deinitErased,
         .spawn = spawnPoint,
     };
 

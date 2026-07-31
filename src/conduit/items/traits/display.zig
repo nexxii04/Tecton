@@ -103,6 +103,6 @@ fn onDetach(_: *State, stack: *ItemStack) void {
 
 pub const DisplayTrait = ItemStackTrait(State, .{
     .identifier = "display",
-    .onAttach = onAttach,
-    .onDetach = onDetach,
+    .on_attach = onAttach,
+    .on_detach = onDetach,
 });

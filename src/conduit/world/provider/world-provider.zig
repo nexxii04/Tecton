@@ -9,67 +9,67 @@ pub const WorldProvider = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        readChunk: *const fn (ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) anyerror!*Chunk,
-        readChunkDirect: ?*const fn (ptr: *anyopaque, x: i32, z: i32, dim_type: @import("protocol").DimensionType) anyerror!*Chunk,
-        writeChunk: *const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
-        uncacheChunk: ?*const fn (ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) void,
-        readBuffer: *const fn (ptr: *anyopaque, key: []const u8) anyerror!?[]const u8,
-        writeBuffer: *const fn (ptr: *anyopaque, key: []const u8, buffer: []const u8) anyerror!void,
-        writePlayer: ?*const fn (ptr: *anyopaque, uuid: []const u8, player: *Player) anyerror!void,
-        readPlayer: ?*const fn (ptr: *anyopaque, uuid: []const u8, player: *Player) anyerror!bool,
-        writeChunkEntities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
-        writeBlockEntities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
-        readBlockEntities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
-        deinitFn: *const fn (ptr: *anyopaque) void,
+        read_chunk: *const fn (ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) anyerror!*Chunk,
+        read_chunk_direct: ?*const fn (ptr: *anyopaque, x: i32, z: i32, dim_type: @import("protocol").DimensionType) anyerror!*Chunk,
+        write_chunk: *const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
+        uncache_chunk: ?*const fn (ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) void,
+        read_buffer: *const fn (ptr: *anyopaque, key: []const u8) anyerror!?[]const u8,
+        write_buffer: *const fn (ptr: *anyopaque, key: []const u8, buffer: []const u8) anyerror!void,
+        write_player: ?*const fn (ptr: *anyopaque, uuid: []const u8, player: *Player) anyerror!void,
+        read_player: ?*const fn (ptr: *anyopaque, uuid: []const u8, player: *Player) anyerror!bool,
+        write_chunk_entities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
+        write_block_entities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
+        read_block_entities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
+        deinit_fn: *const fn (ptr: *anyopaque) void,
     };
 
     pub fn readChunk(self: WorldProvider, x: i32, z: i32, dimension: *Dimension) !*Chunk {
-        return self.vtable.readChunk(self.ptr, x, z, dimension);
+        return self.vtable.read_chunk(self.ptr, x, z, dimension);
     }
 
     pub fn readChunkDirect(self: WorldProvider, x: i32, z: i32, dim_type: @import("protocol").DimensionType) !*Chunk {
-        if (self.vtable.readChunkDirect) |f| return f(self.ptr, x, z, dim_type);
+        if (self.vtable.read_chunk_direct) |f| return f(self.ptr, x, z, dim_type);
         return error.NotSupported;
     }
 
     pub fn writeChunk(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {
-        return self.vtable.writeChunk(self.ptr, chunk, dimension);
+        return self.vtable.write_chunk(self.ptr, chunk, dimension);
     }
 
     pub fn uncacheChunk(self: WorldProvider, x: i32, z: i32, dimension: *Dimension) void {
-        if (self.vtable.uncacheChunk) |f| f(self.ptr, x, z, dimension);
+        if (self.vtable.uncache_chunk) |f| f(self.ptr, x, z, dimension);
     }
 
     pub fn readBuffer(self: WorldProvider, key: []const u8) !?[]const u8 {
-        return self.vtable.readBuffer(self.ptr, key);
+        return self.vtable.read_buffer(self.ptr, key);
     }
 
     pub fn writeBuffer(self: WorldProvider, key: []const u8, buffer: []const u8) !void {
-        return self.vtable.writeBuffer(self.ptr, key, buffer);
+        return self.vtable.write_buffer(self.ptr, key, buffer);
     }
 
     pub fn writePlayer(self: WorldProvider, uuid: []const u8, player: *Player) !void {
-        if (self.vtable.writePlayer) |f| return f(self.ptr, uuid, player);
+        if (self.vtable.write_player) |f| return f(self.ptr, uuid, player);
     }
 
     pub fn readPlayer(self: WorldProvider, uuid: []const u8, player: *Player) !bool {
-        if (self.vtable.readPlayer) |f| return f(self.ptr, uuid, player);
+        if (self.vtable.read_player) |f| return f(self.ptr, uuid, player);
         return false;
     }
 
     pub fn writeChunkEntities(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {
-        if (self.vtable.writeChunkEntities) |f| return f(self.ptr, chunk, dimension);
+        if (self.vtable.write_chunk_entities) |f| return f(self.ptr, chunk, dimension);
     }
 
     pub fn writeBlockEntities(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {
-        if (self.vtable.writeBlockEntities) |f| return f(self.ptr, chunk, dimension);
+        if (self.vtable.write_block_entities) |f| return f(self.ptr, chunk, dimension);
     }
 
     pub fn readBlockEntities(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {
-        if (self.vtable.readBlockEntities) |f| return f(self.ptr, chunk, dimension);
+        if (self.vtable.read_block_entities) |f| return f(self.ptr, chunk, dimension);
     }
 
     pub fn deinit(self: WorldProvider) void {
-        self.vtable.deinitFn(self.ptr);
+        self.vtable.deinit_fn(self.ptr);
     }
 };

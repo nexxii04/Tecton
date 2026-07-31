@@ -44,8 +44,8 @@ pub const Compression = struct {
         options: CompressionOptions,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        const method = options.compressionMethod;
-        const threshold = options.compressionThreshold;
+        const method = options.compression_method;
+        const threshold = options.compression_threshold;
 
         var framed_size: usize = 0;
         for (packets) |packet| {
@@ -251,8 +251,8 @@ test "compression round-trip with pooled streams" {
     const random = rng.random();
 
     const options = CompressionOptions{
-        .compressionMethod = .Zlib,
-        .compressionThreshold = 1,
+        .compression_method = .Zlib,
+        .compression_threshold = 1,
     };
 
     for (0..100) |_| {
@@ -279,8 +279,8 @@ test "batch compression round-trip preserves order and content" {
     const random = rng.random();
 
     const options = CompressionOptions{
-        .compressionMethod = .Zlib,
-        .compressionThreshold = 1,
+        .compression_method = .Zlib,
+        .compression_threshold = 1,
     };
 
     for (0..100) |_| {

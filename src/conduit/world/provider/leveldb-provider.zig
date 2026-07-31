@@ -286,7 +286,7 @@ pub const LevelDBProvider = struct {
 
             var has_serialize = false;
             for (block.traits.items) |inst| {
-                if (inst.vtable.onSerialize != null) {
+                if (inst.vtable.on_serialize != null) {
                     has_serialize = true;
                     break;
                 }
@@ -660,18 +660,18 @@ pub const LevelDBProvider = struct {
     }
 
     const vtable = WorldProvider.VTable{
-        .readChunk = vtableReadChunk,
-        .readChunkDirect = vtableReadChunkDirect,
-        .writeChunk = vtableWriteChunk,
-        .uncacheChunk = vtableUncacheChunk,
-        .readBuffer = vtableReadBuffer,
-        .writeBuffer = vtableWriteBuffer,
-        .writePlayer = vtableWritePlayer,
-        .readPlayer = vtableReadPlayer,
-        .writeChunkEntities = vtableWriteChunkEntities,
-        .writeBlockEntities = vtableWriteBlockEntities,
-        .readBlockEntities = vtableReadBlockEntities,
-        .deinitFn = vtableDeinit,
+        .read_chunk = vtableReadChunk,
+        .read_chunk_direct = vtableReadChunkDirect,
+        .write_chunk = vtableWriteChunk,
+        .uncache_chunk = vtableUncacheChunk,
+        .read_buffer = vtableReadBuffer,
+        .write_buffer = vtableWriteBuffer,
+        .write_player = vtableWritePlayer,
+        .read_player = vtableReadPlayer,
+        .write_chunk_entities = vtableWriteChunkEntities,
+        .write_block_entities = vtableWriteBlockEntities,
+        .read_block_entities = vtableReadBlockEntities,
+        .deinit_fn = vtableDeinit,
     };
 
     fn vtableReadChunk(ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) anyerror!*Chunk {

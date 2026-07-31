@@ -119,8 +119,8 @@ fn sendExistingPlayers(state: *PlayerInitTask) !void {
             .entity_unique_id = p.entity.runtime_id,
             .username = p.username,
             .xuid = p.xuid,
-            .skin = &p.loginData.client_data,
-            .build_platform = @intCast(p.loginData.client_data.device_os),
+            .skin = &p.login_data.client_data,
+            .build_platform = @intCast(p.login_data.client_data.device_os),
         };
         written += 1;
     }
@@ -150,8 +150,8 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
         .entity_unique_id = state.player.entity.runtime_id,
         .username = state.player.username,
         .xuid = state.player.xuid,
-        .skin = &state.player.loginData.client_data,
-        .build_platform = @intCast(state.player.loginData.client_data.device_os),
+        .skin = &state.player.login_data.client_data,
+        .build_platform = @intCast(state.player.login_data.client_data.device_os),
     }};
 
     var stream = BinaryStream.init(temp_allocator, null, null);

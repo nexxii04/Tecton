@@ -179,11 +179,11 @@ fn sendBlockUpdate(block: *Block, perm: *Permutation) void {
 
 pub const WallConnectionTrait = trait_mod.BlockTrait(State, .{
     .identifier = "wall_connection",
-    .onSerialize = &onSerialize,
-    .onDeserialize = &onDeserialize,
-    .onAttach = &onAttach,
-    .onDetach = &onDetach,
-    .onPlace = &struct {
+    .on_serialize = &onSerialize,
+    .on_deserialize = &onDeserialize,
+    .on_attach = &onAttach,
+    .on_detach = &onDetach,
+    .on_place = &struct {
         fn onPlace(_: *State, _: *Block, _: *Player) bool {
             return false;
         }

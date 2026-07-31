@@ -41,5 +41,5 @@ fn onBreak(_: *State, block: *Block, _: ?*Player) bool {
 
 pub const UpperBlockTrait = trait_mod.BlockTrait(State, .{
     .identifier = "upper_block",
-    .onBreak = &onBreak,
+    .on_break = &onBreak,
 });

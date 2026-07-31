@@ -48,7 +48,7 @@ pub const Player = struct {
     entity: Entity,
     connection: *Raknet.Connection,
     network: *NetworkHandler,
-    loginData: LoginData,
+    login_data: LoginData,
 
     xuid: []const u8,
     username: []const u8,
@@ -76,7 +76,7 @@ pub const Player = struct {
             .entity = Entity.init(allocator, entity_type, null),
             .connection = connection,
             .network = network,
-            .loginData = loginData,
+            .login_data = loginData,
             .xuid = loginData.identity_data.xuid,
             .username = loginData.identity_data.display_name,
             .uuid = loginData.identity_data.identity,
@@ -121,7 +121,7 @@ pub const Player = struct {
     pub fn deinit(self: *Player) void {
         self.sent_chunks.deinit();
         self.visible_players.deinit();
-        self.loginData.deinit();
+        self.login_data.deinit();
         self.entity.deinit();
     }
 
@@ -305,7 +305,7 @@ pub const Player = struct {
                 self.entity.allocator,
                 "minecraft:dirt",
                 .{
-                    .stackSize = 32,
+                    .stack_size = 32,
                 },
             ) orelse return;
 
@@ -324,7 +324,7 @@ pub const Player = struct {
                 self.entity.allocator,
                 "minecraft:chest",
                 .{
-                    .stackSize = 32,
+                    .stack_size = 32,
                 },
             ) orelse return;
 

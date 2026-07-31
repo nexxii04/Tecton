@@ -105,9 +105,9 @@ pub fn selectHeldSlot(state: *State, slot: u8) void {
 
 pub const InventoryTrait = EntityTrait(State, .{
     .identifier = "inventory",
-    .onAttach = onAttach,
-    .onDetach = onDetach,
-    .onSpawn = onSpawn,
-    .onTick = onTick,
-    .onContainerUpdate = onContainerUpdate,
+    .on_attach = onAttach,
+    .on_detach = onDetach,
+    .on_spawn = onSpawn,
+    .on_tick = onTick,
+    .on_container_update = onContainerUpdate,
 });

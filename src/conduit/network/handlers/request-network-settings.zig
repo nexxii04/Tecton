@@ -30,8 +30,8 @@ pub fn handleNetworkSettings(
 
     var response = Protocol.NetworkSettingsPacket{
         .client_scalar = 0,
-        .compression_threshold = network.options.compressionThreshold,
-        .compression_method = network.options.compressionMethod,
+        .compression_threshold = network.options.compression_threshold,
+        .compression_method = network.options.compression_method,
         .client_threshold = 0,
         .client_throttle = false,
     };

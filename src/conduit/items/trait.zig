@@ -39,34 +39,34 @@ pub const Event = enum {
 
     pub fn fieldName(comptime event: Event) []const u8 {
         return switch (event) {
-            .Attach => "onAttach",
-            .Detach => "onDetach",
-            .Use => "onUse",
-            .StopUse => "onStopUse",
-            .StartUseOn => "onStartUseOn",
-            .StopUseOn => "onStopUseOn",
-            .Attack => "onAttack",
-            .Break => "onBreak",
-            .Consume => "onConsume",
-            .Serialize => "onSerialize",
-            .Deserialize => "onDeserialize",
+            .Attach => "on_attach",
+            .Detach => "on_detach",
+            .Use => "on_use",
+            .StopUse => "on_stop_use",
+            .StartUseOn => "on_start_use_on",
+            .StopUseOn => "on_stop_use_on",
+            .Attack => "on_attack",
+            .Break => "on_break",
+            .Consume => "on_consume",
+            .Serialize => "on_serialize",
+            .Deserialize => "on_deserialize",
         };
     }
 };
 
 pub const ItemStackTraitVTable = struct {
-    onAttach: ?Event.VTableFnType(.Attach) = null,
-    onDetach: ?Event.VTableFnType(.Detach) = null,
-    onUse: ?Event.VTableFnType(.Use) = null,
-    onStopUse: ?Event.VTableFnType(.StopUse) = null,
-    onStartUseOn: ?Event.VTableFnType(.StartUseOn) = null,
-    onStopUseOn: ?Event.VTableFnType(.StopUseOn) = null,
-    onAttack: ?Event.VTableFnType(.Attack) = null,
-    onBreak: ?Event.VTableFnType(.Break) = null,
-    onConsume: ?Event.VTableFnType(.Consume) = null,
-    onSerialize: ?Event.VTableFnType(.Serialize) = null,
-    onDeserialize: ?Event.VTableFnType(.Deserialize) = null,
-    destroyFn: ?*const fn (*anyopaque, std.mem.Allocator) void = null,
+    on_attach: ?Event.VTableFnType(.Attach) = null,
+    on_detach: ?Event.VTableFnType(.Detach) = null,
+    on_use: ?Event.VTableFnType(.Use) = null,
+    on_stop_use: ?Event.VTableFnType(.StopUse) = null,
+    on_start_use_on: ?Event.VTableFnType(.StartUseOn) = null,
+    on_stop_use_on: ?Event.VTableFnType(.StopUseOn) = null,
+    on_attack: ?Event.VTableFnType(.Attack) = null,
+    on_break: ?Event.VTableFnType(.Break) = null,
+    on_consume: ?Event.VTableFnType(.Consume) = null,
+    on_serialize: ?Event.VTableFnType(.Serialize) = null,
+    on_deserialize: ?Event.VTableFnType(.Deserialize) = null,
+    destroy_fn: ?*const fn (*anyopaque, std.mem.Allocator) void = null,
 
     pub fn get(self: *const ItemStackTraitVTable, comptime event: Event) ?Event.VTableFnType(event) {
         return @field(self, event.fieldName());
@@ -87,7 +87,7 @@ pub fn ItemStackTrait(comptime State: type, comptime config: ItemStackTraitConfi
 
         pub const vtable = blk: {
             var vt = buildVTable(State, config);
-            vt.destroyFn = &struct {
+            vt.destroy_fn = &struct {
                 fn destroy(ctx: *anyopaque, allocator: std.mem.Allocator) void {
                     const state: *State = @ptrCast(@alignCast(ctx));
                     allocator.destroy(state);
@@ -184,16 +184,16 @@ pub fn ItemStackTraitConfig(comptime State: type) type {
     return struct {
         identifier: []const u8,
         tags: []const []const u8 = &.{},
-        onAttach: ?*const fn (*State, *ItemStack) void = null,
-        onDetach: ?*const fn (*State, *ItemStack) void = null,
-        onUse: ?*const fn (*State, *ItemStack, *Player) bool = null,
-        onStopUse: ?*const fn (*State, *ItemStack, *Player) void = null,
-        onStartUseOn: ?*const fn (*State, *ItemStack, *Player) void = null,
-        onStopUseOn: ?*const fn (*State, *ItemStack, *Player) void = null,
-        onAttack: ?*const fn (*State, *ItemStack, *Entity) void = null,
-        onBreak: ?*const fn (*State, *ItemStack) void = null,
-        onConsume: ?*const fn (*State, *ItemStack) void = null,
-        onSerialize: ?*const fn (*State, *CompoundTag) void = null,
-        onDeserialize: ?*const fn (*State, *const CompoundTag) void = null,
+        on_attach: ?*const fn (*State, *ItemStack) void = null,
+        on_detach: ?*const fn (*State, *ItemStack) void = null,
+        on_use: ?*const fn (*State, *ItemStack, *Player) bool = null,
+        on_stop_use: ?*const fn (*State, *ItemStack, *Player) void = null,
+        on_start_use_on: ?*const fn (*State, *ItemStack, *Player) void = null,
+        on_stop_use_on: ?*const fn (*State, *ItemStack, *Player) void = null,
+        on_attack: ?*const fn (*State, *ItemStack, *Entity) void = null,
+        on_break: ?*const fn (*State, *ItemStack) void = null,
+        on_consume: ?*const fn (*State, *ItemStack) void = null,
+        on_serialize: ?*const fn (*State, *CompoundTag) void = null,
+        on_deserialize: ?*const fn (*State, *const CompoundTag) void = null,
     };
 }

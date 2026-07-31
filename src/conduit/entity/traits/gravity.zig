@@ -168,7 +168,7 @@ pub const GravityTrait = EntityTrait(State, .{
         .falling_ticks = 0,
         .on_ground = false,
     },
-    .onTick = onTick,
+    .on_tick = onTick,
 });
 
 test "item air physics matches pocketmine order" {

@@ -16,14 +16,14 @@ var nextNetworkStackId: i32 = 0;
 pub const ItemStack = struct {
     allocator: std.mem.Allocator,
     item_type: *ItemType,
-    stackSize: u16,
+    stack_size: u16,
     metadata: u32,
     nbt: ?CompoundTag,
-    networkStackId: i32,
+    network_stack_id: i32,
     traits: std.ArrayList(ItemStackTraitInstance),
 
     pub const Options = struct {
-        stackSize: u16 = 1,
+        stack_size: u16 = 1,
         metadata: u32 = 0,
         nbt: ?CompoundTag = null,
     };
@@ -33,10 +33,10 @@ pub const ItemStack = struct {
         return .{
             .allocator = allocator,
             .item_type = item_type,
-            .stackSize = opts.stackSize,
+            .stack_size = opts.stack_size,
             .metadata = opts.metadata,
             .nbt = opts.nbt,
-            .networkStackId = id,
+            .network_stack_id = id,
             .traits = .empty,
         };
     }
@@ -48,7 +48,7 @@ pub const ItemStack = struct {
 
     pub fn cloneWithCount(self: *const ItemStack, allocator: std.mem.Allocator, count: u16) !ItemStack {
         return init(allocator, self.item_type, .{
-            .stackSize = count,
+            .stack_size = count,
             .metadata = self.metadata,
             .nbt = if (self.nbt) |*nbt| try cloneCompound(allocator, nbt) else null,
         });
@@ -62,8 +62,8 @@ pub const ItemStack = struct {
 
     pub fn deinit(self: *ItemStack) void {
         for (self.traits.items) |instance| {
-            if (instance.vtable.onDetach) |f| f(instance.ctx, self);
-            if (instance.vtable.destroyFn) |f| f(instance.ctx, self.allocator);
+            if (instance.vtable.on_detach) |f| f(instance.ctx, self);
+            if (instance.vtable.destroy_fn) |f| f(instance.ctx, self.allocator);
         }
         self.traits.deinit(self.allocator);
         if (self.nbt) |*nbt| nbt.deinit(self.allocator);
@@ -71,14 +71,14 @@ pub const ItemStack = struct {
 
     pub fn addTrait(self: *ItemStack, instance: ItemStackTraitInstance) !void {
         try self.traits.append(self.allocator, instance);
-        if (instance.vtable.onAttach) |f| f(instance.ctx, self);
+        if (instance.vtable.on_attach) |f| f(instance.ctx, self);
     }
 
     pub fn removeTrait(self: *ItemStack, id: []const u8) void {
         for (self.traits.items, 0..) |instance, i| {
             if (std.mem.eql(u8, instance.identifier, id)) {
-                if (instance.vtable.onDetach) |f| f(instance.ctx, self);
-                if (instance.vtable.destroyFn) |f| f(instance.ctx, self.allocator);
+                if (instance.vtable.on_detach) |f| f(instance.ctx, self);
+                if (instance.vtable.destroy_fn) |f| f(instance.ctx, self.allocator);
                 _ = self.traits.swapRemove(i);
                 return;
             }
@@ -123,17 +123,17 @@ pub const ItemStack = struct {
     pub fn toNetworkStack(self: *const ItemStack) Protocol.NetworkItemStackDescriptor {
         const nbt = self.nbt orelse return .{
             .network = self.item_type.network_id,
-            .stack_size = self.stackSize,
+            .stack_size = self.stack_size,
             .metadata = self.metadata,
-            .item_stack_id = self.networkStackId,
+            .item_stack_id = self.network_stack_id,
             .network_block_id = 0,
             .extras = null,
         };
         return .{
             .network = self.item_type.network_id,
-            .stack_size = self.stackSize,
+            .stack_size = self.stack_size,
             .metadata = self.metadata,
-            .item_stack_id = self.networkStackId,
+            .item_stack_id = self.network_stack_id,
             .network_block_id = 0,
             .extras = if (nbt.count() > 0) .{
                 .nbt = nbt,
@@ -147,14 +147,14 @@ pub const ItemStack = struct {
     pub fn toNetworkInstance(self: *const ItemStack) Protocol.NetworkItemInstanceDescriptor {
         const nbt = self.nbt orelse return .{
             .network = self.item_type.network_id,
-            .stack_size = self.stackSize,
+            .stack_size = self.stack_size,
             .metadata = self.metadata,
             .network_block_id = 0,
             .extras = null,
         };
         return .{
             .network = self.item_type.network_id,
-            .stack_size = self.stackSize,
+            .stack_size = self.stack_size,
             .metadata = self.metadata,
             .network_block_id = 0,
             .extras = if (nbt.count() > 0) .{

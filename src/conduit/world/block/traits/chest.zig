@@ -465,12 +465,12 @@ pub const ChestTrait = trait_mod.BlockTrait(State, .{
         "minecraft:chest",
         "minecraft:trapped_chest",
     },
-    .onAttach = &onAttach,
-    .onDetach = &onDetach,
-    .onInteract = &onInteract,
-    .onBreak = &onBreak,
-    .onSerialize = &onSerialize,
-    .onDeserialize = &onDeserialize,
+    .on_attach = &onAttach,
+    .on_detach = &onDetach,
+    .on_interact = &onInteract,
+    .on_break = &onBreak,
+    .on_serialize = &onSerialize,
+    .on_deserialize = &onDeserialize,
 });
 
 test "double chest preserves upper-half items when halves load in reverse order" {
@@ -553,7 +553,7 @@ test "double chest preserves upper-half items when halves load in reverse order"
     try std.testing.expect(saved_left_state.is_parent);
 
     if (saved_left_state.container) |*container| {
-        container.base.setItem(30, ItemStack.init(allocator, test_item, .{ .stackSize = 7 }));
+        container.base.setItem(30, ItemStack.init(allocator, test_item, .{ .stack_size = 7 }));
     } else {
         return error.TestUnexpectedResult;
     }
@@ -808,7 +808,7 @@ test "double chest preserves upper-half items across repeated unload cycles" {
     try std.testing.expect(initial_left_state.is_parent);
 
     if (initial_left_state.container) |*container| {
-        container.base.setItem(30, ItemStack.init(allocator, test_item, .{ .stackSize = 7 }));
+        container.base.setItem(30, ItemStack.init(allocator, test_item, .{ .stack_size = 7 }));
     } else {
         return error.TestUnexpectedResult;
     }
@@ -856,6 +856,6 @@ test "double chest preserves upper-half items across repeated unload cycles" {
         try std.testing.expectEqual(@as(u32, 27), loaded_right_state.container.?.base.getSize());
 
         const item = loaded_left_state.container.?.base.getItem(30) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqual(@as(u16, 7), item.stackSize);
+        try std.testing.expectEqual(@as(u16, 7), item.stack_size);
     }
 }

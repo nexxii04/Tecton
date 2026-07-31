@@ -1,9 +1,10 @@
 const std = @import("std");
-const WorldProvider = @import("./world-provider.zig").WorldProvider;
+
 const Chunk = @import("../chunk/chunk.zig").Chunk;
 const Dimension = @import("../dimension/dimension.zig").Dimension;
 const chunkHash = @import("../dimension/dimension.zig").chunkHash;
 const ChunkHash = @import("../dimension/dimension.zig").ChunkHash;
+const WorldProvider = @import("./world-provider.zig").WorldProvider;
 
 pub const InternalProvider = struct {
     allocator: std.mem.Allocator,
@@ -85,18 +86,18 @@ pub const InternalProvider = struct {
     }
 
     const vtable = WorldProvider.VTable{
-        .readChunk = vtableReadChunk,
-        .readChunkDirect = null,
-        .writeChunk = vtableWriteChunk,
-        .uncacheChunk = null,
-        .readBuffer = vtableReadBuffer,
-        .writeBuffer = vtableWriteBuffer,
-        .writePlayer = null,
-        .readPlayer = null,
-        .writeChunkEntities = null,
-        .writeBlockEntities = null,
-        .readBlockEntities = null,
-        .deinitFn = vtableDeinit,
+        .read_chunk = vtableReadChunk,
+        .read_chunk_direct = null,
+        .write_chunk = vtableWriteChunk,
+        .uncache_chunk = null,
+        .read_buffer = vtableReadBuffer,
+        .write_buffer = vtableWriteBuffer,
+        .write_player = null,
+        .read_player = null,
+        .write_chunk_entities = null,
+        .write_block_entities = null,
+        .read_block_entities = null,
+        .deinit_fn = vtableDeinit,
     };
 
     fn vtableReadChunk(ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) anyerror!*Chunk {
