@@ -24,7 +24,7 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [x] Item Trait System
 - [x] Block Placement & Breaking
 - [x] Block Drops
-- [ ] Terminal console commands
+- [x] Terminal console commands
 - [ ] Entity System (WIP)
 - [x] Entity Trait System
 - [ ] Entity Drops

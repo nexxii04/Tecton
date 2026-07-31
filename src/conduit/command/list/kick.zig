@@ -38,8 +38,9 @@ fn handle(raw: *anyopaque) void {
         return;
     };
 
+    const source = if (ctx.player) |p| p.username else "Console";
     for (targets) |player| {
-        Raknet.Logger.INFO("{s} kicked {s}: {s}", .{ ctx.player.username, player.username, reason });
+        Raknet.Logger.INFO("{s} kicked {s}: {s}", .{ source, player.username, reason });
         player.disconnect(reason) catch {};
     }
 

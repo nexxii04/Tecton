@@ -27,6 +27,7 @@ const WorkerCountResolution = @import("./tasks/threaded-tasks.zig").WorkerCountR
 const resolveWorkerCount = @import("./tasks/threaded-tasks.zig").resolveWorkerCount;
 const totalServerThreadCount = @import("./tasks/threaded-tasks.zig").totalServerThreadCount;
 const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
+const Console = @import("./console/console.zig").Console;
 const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
@@ -72,6 +73,7 @@ pub const Conduit = struct {
     threaded_tasks: ThreadedTaskQueue,
     profiler: TickProfiler,
     command_registry: CommandRegistry,
+    console: Console,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
 
@@ -117,6 +119,7 @@ pub const Conduit = struct {
             .threaded_tasks = ThreadedTaskQueue.init(io, allocator, config.worker_threads),
             .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
+            .console = undefined,
             .ban_manager = BanManager.init(io, allocator, "banned-players.json"),
             .permission_manager = PermissionManager.init(io, allocator, "permissions.json", config.default_group),
         };
@@ -257,6 +260,8 @@ pub const Conduit = struct {
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
         try self.raknet.start();
+
+        try self.console.start(self);
     }
 
     pub fn stop(self: *Conduit) !void {
@@ -423,6 +428,8 @@ pub const Conduit = struct {
         phase_end = phase_start.durationTo(.now(self.io, .awake));
         self.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end.nanoseconds)));
 
+        self.console.drainCommands();
+
         const work_end = work_start.durationTo(.now(self.io, .awake));
         const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
         const total_tick_ns = raknet_ns + work_ns;
@@ -534,6 +541,7 @@ pub const Conduit = struct {
         self.config.deinit();
         self.events.deinit();
         self.network.deinit();
+        self.console.deinit();
         self.tasks.deinit();
         self.command_registry.deinit();
         self.ban_manager.deinit();

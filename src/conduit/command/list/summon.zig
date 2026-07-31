@@ -98,9 +98,14 @@ fn handle(raw: *anyopaque) void {
         return;
     };
 
-    const dimension = ctx.player.entity.dimension orelse return;
+    const player = ctx.player orelse {
+        ctx.sendOutput(false, "This command can only be used by a player");
+        return;
+    };
 
-    const pos = ctx.player.entity.position;
+    const dimension = player.entity.dimension orelse return;
+
+    const pos = player.entity.position;
     const spawn_pos = Protocol.Vector3f.init(pos.x, pos.y - 1.62, pos.z);
 
     if (name_tag) |tag| {

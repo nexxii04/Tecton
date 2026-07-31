@@ -17,8 +17,12 @@ pub fn register(registry: *CommandRegistry) !void {
 
 fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    ctx.sendOutput(true, "\xc2\xa7cStopping server...");
-    Raknet.Logger.INFO("Server stop requested by {s}", .{ctx.player.username});
+    if (ctx.player) |p| {
+        ctx.sendOutput(true, "\xc2\xa7cStopping server...");
+        Raknet.Logger.INFO("Server stop requested by {s}", .{p.username});
+    } else {
+        Raknet.Logger.INFO("Server stop requested by Console", .{});
+    }
     const conduit = ctx.network.conduit;
     conduit.stop() catch {};
     conduit.raknet.running = false;

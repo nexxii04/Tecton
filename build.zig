@@ -126,6 +126,7 @@ pub fn build(b: *std.Build) void {
     conduit_mod.linkLibrary(zlib_dep.artifact("z"));
     if (is_windows) {
         conduit_mod.linkSystemLibrary("psapi", .{});
+        conduit_mod.linkSystemLibrary("ws2_32", .{});
     }
 
     const exe = b.addExecutable(.{

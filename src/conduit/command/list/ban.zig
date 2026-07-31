@@ -64,12 +64,13 @@ fn handleBan(raw: *anyopaque) void {
         return;
     }
 
+    const source = if (ctx.player) |p| p.username else "Console";
     if (ctx.resolvePlayer(target_name)) |player| {
-        ban_mgr.ban(player.uuid, player.username, ctx.player.username, reason) catch {
+        ban_mgr.ban(player.uuid, player.username, source, reason) catch {
             ctx.sendOutput(false, "Failed to ban player");
             return;
         };
-        Raknet.Logger.INFO("{s} banned {s}: {s}", .{ ctx.player.username, player.username, reason });
+        Raknet.Logger.INFO("{s} banned {s}: {s}", .{ source, player.username, reason });
 
         var stream = BinaryStream.init(ctx.allocator, null, null);
         defer stream.deinit();
@@ -83,7 +84,7 @@ fn handleBan(raw: *anyopaque) void {
         ctx.network.sendImmediate(player.connection, serialized) catch {};
         player.connection.active = false;
     } else {
-        ban_mgr.ban("", target_name, ctx.player.username, reason) catch {
+        ban_mgr.ban("", target_name, source, reason) catch {
             ctx.sendOutput(false, "Failed to ban player");
             return;
         };

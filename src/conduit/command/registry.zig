@@ -98,7 +98,7 @@ pub const CommandRegistry = struct {
 
     pub fn dispatch(
         self: *CommandRegistry,
-        player: *Player,
+        player: ?*Player,
         network: *NetworkHandler,
         command_line: []const u8,
         origin_type: []const u8,
@@ -113,9 +113,11 @@ pub const CommandRegistry = struct {
             return .{ .success = false, .message = "Unknown command" };
         };
 
-        const conduit = network.conduit;
-        if (cmd.permission.len > 0 and !conduit.permission_manager.hasPermission(player.username, cmd.permission)) {
-            return .{ .success = false, .message = "You do not have permission to run this command" };
+        if (player) |p| {
+            const conduit = network.conduit;
+            if (cmd.permission.len > 0 and !conduit.permission_manager.hasPermission(p.username, cmd.permission)) {
+                return .{ .success = false, .message = "You do not have permission to run this command" };
+            }
         }
 
         var ctx = CommandContext{
@@ -140,6 +142,10 @@ pub const CommandRegistry = struct {
 
         cmd.handler(@ptrCast(&ctx));
         return .{ .success = true, .message = "" };
+    }
+
+    pub fn dispatchConsole(self: *CommandRegistry, conduit: *@import("../conduit.zig").Conduit, command_line: []const u8) void {
+        _ = self.dispatch(null, conduit.network, command_line, "console", .{0} ** 16, "");
     }
 
     pub fn buildAvailableCommandsPacket(self: *CommandRegistry, stream: *BinaryStream) ![]const u8 {

@@ -50,11 +50,15 @@ fn handle(raw: *anyopaque) void {
 
     const second = arg_iter.next();
     if (second == null) {
+        const player = ctx.player orelse {
+            ctx.sendOutput(false, "You must specify a player to teleport");
+            return;
+        };
         const target = ctx.resolvePlayer(first) orelse {
             ctx.sendOutput(false, "Player not found");
             return;
         };
-        teleportPlayer(ctx, ctx.player, target.entity.position);
+        teleportPlayer(ctx, player, target.entity.position);
         var buf: [128]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Teleported to {s}", .{target.username}) catch return;
         ctx.sendOutput(true, msg);
@@ -83,9 +87,13 @@ fn handle(raw: *anyopaque) void {
         return;
     }
 
-    const pos = ctx.player.entity.position;
     const fourth = arg_iter.next();
     if (fourth == null) {
+        const player = ctx.player orelse {
+            ctx.sendOutput(false, "You must specify a player to teleport");
+            return;
+        };
+        const pos = player.entity.position;
         const x = CommandContext.parseCoord(first, pos.x) orelse {
             ctx.sendOutput(false, "Invalid x coordinate");
             return;
@@ -98,7 +106,7 @@ fn handle(raw: *anyopaque) void {
             ctx.sendOutput(false, "Invalid z coordinate");
             return;
         };
-        teleportPlayer(ctx, ctx.player, Protocol.Vector3f.init(x, y, z));
+        teleportPlayer(ctx, player, Protocol.Vector3f.init(x, y, z));
         var buf: [128]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Teleported to {d:.1}, {d:.1}, {d:.1}", .{ x, y, z }) catch return;
         ctx.sendOutput(true, msg);

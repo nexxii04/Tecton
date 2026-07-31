@@ -46,8 +46,12 @@ fn handle(raw: *anyopaque) void {
         ctx.sendOutput(false, "Player not found");
         return;
     } else blk: {
+        const player = ctx.player orelse {
+            ctx.sendOutput(false, "You must specify a player");
+            return;
+        };
         const slice = ctx.allocator.alloc(*@import("../../player/player.zig").Player, 1) catch return;
-        slice[0] = ctx.player;
+        slice[0] = player;
         break :blk slice;
     };
 

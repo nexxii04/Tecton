@@ -73,11 +73,16 @@ fn handle(raw: *anyopaque) void {
         return;
     };
 
-    if (ctx.player.entity.dimension == dimension) {
+    const player = ctx.player orelse {
+        ctx.sendOutput(false, "This command can only be used by a player");
+        return;
+    };
+
+    if (player.entity.dimension == dimension) {
         ctx.sendOutput(false, "Already in that world/dimension");
         return;
     }
 
-    ctx.player.transferToDimension(dimension);
+    player.transferToDimension(dimension);
     ctx.sendOutput(true, "Transferring...");
 }

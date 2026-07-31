@@ -4,8 +4,9 @@ const Protocol = @import("protocol");
 const Player = @import("../player/player.zig").Player;
 const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
 
+
 pub const CommandContext = struct {
-    player: *Player,
+    player: ?*Player = null,
     args: []const u8,
     network: *NetworkHandler,
     allocator: std.mem.Allocator,
@@ -17,6 +18,11 @@ pub const CommandContext = struct {
     single_target_buf: [1]*Player = undefined,
 
     pub fn sendOutput(self: *CommandContext, success: bool, message: []const u8) void {
+        const player = self.player orelse {
+            printMcToConsole(message);
+            return;
+        };
+
         var stream = BinaryStream.init(self.allocator, null, null);
         defer stream.deinit();
 
@@ -28,14 +34,14 @@ pub const CommandContext = struct {
             .origin_type = self.origin_type,
             .uuid = self.uuid,
             .request_id = self.request_id,
-            .player_unique_id = self.player.entity.runtime_id,
+            .player_unique_id = player.entity.runtime_id,
             .output_type = "alloutput",
             .success_count = if (success) 1 else 0,
             .messages = &msgs,
         };
 
         const serialized = output.serialize(&stream) catch return;
-        self.network.sendPacket(self.player.connection, serialized) catch {};
+        self.network.sendPacket(player.connection, serialized) catch {};
     }
 
     pub fn resolvePlayer(self: *CommandContext, name: []const u8) ?*Player {
@@ -66,20 +72,20 @@ pub const CommandContext = struct {
         const kind = selector[1];
         return switch (kind) {
             's' => self.player,
-            'p' => self.nearestPlayer(),
+            'p' => if (self.player) |p| self.nearestPlayer(p) else null,
             'r' => self.randomPlayer(),
             'a', 'e' => self.player,
             else => null,
         };
     }
 
-    fn nearestPlayer(self: *CommandContext) ?*Player {
+    fn nearestPlayer(self: *CommandContext, origin: *Player) ?*Player {
         const snapshots = self.network.conduit.getPlayerSnapshots();
         var best: ?*Player = null;
         var best_dist: f32 = std.math.inf(f32);
         for (snapshots) |player| {
             if (!player.spawned) continue;
-            const dist = self.player.entity.position.distance(player.entity.position);
+            const dist = origin.entity.position.distance(player.entity.position);
             if (dist < best_dist) {
                 best_dist = dist;
                 best = player;
@@ -117,3 +123,57 @@ pub const CommandContext = struct {
         return std.fmt.parseFloat(f32, str) catch null;
     }
 };
+
+fn printMcToConsole(message: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var len: usize = 0;
+    var i: usize = 0;
+    while (i < message.len and len < buf.len) {
+        if (i + 1 < message.len and message[i] == '\xc2' and message[i + 1] == '\xa7') {
+            i += 2;
+            if (i < message.len) {
+                const ansi = mcCodeToAnsi(message[i]);
+                i += 1;
+                if (ansi.len > 0 and len + ansi.len <= buf.len) {
+                    @memcpy(buf[len..][0..ansi.len], ansi);
+                    len += ansi.len;
+                }
+            }
+        } else {
+            if (len < buf.len) {
+                buf[len] = message[i];
+                len += 1;
+            }
+            i += 1;
+        }
+    }
+    if (len + 5 <= buf.len) {
+        @memcpy(buf[len..][0..5], "\x1b[0m\n");
+        len += 5;
+    }
+    std.debug.print("{s}", .{buf[0..len]});
+}
+
+fn mcCodeToAnsi(code: u8) []const u8 {
+    return switch (code) {
+        '0' => "\x1b[30m",
+        '1' => "\x1b[34m",
+        '2' => "\x1b[32m",
+        '3' => "\x1b[36m",
+        '4' => "\x1b[31m",
+        '5' => "\x1b[35m",
+        '6' => "\x1b[33m",
+        '7' => "\x1b[37m",
+        '8' => "\x1b[90m",
+        '9' => "\x1b[94m",
+        'a' => "\x1b[92m",
+        'b' => "\x1b[96m",
+        'c' => "\x1b[91m",
+        'd' => "\x1b[95m",
+        'e' => "\x1b[93m",
+        'f' => "\x1b[97m",
+        'l' => "\x1b[1m",
+        'r' => "\x1b[0m",
+        else => "",
+    };
+}
