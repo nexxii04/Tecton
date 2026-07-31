@@ -274,7 +274,7 @@ pub const Conduit = struct {
             var str = BinaryStream.init(self.allocator, null, null);
             defer str.deinit();
             var disconnect = Protocol.DisconnectPacket{
-                .hideScreen = false,
+                .hide_screen = false,
                 .reason = .Disconnected,
                 .message = "Server shutdown.",
                 .filtered = "Server shutdown.",

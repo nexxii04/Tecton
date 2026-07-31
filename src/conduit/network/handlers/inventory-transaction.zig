@@ -22,9 +22,9 @@ pub fn handleInventoryTransaction(
     const packet = try Protocol.InventoryTransactionPacket.deserialize(stream);
     // Raknet.Logger.WARN("{any}", .{packet});
 
-    switch (packet.transactionType) {
+    switch (packet.transaction_type) {
         .Normal => {
-            const data = packet.transactionData.normal;
+            const data = packet.transaction_data.normal;
             if (!data.is_drop or data.drop_count == 0) return;
 
             const dimension = player.entity.dimension orelse return;
@@ -41,13 +41,13 @@ pub fn handleInventoryTransaction(
             inv_state.container.updateSlot(inv_state.selected_slot);
         },
         .UseItem => {
-            const data = packet.transactionData.useItem;
+            const data = packet.transaction_data.use_item;
             try handleUseItem(network, player, data);
         },
         .UseItemOnEntity => {
-            const data = packet.transactionData.useItemOnEntity;
-            if (data.actionType == 1) {
-                const target = network.conduit.getEntityByRuntimeId(@bitCast(data.targetEntityRuntimeId)) orelse return;
+            const data = packet.transaction_data.use_item_on_entity;
+            if (data.action_type == 1) {
+                const target = network.conduit.getEntityByRuntimeId(@bitCast(data.target_entity_runtime_id)) orelse return;
 
                 const dx = target.position.x - player.entity.position.x;
                 const dz = target.position.z - player.entity.position.z;
@@ -67,7 +67,7 @@ pub fn handleInventoryTransaction(
         else => {
             Raknet.Logger.WARN("Unhandled InventoryTransaction from {s}: {any}", .{
                 player.username,
-                packet.transactionType,
+                packet.transaction_type,
             });
         },
     }
@@ -78,26 +78,26 @@ fn handleUseItem(
     player: *Player,
     data: Protocol.InventoryTransactionData.UseItemTransactionData,
 ) !void {
-    if (data.actionType != 0) return;
+    if (data.action_type != 0) return;
 
     const dimension = player.entity.dimension orelse return;
 
     if (!player.entity.flags.getFlag(.Sneaking)) {
-        if (dimension.getBlockPtr(data.blockPosition)) |clicked_block| {
+        if (dimension.getBlockPtr(data.block_position)) |clicked_block| {
             if (!clicked_block.fireEvent(.Interact, .{ clicked_block, player })) {
                 return;
             }
         } else {
-            if (dimension.getChunk(data.blockPosition.x >> 4, data.blockPosition.z >> 4)) |chunk| {
+            if (dimension.getChunk(data.block_position.x >> 4, data.block_position.z >> 4)) |chunk| {
                 dimension.world.provider.readBlockEntities(chunk, dimension) catch {};
-                if (dimension.getBlockPtr(data.blockPosition)) |loaded_block| {
+                if (dimension.getBlockPtr(data.block_position)) |loaded_block| {
                     if (!loaded_block.fireEvent(.Interact, .{ loaded_block, player })) {
                         return;
                     }
                 }
             }
 
-            var temp_block = dimension.getBlock(data.blockPosition);
+            var temp_block = dimension.getBlock(data.block_position);
             applyTraitsFromRegistry(player.entity.allocator, &temp_block) catch {};
             if (temp_block.traits.items.len > 0) {
                 const result = temp_block.fireEvent(.Interact, .{ &temp_block, player });
@@ -121,15 +121,15 @@ fn handleUseItem(
     const permutation = resolveWithPlacement(player.entity.allocator, base_permutation, .{
         .yaw = player.entity.rotation.y,
         .pitch = player.entity.rotation.x,
-        .block_face = data.blockFace,
-        .clicked_position = data.clickedPosition,
+        .block_face = data.block_face,
+        .clicked_position = data.clicked_position,
     });
 
-    const face = data.blockFace;
+    const face = data.block_face;
     const pos = Protocol.BlockPosition{
-        .x = data.blockPosition.x + if (face == 5) @as(i32, 1) else if (face == 4) @as(i32, -1) else @as(i32, 0),
-        .y = data.blockPosition.y + if (face == 1) @as(i32, 1) else if (face == 0) @as(i32, -1) else @as(i32, 0),
-        .z = data.blockPosition.z + if (face == 3) @as(i32, 1) else if (face == 2) @as(i32, -1) else @as(i32, 0),
+        .x = data.block_position.x + if (face == 5) @as(i32, 1) else if (face == 4) @as(i32, -1) else @as(i32, 0),
+        .y = data.block_position.y + if (face == 1) @as(i32, 1) else if (face == 0) @as(i32, -1) else @as(i32, 0),
+        .z = data.block_position.z + if (face == 3) @as(i32, 1) else if (face == 2) @as(i32, -1) else @as(i32, 0),
     };
 
     var block = dimension.getBlock(pos);
@@ -159,7 +159,7 @@ fn handleUseItem(
         defer s.deinit();
         const update = Protocol.UpdateBlockPacket{
             .position = pos,
-            .networkBlockId = network_id,
+            .network_block_id = network_id,
         };
         const serialized = try update.serialize(&s);
         try network.sendPacket(p.connection, serialized);
@@ -172,7 +172,7 @@ fn broadcastMotion(network: *NetworkHandler, entity: *const @import("../../entit
     defer stream.deinit();
 
     const motion_packet = Protocol.SetActorMotionPacket{
-        .runtimeEntityId = @bitCast(entity.runtime_id),
+        .runtime_entity_id = @bitCast(entity.runtime_id),
         .motion = entity.motion,
     };
     const serialized = motion_packet.serialize(&stream) catch return;

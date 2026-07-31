@@ -88,7 +88,7 @@ fn sendPublisherUpdate(player: *Player) void {
             .z = @intFromFloat(@floor(player.entity.position.z)),
         },
         .radius = @intCast(player.view_distance * 16),
-        .savedChunks = &[_]Protocol.ChunkCoords{},
+        .saved_chunks = &[_]Protocol.ChunkCoords{},
     };
     const serialized = update.serialize(&stream) catch return;
     player.network.sendPacket(player.connection, serialized) catch {};
@@ -156,10 +156,10 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
         const packet = Protocol.AddPlayerPacket{
             .uuid = target.uuid,
             .username = target.username,
-            .entityRuntimeId = target.entity.runtime_id,
+            .entity_runtime_id = target.entity.runtime_id,
             .position = target.entity.position,
-            .entityProperties = Protocol.PropertySyncData.init(allocator),
-            .abilityEntityUniqueId = target.entity.runtime_id,
+            .entity_properties = Protocol.PropertySyncData.init(allocator),
+            .ability_entity_unique_id = target.entity.runtime_id,
         };
         const serialized = packet.serialize(&stream) catch return;
         viewer.network.sendPacket(viewer.connection, serialized) catch {};
@@ -190,7 +190,7 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
 fn despawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator) void {
     var stream = BinaryStream.init(allocator, null, null);
     defer stream.deinit();
-    const packet = Protocol.RemoveEntityPacket{ .uniqueEntityId = target.entity.unique_id };
+    const packet = Protocol.RemoveEntityPacket{ .unique_entity_id = target.entity.unique_id };
     const serialized = packet.serialize(&stream) catch return;
     viewer.network.sendPacket(viewer.connection, serialized) catch {};
 }
@@ -954,7 +954,7 @@ fn sendTileFixAt(allocator: std.mem.Allocator, player: *Player, dim: *Dimension,
         defer stream.deinit();
         const packet = Protocol.UpdateBlockPacket{
             .position = position,
-            .networkBlockId = network_id,
+            .network_block_id = network_id,
         };
         const serialized = packet.serialize(&stream) catch continue;
         player.network.sendPacket(player.connection, serialized) catch {};
@@ -999,9 +999,9 @@ fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz
         .x = cx,
         .z = cz,
         .dimension = dim_type,
-        .highestSubChunkCount = 0,
-        .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
-        .cacheEnabled = false,
+        .highest_sub_chunk_count = 0,
+        .sub_chunk_count = @intCast(chunk.getSubChunkSendCount()),
+        .cache_enabled = false,
         .blobs = &[_]u64{},
         .data = chunk_stream.getBuffer(),
     };

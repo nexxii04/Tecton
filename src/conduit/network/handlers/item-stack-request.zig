@@ -127,16 +127,16 @@ pub fn handleItemStackRequest(
                     const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier, player) orelse continue;
                     src.clearSlot(d.source.slot);
                 },
-                .craftCreative => |c| {
+                .craft_creative => |c| {
                     const cc = network.conduit.creative_content orelse continue;
-                    const network_id = cc.getNetworkIdByCreativeIndex(c.creativeItemNetworkId) orelse continue;
+                    const network_id = cc.getNetworkIdByCreativeIndex(c.creative_item_network_id) orelse continue;
                     const item_type = ItemType.getByNetworkId(network_id) orelse continue;
                     const item = ItemStack.init(player.entity.allocator, item_type, .{
                         .stackSize = item_type.max_stack_size,
                     });
                     cursor_state.container.base.setItem(0, item);
                 },
-                .craftResultsDeprecated => {},
+                .craft_results_deprecated => {},
                 else => |a| {
                     Raknet.Logger.WARN("Unhandeled action {any}", .{a});
                 },

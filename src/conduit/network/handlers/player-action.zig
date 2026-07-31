@@ -40,7 +40,7 @@ pub fn handlePlayerAction(
         .StopItemUseOn => {},
         .CreativePlayerDestroyBlock => {
             const dimension = player.entity.dimension orelse return;
-            const pos = packet.blockPosition;
+            const pos = packet.block_position;
 
             const perm = dimension.getPermutation(pos, 0) catch return;
             if (std.mem.eql(u8, perm.identifier, "minecraft:air")) return;
@@ -99,7 +99,7 @@ pub fn handlePlayerAction(
                 defer s.deinit();
                 const update = Protocol.UpdateBlockPacket{
                     .position = pos,
-                    .networkBlockId = air_id,
+                    .network_block_id = air_id,
                 };
                 const serialized = try update.serialize(&s);
                 try network.sendPacket(p.connection, serialized);

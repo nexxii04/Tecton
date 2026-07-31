@@ -95,7 +95,7 @@ fn onTick(state: *State, entity: *Entity) void {
     defer stream.deinit();
 
     var packet = Protocol.TextPacket{
-        .textType = .Tip,
+        .text_type = .Tip,
         .message = text,
     };
     const serialized = packet.serialize(&stream) catch return;

@@ -27,28 +27,28 @@ pub fn handlePlayerAuthInput(
     player.entity.position = packet.position;
     player.entity.rotation = packet.rotation;
     player.entity.motion = .{ .x = packet.motion.x, .y = 0, .z = packet.motion.y };
-    player.entity.head_yaw = packet.headYaw;
+    player.entity.head_yaw = packet.head_yaw;
 
     {
         var flags_changed = false;
-        if (packet.inputData.hasFlag(.StartSneaking)) {
+        if (packet.input_data.hasFlag(.StartSneaking)) {
             player.entity.flags.setFlag(.Sneaking, true);
             flags_changed = true;
         }
-        if (packet.inputData.hasFlag(.StopSneaking)) {
+        if (packet.input_data.hasFlag(.StopSneaking)) {
             player.entity.flags.setFlag(.Sneaking, false);
             flags_changed = true;
         }
         if (flags_changed) try player.broadcastActorFlags();
     }
 
-    if (packet.inputData.hasFlag(.PerformItemInteraction)) {
-        if (packet.itemTransaction) |transaction| {
+    if (packet.input_data.hasFlag(.PerformItemInteraction)) {
+        if (packet.item_transaction) |transaction| {
             try handleItemUseTransaction(network, player, transaction);
         }
     }
 
-    if (packet.inputData.hasFlag(.PerformBlockActions)) {
+    if (packet.input_data.hasFlag(.PerformBlockActions)) {
         for (packet.getBlockActions()) |action| {
             try handleBlockAction(network, player, action);
         }
@@ -82,7 +82,7 @@ fn handleItemUseTransaction(
     player: *Player,
     transaction: Protocol.ItemUseTransaction,
 ) !void {
-    if (transaction.actionType != 0) return;
+    if (transaction.action_type != 0) return;
 
     const dimension = player.entity.dimension orelse return;
 
@@ -97,15 +97,15 @@ fn handleItemUseTransaction(
     const permutation = resolveWithPlacement(player.entity.allocator, base_permutation, .{
         .yaw = player.entity.rotation.y,
         .pitch = player.entity.rotation.x,
-        .block_face = transaction.blockFace,
-        .clicked_position = transaction.clickedPosition,
+        .block_face = transaction.block_face,
+        .clicked_position = transaction.clicked_position,
     });
 
-    const face = transaction.blockFace;
+    const face = transaction.block_face;
     const pos = Protocol.BlockPosition{
-        .x = transaction.blockPosition.x + if (face == 5) @as(i32, 1) else if (face == 4) @as(i32, -1) else @as(i32, 0),
-        .y = transaction.blockPosition.y + if (face == 1) @as(i32, 1) else if (face == 0) @as(i32, -1) else @as(i32, 0),
-        .z = transaction.blockPosition.z + if (face == 3) @as(i32, 1) else if (face == 2) @as(i32, -1) else @as(i32, 0),
+        .x = transaction.block_position.x + if (face == 5) @as(i32, 1) else if (face == 4) @as(i32, -1) else @as(i32, 0),
+        .y = transaction.block_position.y + if (face == 1) @as(i32, 1) else if (face == 0) @as(i32, -1) else @as(i32, 0),
+        .z = transaction.block_position.z + if (face == 3) @as(i32, 1) else if (face == 2) @as(i32, -1) else @as(i32, 0),
     };
 
     var block = dimension.getBlock(pos);
@@ -131,7 +131,7 @@ fn handleItemUseTransaction(
         network.scratch_stream.reset();
         const update = Protocol.UpdateBlockPacket{
             .position = pos,
-            .networkBlockId = network_id,
+            .network_block_id = network_id,
         };
         const serialized = try update.serialize(&network.scratch_stream);
 
@@ -158,12 +158,12 @@ fn handleBlockAction(
                 player.block_target = null;
             }
 
-            const perm = dimension.getPermutation(action.blockPos, 0) catch return;
+            const perm = dimension.getPermutation(action.block_pos, 0) catch return;
             if (std.mem.eql(u8, perm.identifier, "minecraft:air")) return;
 
-            player.block_target = action.blockPos;
+            player.block_target = action.block_pos;
 
-            broadcastLevelEvent(network, .StartBlockCracking, action.blockPos.toVector3f(), 65535);
+            broadcastLevelEvent(network, .StartBlockCracking, action.block_pos.toVector3f(), 65535);
         },
         .AbortBreak => {
             if (player.block_target) |target| {
@@ -177,7 +177,7 @@ fn handleBlockAction(
             }
             player.block_target = null;
 
-            const pos = action.blockPos;
+            const pos = action.block_pos;
             const perm = dimension.getPermutation(pos, 0) catch return;
             if (std.mem.eql(u8, perm.identifier, "minecraft:air")) return;
 
@@ -222,7 +222,7 @@ fn handleBlockAction(
                 network.scratch_stream.reset();
                 const update = Protocol.UpdateBlockPacket{
                     .position = pos,
-                    .networkBlockId = @bitCast(air.network_id),
+                    .network_block_id = @bitCast(air.network_id),
                 };
                 const serialized = try update.serialize(&network.scratch_stream);
                 const snapshots = network.conduit.getPlayerSnapshots();

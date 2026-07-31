@@ -132,7 +132,7 @@ pub const Player = struct {
             var stream = BinaryStream.init(self.entity.allocator, null, null);
             defer stream.deinit();
             var dp = Protocol.DisconnectPacket{
-                .hideScreen = false,
+                .hide_screen = false,
                 .reason = .Kicked,
                 .message = msg,
                 .filtered = msg,
@@ -154,7 +154,7 @@ pub const Player = struct {
         {
             var stream = BinaryStream.init(allocator, null, null);
             defer stream.deinit();
-            const remove = Protocol.RemoveEntityPacket{ .uniqueEntityId = self.entity.unique_id };
+            const remove = Protocol.RemoveEntityPacket{ .unique_entity_id = self.entity.unique_id };
             const serialized = remove.serialize(&stream) catch null;
             if (serialized) |data| {
                 for (snapshots) |other| {
@@ -171,11 +171,11 @@ pub const Player = struct {
             defer stream.deinit();
             const entry = [_]Protocol.PlayerListEntry{.{
                 .uuid = self.uuid,
-                .entityUniqueId = self.entity.runtime_id,
+                .entity_unique_id = self.entity.runtime_id,
                 .username = self.username,
                 .xuid = self.xuid,
                 .skin = null,
-                .buildPlatform = 0,
+                .build_platform = 0,
             }};
             var packet = Protocol.PlayerListPacket{
                 .action = .Remove,
@@ -393,7 +393,7 @@ pub const Player = struct {
                 .z = @intFromFloat(@floor(self.entity.position.z)),
             },
             .radius = @intCast(self.view_distance * 16),
-            .savedChunks = &[_]Protocol.ChunkCoords{},
+            .saved_chunks = &[_]Protocol.ChunkCoords{},
         };
         const pub_serialized = update.serialize(&pub_stream) catch return;
         self.network.sendPacket(self.connection, pub_serialized) catch {};

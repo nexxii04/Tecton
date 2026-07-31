@@ -133,7 +133,7 @@ pub fn placeUpperBlock(allocator: std.mem.Allocator, dimension: *Dimension, pos:
         defer s.deinit();
         const update = Protocol.UpdateBlockPacket{
             .position = above,
-            .networkBlockId = network_id,
+            .network_block_id = network_id,
         };
         const serialized = update.serialize(&s) catch continue;
         p.network.sendPacket(p.connection, serialized) catch {};

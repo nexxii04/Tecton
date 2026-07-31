@@ -30,7 +30,7 @@ fn onBreak(_: *State, block: *Block, _: ?*Player) bool {
         defer s.deinit();
         const update = Protocol.UpdateBlockPacket{
             .position = other_pos,
-            .networkBlockId = network_id,
+            .network_block_id = network_id,
         };
         const serialized = update.serialize(&s) catch continue;
         p.network.sendPacket(p.connection, serialized) catch {};

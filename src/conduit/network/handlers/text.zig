@@ -13,7 +13,7 @@ pub fn handleTextPacket(
 ) !void {
     const text = try Protocol.TextPacket.deserialize(stream);
 
-    if (text.textType == .Chat) {
+    if (text.text_type == .Chat) {
         const sender = network.conduit.getPlayerByConnection(connection) orelse return;
 
         var event = Events.types.PlayerChatEvent{
@@ -27,8 +27,8 @@ pub fn handleTextPacket(
         defer str.deinit();
 
         var packet = Protocol.TextPacket{
-            .textType = .Chat,
-            .sourceName = sender.username,
+            .text_type = .Chat,
+            .source_name = sender.username,
             .message = event.message,
             .xuid = sender.xuid,
         };

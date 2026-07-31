@@ -27,7 +27,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
         defer stream.deinit();
 
         const packet = Protocol.ActorEventPacket{
-            .runtimeEntityId = @bitCast(entity.runtime_id),
+            .runtime_entity_id = @bitCast(entity.runtime_id),
             .event = .HurtAnimation,
             .data = 0,
         };
@@ -69,7 +69,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
         defer stream.deinit();
 
         const death_packet = Protocol.ActorEventPacket{
-            .runtimeEntityId = @bitCast(entity.runtime_id),
+            .runtime_entity_id = @bitCast(entity.runtime_id),
             .event = .DeathAnimation,
             .data = 0,
         };

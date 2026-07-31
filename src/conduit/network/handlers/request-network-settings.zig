@@ -17,7 +17,7 @@ pub fn handleNetworkSettings(
         if (request.protocol > Protocol.PROTOCOL) reason = .OutdatedServer;
 
         var disconnect = Protocol.DisconnectPacket{
-            .hideScreen = true,
+            .hide_screen = true,
             .reason = reason,
         };
         const serialized = try disconnect.serialize(&str);
@@ -29,11 +29,11 @@ pub fn handleNetworkSettings(
     defer write.deinit();
 
     var response = Protocol.NetworkSettingsPacket{
-        .clientScalar = 0,
-        .compressionThreshold = network.options.compressionThreshold,
-        .compressionMethod = network.options.compressionMethod,
-        .clientThreshold = 0,
-        .clientThrottle = false,
+        .client_scalar = 0,
+        .compression_threshold = network.options.compressionThreshold,
+        .compression_method = network.options.compressionMethod,
+        .client_threshold = 0,
+        .client_throttle = false,
     };
     const packet = try response.serialize(&write);
     try network.sendUncompressedPacket(connection, packet);

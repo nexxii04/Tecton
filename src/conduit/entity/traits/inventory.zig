@@ -78,10 +78,10 @@ pub fn setHeldItem(state: *State, entity: *Entity, slot: u8) void {
     const held = getHeldItem(state);
     const item_descriptor = if (held) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
         .network = 0,
-        .stackSize = null,
+        .stack_size = null,
         .metadata = null,
-        .itemStackId = null,
-        .networkBlockId = null,
+        .item_stack_id = null,
+        .network_block_id = null,
         .extras = null,
     };
 

@@ -168,7 +168,7 @@ fn sendBlockUpdate(block: *Block, perm: *Permutation) void {
 
     const packet = Protocol.UpdateBlockPacket{
         .position = block.position,
-        .networkBlockId = network_id,
+        .network_block_id = network_id,
     };
     const serialized = packet.serialize(&s) catch return;
 

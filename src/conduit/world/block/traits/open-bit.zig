@@ -43,7 +43,7 @@ fn onInteract(_: *State, block: *Block, _: *Player) bool {
             defer s.deinit();
             const update = Protocol.UpdateBlockPacket{
                 .position = block.position,
-                .networkBlockId = network_id,
+                .network_block_id = network_id,
             };
             const serialized = update.serialize(&s) catch continue;
             p.network.sendPacket(p.connection, serialized) catch {};
@@ -59,9 +59,9 @@ fn onInteract(_: *State, block: *Block, _: *Player) bool {
                     .z = @floatFromInt(block.position.z),
                 },
                 .data = new_perm.network_id,
-                .actorIdentifier = "",
-                .isBabyMob = false,
-                .isGlobal = false,
+                .actor_identifier = "",
+                .is_baby_mob = false,
+                .is_global = false,
             };
             const serialized = sound.serialize(&s) catch continue;
             p.network.sendPacket(p.connection, serialized) catch {};

@@ -116,11 +116,11 @@ fn sendExistingPlayers(state: *PlayerInitTask) !void {
         if (p.entity.runtime_id == state.player.entity.runtime_id or !p.spawned) continue;
         entries[written] = .{
             .uuid = p.uuid,
-            .entityUniqueId = p.entity.runtime_id,
+            .entity_unique_id = p.entity.runtime_id,
             .username = p.username,
             .xuid = p.xuid,
             .skin = &p.loginData.client_data,
-            .buildPlatform = @intCast(p.loginData.client_data.device_os),
+            .build_platform = @intCast(p.loginData.client_data.device_os),
         };
         written += 1;
     }
@@ -147,11 +147,11 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
 
     const entry = [_]Protocol.PlayerListEntry{.{
         .uuid = state.player.uuid,
-        .entityUniqueId = state.player.entity.runtime_id,
+        .entity_unique_id = state.player.entity.runtime_id,
         .username = state.player.username,
         .xuid = state.player.xuid,
         .skin = &state.player.loginData.client_data,
-        .buildPlatform = @intCast(state.player.loginData.client_data.device_os),
+        .build_platform = @intCast(state.player.loginData.client_data.device_os),
     }};
 
     var stream = BinaryStream.init(temp_allocator, null, null);

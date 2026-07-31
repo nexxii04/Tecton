@@ -174,10 +174,10 @@ pub const Container = struct {
         const item_stack = if (slot < self.storage.len) self.storage[slot] else null;
         const network_item = if (item_stack) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
             .network = 0,
-            .stackSize = null,
+            .stack_size = null,
             .metadata = null,
-            .itemStackId = null,
-            .networkBlockId = null,
+            .item_stack_id = null,
+            .network_block_id = null,
             .extras = null,
         };
 
@@ -190,10 +190,10 @@ pub const Container = struct {
             defer stream.deinit();
 
             const packet = Protocol.InventorySlotPacket{
-                .containerId = id,
+                .container_id = id,
                 .slot = slot,
-                .fullContainerName = .{ .identifier = .Container, .dynamicIdentifier = 0 },
-                .storageItem = .{ .network = 0, .stackSize = null, .metadata = null, .itemStackId = null, .networkBlockId = null, .extras = null },
+                .full_container_name = .{ .identifier = .Container, .dynamic_identifier = 0 },
+                .storage_item = .{ .network = 0, .stack_size = null, .metadata = null, .item_stack_id = null, .network_block_id = null, .extras = null },
                 .item = network_item,
             };
             const serialized = packet.serialize(&stream) catch continue;
@@ -208,10 +208,10 @@ pub const Container = struct {
         for (self.storage, 0..) |slot, i| {
             items[i] = if (slot) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
                 .network = 0,
-                .stackSize = null,
+                .stack_size = null,
                 .metadata = null,
-                .itemStackId = null,
-                .networkBlockId = null,
+                .item_stack_id = null,
+                .network_block_id = null,
                 .extras = null,
             };
         }
@@ -225,10 +225,10 @@ pub const Container = struct {
             defer stream.deinit();
 
             const packet = Protocol.InventoryContentPacket{
-                .containerId = id,
+                .container_id = id,
                 .items = items,
-                .fullContainerName = .{ .identifier = .Container, .dynamicIdentifier = 0 },
-                .storageItem = .{ .network = 0, .stackSize = null, .metadata = null, .itemStackId = null, .networkBlockId = null, .extras = null },
+                .full_container_name = .{ .identifier = .Container, .dynamic_identifier = 0 },
+                .storage_item = .{ .network = 0, .stack_size = null, .metadata = null, .item_stack_id = null, .network_block_id = null, .extras = null },
             };
             const serialized = packet.serialize(&stream) catch continue;
             player.network.sendPacket(player.connection, serialized) catch continue;

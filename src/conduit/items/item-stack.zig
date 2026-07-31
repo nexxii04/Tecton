@@ -123,22 +123,22 @@ pub const ItemStack = struct {
     pub fn toNetworkStack(self: *const ItemStack) Protocol.NetworkItemStackDescriptor {
         const nbt = self.nbt orelse return .{
             .network = self.item_type.network_id,
-            .stackSize = self.stackSize,
+            .stack_size = self.stackSize,
             .metadata = self.metadata,
-            .itemStackId = self.networkStackId,
-            .networkBlockId = 0,
+            .item_stack_id = self.networkStackId,
+            .network_block_id = 0,
             .extras = null,
         };
         return .{
             .network = self.item_type.network_id,
-            .stackSize = self.stackSize,
+            .stack_size = self.stackSize,
             .metadata = self.metadata,
-            .itemStackId = self.networkStackId,
-            .networkBlockId = 0,
+            .item_stack_id = self.networkStackId,
+            .network_block_id = 0,
             .extras = if (nbt.count() > 0) .{
                 .nbt = nbt,
-                .canPlaceOn = &.{},
-                .canDestroy = &.{},
+                .can_place_on = &.{},
+                .can_destroy = &.{},
                 .ticking = null,
             } else null,
         };
@@ -147,20 +147,20 @@ pub const ItemStack = struct {
     pub fn toNetworkInstance(self: *const ItemStack) Protocol.NetworkItemInstanceDescriptor {
         const nbt = self.nbt orelse return .{
             .network = self.item_type.network_id,
-            .stackSize = self.stackSize,
+            .stack_size = self.stackSize,
             .metadata = self.metadata,
-            .networkBlockId = 0,
+            .network_block_id = 0,
             .extras = null,
         };
         return .{
             .network = self.item_type.network_id,
-            .stackSize = self.stackSize,
+            .stack_size = self.stackSize,
             .metadata = self.metadata,
-            .networkBlockId = 0,
+            .network_block_id = 0,
             .extras = if (nbt.count() > 0) .{
                 .nbt = nbt,
-                .canPlaceOn = &.{},
-                .canDestroy = &.{},
+                .can_place_on = &.{},
+                .can_destroy = &.{},
                 .ticking = null,
             } else null,
         };

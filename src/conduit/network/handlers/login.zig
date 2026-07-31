@@ -23,7 +23,7 @@ pub fn handleLogin(
         if (login.protocol > Protocol.PROTOCOL) reason = .OutdatedServer;
 
         var disconnect = Protocol.DisconnectPacket{
-            .hideScreen = true,
+            .hide_screen = true,
             .reason = reason,
         };
         const serialized = try disconnect.serialize(&str);
@@ -36,7 +36,7 @@ pub fn handleLogin(
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
         var disconnect = Protocol.DisconnectPacket{
-            .hideScreen = true,
+            .hide_screen = true,
             .reason = .ServerFull,
         };
         const serialized = try disconnect.serialize(&str);
@@ -85,7 +85,7 @@ pub fn handleLogin(
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
         var disconnect = Protocol.DisconnectPacket{
-            .hideScreen = false,
+            .hide_screen = false,
             .reason = .Kicked,
             .message = "You are banned from this server.",
             .filtered = "You are banned from this server.",
@@ -112,7 +112,7 @@ pub fn handleLogin(
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
         var disconnect = Protocol.DisconnectPacket{
-            .hideScreen = true,
+            .hide_screen = true,
             .reason = .Disconnected,
             .message = "PlayerJoinEvent was cancelled",
             .filtered = "PlayerJoinEvent was cancelled",
@@ -129,13 +129,13 @@ pub fn handleLogin(
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
         var packs = Protocol.ResourcePacksInfoPacket{
-            .forceDisableVibrantVisuals = false,
-            .hasAddons = false,
-            .hasScripts = false,
-            .mustAccept = false,
+            .force_disable_vibrant_visuals = false,
+            .has_addons = false,
+            .has_scripts = false,
+            .must_accept = false,
             .packs = &[_]Protocol.ResourcePackDescriptor{},
-            .worldTemplateUuid = "00000000-0000-0000-0000-000000000000",
-            .worldTemplateVersion = "",
+            .world_template_uuid = "00000000-0000-0000-0000-000000000000",
+            .world_template_version = "",
         };
         const serialized = try packs.serialize(&str);
         try network.sendPacket(connection, serialized);

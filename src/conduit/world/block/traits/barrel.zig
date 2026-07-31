@@ -63,7 +63,7 @@ fn sendActorData(block: *Block, player: *Player) void {
     {
         var s2 = BinaryStream.init(block.allocator, null, null);
         defer s2.deinit();
-        const fix_air = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = 0 };
+        const fix_air = Protocol.UpdateBlockPacket{ .position = block.position, .network_block_id = 0 };
         const air_ser = fix_air.serialize(&s2) catch return;
         player.network.sendPacket(player.connection, air_ser) catch {};
     }
@@ -72,7 +72,7 @@ fn sendActorData(block: *Block, player: *Player) void {
         const real_id: u32 = @bitCast(perm.network_id);
         var s3 = BinaryStream.init(block.allocator, null, null);
         defer s3.deinit();
-        const fix_real = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = real_id };
+        const fix_real = Protocol.UpdateBlockPacket{ .position = block.position, .network_block_id = real_id };
         const real_ser = fix_real.serialize(&s3) catch return;
         player.network.sendPacket(player.connection, real_ser) catch {};
     }
@@ -133,7 +133,7 @@ fn setOpenBit(block: *Block, open: bool) void {
         defer s.deinit();
         const update = Protocol.UpdateBlockPacket{
             .position = block.position,
-            .networkBlockId = network_id,
+            .network_block_id = network_id,
         };
         const serialized = update.serialize(&s) catch continue;
         p.network.sendPacket(p.connection, serialized) catch {};
@@ -157,9 +157,9 @@ fn sendSound(block: *Block, event: Protocol.SoundEvent) void {
                 .z = @floatFromInt(block.position.z),
             },
             .data = perm.network_id,
-            .actorIdentifier = "",
-            .isBabyMob = false,
-            .isGlobal = false,
+            .actor_identifier = "",
+            .is_baby_mob = false,
+            .is_global = false,
         };
         const serialized = packet.serialize(&s) catch continue;
         p.network.sendPacket(p.connection, serialized) catch {};

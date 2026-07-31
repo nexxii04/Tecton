@@ -407,8 +407,8 @@ pub const Dimension = struct {
         defer stream.deinit();
 
         const packet = Protocol.AddItemActorPacket{
-            .uniqueEntityId = entity.unique_id,
-            .runtimeEntityId = @bitCast(entity.runtime_id),
+            .unique_entity_id = entity.unique_id,
+            .runtime_entity_id = @bitCast(entity.runtime_id),
             .item = net_item,
             .position = position,
             .velocity = velocity,
@@ -453,16 +453,16 @@ pub const Dimension = struct {
         }
 
         const packet = Protocol.AddEntityPacket{
-            .uniqueEntityId = entity.unique_id,
-            .runtimeEntityId = @bitCast(entity.runtime_id),
-            .entityType = entity.entity_type.identifier,
+            .unique_entity_id = entity.unique_id,
+            .runtime_entity_id = @bitCast(entity.runtime_id),
+            .entity_type = entity.entity_type.identifier,
             .position = entity.position,
             .pitch = entity.rotation.y,
             .yaw = entity.rotation.x,
-            .headYaw = entity.head_yaw,
-            .bodyYaw = entity.rotation.x,
-            .entityMetadata = metadata.items,
-            .entityProperties = Protocol.PropertySyncData.init(self.allocator),
+            .head_yaw = entity.head_yaw,
+            .body_yaw = entity.rotation.x,
+            .entity_metadata = metadata.items,
+            .entity_properties = Protocol.PropertySyncData.init(self.allocator),
         };
 
         const serialized = try packet.serialize(&stream);
@@ -481,7 +481,7 @@ pub const Dimension = struct {
         defer stream.deinit();
 
         const packet = Protocol.RemoveEntityPacket{
-            .uniqueEntityId = entity.unique_id,
+            .unique_entity_id = entity.unique_id,
         };
 
         const serialized = try packet.serialize(&stream);

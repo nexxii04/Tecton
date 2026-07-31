@@ -241,14 +241,14 @@ fn sendClientRefreshAt(block: *Block, position: Protocol.BlockPosition, player: 
     {
         var s2 = BinaryStream.init(block.allocator, null, null);
         defer s2.deinit();
-        const fix_air = Protocol.UpdateBlockPacket{ .position = position, .networkBlockId = block_ids[0] };
+        const fix_air = Protocol.UpdateBlockPacket{ .position = position, .network_block_id = block_ids[0] };
         const air_ser = fix_air.serialize(&s2) catch return;
         player.network.sendPacket(player.connection, air_ser) catch {};
     }
     {
         var s3 = BinaryStream.init(block.allocator, null, null);
         defer s3.deinit();
-        const fix_real = Protocol.UpdateBlockPacket{ .position = position, .networkBlockId = block_ids[1] };
+        const fix_real = Protocol.UpdateBlockPacket{ .position = position, .network_block_id = block_ids[1] };
         const real_ser = fix_real.serialize(&s3) catch return;
         player.network.sendPacket(player.connection, real_ser) catch {};
     }
@@ -450,9 +450,9 @@ fn sendSound(block: *Block, event: Protocol.SoundEvent) void {
                 .z = @floatFromInt(block.position.z),
             },
             .data = network_id,
-            .actorIdentifier = "",
-            .isBabyMob = false,
-            .isGlobal = false,
+            .actor_identifier = "",
+            .is_baby_mob = false,
+            .is_global = false,
         };
         const serialized = packet.serialize(&stream) catch continue;
         p.network.sendPacket(p.connection, serialized) catch {};

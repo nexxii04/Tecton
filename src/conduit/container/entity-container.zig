@@ -105,10 +105,10 @@ pub const EntityContainer = struct {
         const item_stack = if (slot < self.base.storage.len) self.base.storage[slot] else null;
         const network_item = if (item_stack) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
             .network = 0,
-            .stackSize = null,
+            .stack_size = null,
             .metadata = null,
-            .itemStackId = null,
-            .networkBlockId = null,
+            .item_stack_id = null,
+            .network_block_id = null,
             .extras = null,
         };
 
@@ -116,10 +116,10 @@ pub const EntityContainer = struct {
         defer stream.deinit();
 
         const packet = Protocol.InventorySlotPacket{
-            .containerId = self.base.identifier orelse .None,
+            .container_id = self.base.identifier orelse .None,
             .slot = slot,
-            .fullContainerName = .{ .identifier = .AnvilInput, .dynamicIdentifier = 0 },
-            .storageItem = .{ .network = 0, .stackSize = null, .metadata = null, .itemStackId = null, .networkBlockId = null, .extras = null },
+            .full_container_name = .{ .identifier = .AnvilInput, .dynamic_identifier = 0 },
+            .storage_item = .{ .network = 0, .stack_size = null, .metadata = null, .item_stack_id = null, .network_block_id = null, .extras = null },
             .item = network_item,
         };
         const serialized = packet.serialize(&stream) catch return;
@@ -133,10 +133,10 @@ pub const EntityContainer = struct {
         for (self.base.storage, 0..) |slot, i| {
             items[i] = if (slot) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
                 .network = 0,
-                .stackSize = null,
+                .stack_size = null,
                 .metadata = null,
-                .itemStackId = null,
-                .networkBlockId = null,
+                .item_stack_id = null,
+                .network_block_id = null,
                 .extras = null,
             };
         }
@@ -147,10 +147,10 @@ pub const EntityContainer = struct {
         defer stream.deinit();
 
         const packet = Protocol.InventoryContentPacket{
-            .containerId = id,
+            .container_id = id,
             .items = items,
-            .fullContainerName = .{ .identifier = .AnvilInput, .dynamicIdentifier = 0 },
-            .storageItem = .{ .network = 0, .stackSize = null, .metadata = null, .itemStackId = null, .networkBlockId = null, .extras = null },
+            .full_container_name = .{ .identifier = .AnvilInput, .dynamic_identifier = 0 },
+            .storage_item = .{ .network = 0, .stack_size = null, .metadata = null, .item_stack_id = null, .network_block_id = null, .extras = null },
         };
         const serialized = packet.serialize(&stream) catch return;
         self.owner.network.sendPacket(self.owner.connection, serialized) catch {};

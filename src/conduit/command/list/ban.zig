@@ -75,7 +75,7 @@ fn handleBan(raw: *anyopaque) void {
         var stream = BinaryStream.init(ctx.allocator, null, null);
         defer stream.deinit();
         var disconnect = Protocol.DisconnectPacket{
-            .hideScreen = false,
+            .hide_screen = false,
             .reason = .Kicked,
             .message = reason,
             .filtered = reason,

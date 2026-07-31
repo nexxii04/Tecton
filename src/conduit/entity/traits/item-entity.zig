@@ -147,8 +147,8 @@ fn broadcastPickup(dimension: *Dimension, entity: *Entity, player: *Player) void
     defer stream.deinit();
 
     const packet = Protocol.TakeItemActorPacket{
-        .itemEntityRuntimeId = @bitCast(entity.runtime_id),
-        .takerEntityRuntimeId = @bitCast(player.entity.runtime_id),
+        .item_entity_runtime_id = @bitCast(entity.runtime_id),
+        .taker_entity_runtime_id = @bitCast(player.entity.runtime_id),
     };
     const serialized = packet.serialize(&stream) catch return;
 
@@ -182,8 +182,8 @@ fn refreshMergedItemEntity(dimension: *Dimension, entity: *Entity) void {
     defer stream.deinit();
 
     const packet = Protocol.AddItemActorPacket{
-        .uniqueEntityId = entity.unique_id,
-        .runtimeEntityId = @bitCast(entity.runtime_id),
+        .unique_entity_id = entity.unique_id,
+        .runtime_entity_id = @bitCast(entity.runtime_id),
         .item = state.stack.toNetworkStack(),
         .position = entity.position,
         .velocity = entity.motion,
