@@ -91,10 +91,12 @@ pub fn build(b: *std.Build) void {
     });
     const binarystream_mod = binarystream_dep.module("BinaryStream");
 
-    const raknet_mod = b.addModule("Raknet", .{
-        .root_source_file = b.path("libs/ZigNet/src/root.zig"),
+    const raknet_dep = b.dependency("ZigNet", .{
+        .target = target,
+        .optimize optimize,
     });
 
+    const raknet_mod = raknet_dep.module("Raknet");
     raknet_mod.addImport("BinaryStream", binarystream_mod);
 
     const nbt_dep = b.dependency("nbt", .{
