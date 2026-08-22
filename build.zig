@@ -93,7 +93,7 @@ pub fn build(b: *std.Build) void {
 
     const raknet_dep = b.dependency("ZigNet", .{
         .target = target,
-        .optimize optimize,
+        .optimize = optimize,
     });
 
     const raknet_mod = raknet_dep.module("Raknet");
