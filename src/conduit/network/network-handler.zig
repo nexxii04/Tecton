@@ -344,6 +344,7 @@ pub const NetworkHandler = struct {
             work.handler.conduit.profiler.record(.packet_dispatch, @intCast(@max(0, pd_end.nanoseconds)));
             result.deinit();
         }
+        std.debug.assert(work.handler.decompress_pending > 0);
         work.handler.decompress_pending -= 1;
         work.handler.decompress_pool.destroy(work);
     }
@@ -356,6 +357,7 @@ pub const NetworkHandler = struct {
         if (work.raw.len > 0) {
             work.allocator.free(work.raw);
         }
+        std.debug.assert(work.handler.decompress_pending > 0);
         work.handler.decompress_pending -= 1;
         work.handler.decompress_pool.destroy(work);
     }

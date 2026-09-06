@@ -187,6 +187,7 @@ pub const ThreadedTaskQueue = struct {
         while (true) {
             self.pending_mutex.lock(self.io) catch |err| {
                 std.log.err("failed to acquire lock: {}", .{err});
+                std.Thread.yield() catch {};
                 continue;
             };
             while (self.pending.items.len == 0 and self.running) {
@@ -207,6 +208,7 @@ pub const ThreadedTaskQueue = struct {
             self.completed_mutex.lock(self.io) catch |err| {
                 std.log.err("failed to acquire lock: {}", .{err});
                 if (task.cleanup) |c_fn| c_fn(task.ctx);
+                std.Thread.yield() catch {};
                 continue;
             };
 
