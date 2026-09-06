@@ -50,9 +50,9 @@ fn handle(raw: *anyopaque) void {
             ctx.sendOutput(false, "You must specify a player");
             return;
         };
-        const slice = ctx.allocator.alloc(*@import("../../player/player.zig").Player, 1) catch return;
-        slice[0] = player;
-        break :blk slice;
+
+        ctx.single_target_buf = .{player};
+        break :blk &ctx.single_target_buf;
     };
 
     const gamemode = parseGamemode(mode_str) orelse {
