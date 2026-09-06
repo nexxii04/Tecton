@@ -7,15 +7,12 @@ pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHand
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const Entity = @import("../entity/entity.zig").Entity;
 const EntityType = @import("../entity/entity-type.zig").EntityType;
-const ItemStack = @import("../items/item-stack.zig").ItemStack;
 const Container = @import("../container/container.zig").Container;
 
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
 const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig");
 const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
-const Display = @import("../items/traits/display.zig");
-const DisplayTrait = Display.DisplayTrait;
 
 pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
 pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;
@@ -281,86 +278,6 @@ pub const Player = struct {
             var s: *InventoryTrait.TraitState = state;
             s.container.update();
         }
-
-        if (self.entity.getTraitState(InventoryTrait)) |state| {
-            var s: *InventoryTrait.TraitState = state;
-
-            var item = ItemStack.fromIdentifier(
-                self.entity.allocator,
-                "minecraft:diamond_shovel",
-                .{},
-            ) orelse return;
-
-            const display = try DisplayTrait.create(self.entity.allocator, .{});
-            try item.addTrait(display);
-            try Display.setDisplayName(&item, "§r§7Custom §bDiamond Shovel");
-
-            s.container.setItem(0, item);
-            s.container.update();
-        }
-        if (self.entity.getTraitState(InventoryTrait)) |state| {
-            var s: *InventoryTrait.TraitState = state;
-
-            var item = ItemStack.fromIdentifier(
-                self.entity.allocator,
-                "minecraft:dirt",
-                .{
-                    .stack_size = 32,
-                },
-            ) orelse return;
-
-            const display = try DisplayTrait.create(self.entity.allocator, .{});
-            try item.addTrait(display);
-            try Display.setDisplayName(&item, "§r§2Dirt");
-
-            s.container.setItem(1, item);
-            s.container.update();
-        }
-
-        if (self.entity.getTraitState(InventoryTrait)) |state| {
-            var s: *InventoryTrait.TraitState = state;
-
-            var item = ItemStack.fromIdentifier(
-                self.entity.allocator,
-                "minecraft:chest",
-                .{
-                    .stack_size = 32,
-                },
-            ) orelse return;
-
-            const display = try DisplayTrait.create(self.entity.allocator, .{});
-            try item.addTrait(display);
-            try Display.setDisplayName(&item, "§r§cChest");
-
-            s.container.setItem(2, item);
-            s.container.update();
-        }
-
-        // {
-
-        //     var str = BinaryStream.init(self.entity.allocator, null, null);
-        //     defer str.deinit();
-
-        //     const packet = Protocol.InventorySlotPacket{
-        //         .containerId = .Inventory,
-        //         .fullContainerName = .{
-        //             .identifier = .AnvilInput,
-        //             .dynamicIdentifier = 0,
-        //         },
-        //         .item = item.toNetworkStack(),
-        //         .storageItem = .{
-        //             .network = 0,
-        //             .extras = null,
-        //             .itemStackId = null,
-        //             .metadata = null,
-        //             .networkBlockId = null,
-        //             .stackSize = null,
-        //         },
-        //         .slot = 0,
-        //     };
-        //     const serialized = try packet.serialize(&str);
-        //     try self.network.sendPacket(self.connection, serialized);
-        // }
     }
 
     pub fn broadcastActorFlags(self: *Player) !void {
