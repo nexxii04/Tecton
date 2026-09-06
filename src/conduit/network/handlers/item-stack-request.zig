@@ -43,6 +43,8 @@ fn canMergeStacks(a: *const ItemStack, b: *const ItemStack) bool {
 }
 
 fn applyTransferAction(src: *Container, source_slot: u32, dst: *Container, destination_slot: u32, count: u16) !void {
+    if (source_slot >= src.getSize() or destination_slot >= dst.getSize()) return error.TransferFailed;
+
     const item = src.takeItem(source_slot, count) orelse return error.TransferFailed;
 
     if (dst.getItemMut(destination_slot)) |existing| {
@@ -111,7 +113,11 @@ pub fn handleItemStackRequest(
                 .take, .place => |t| {
                     const src = resolveTransferContainer(inv_state, cursor_state, t.source.container.identifier, player) orelse continue;
                     const dst = resolveTransferContainer(inv_state, cursor_state, t.destination.container.identifier, player) orelse continue;
-                    applyTransferAction(src, t.source.slot, dst, t.destination.slot, t.count) catch continue;
+                    // Clients address the creative output with catalog slot
+                    // numbers instead of 0; the cursor backing store it
+                    // resolves to only has one slot.
+                    const source_slot: u32 = if (t.source.container.identifier == .CreativeOutput) 0 else t.source.slot;
+                    applyTransferAction(src, source_slot, dst, t.destination.slot, t.count) catch continue;
                 },
                 .swap => |s| {
                     const src = resolveContainer(inv_state, cursor_state, s.source.container.identifier, player) orelse continue;

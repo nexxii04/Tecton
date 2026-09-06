@@ -62,32 +62,36 @@ pub const Container = struct {
     }
 
     pub fn getItem(self: *const Container, slot: u32) ?*const ItemStack {
-        const idx = slot % self.getSize();
-        return if (self.storage[idx]) |*item| item else null;
+        if (slot >= self.storage.len) return null;
+        return if (self.storage[slot]) |*item| item else null;
     }
 
     pub fn getItemMut(self: *Container, slot: u32) ?*ItemStack {
-        const idx = slot % self.getSize();
-        return if (self.storage[idx] != null) &(self.storage[idx].?) else null;
+        if (slot >= self.storage.len) return null;
+        return if (self.storage[slot] != null) &(self.storage[slot].?) else null;
     }
 
     pub fn setItem(self: *Container, slot: u32, item: ItemStack) void {
-        const idx = slot % self.getSize();
-        if (self.storage[idx]) |*old| old.deinit();
-        self.storage[idx] = item;
+        if (slot >= self.storage.len) {
+            var dropped = item;
+            dropped.deinit();
+            return;
+        }
+        if (self.storage[slot]) |*old| old.deinit();
+        self.storage[slot] = item;
 
         if (item.stack_size == 0 or std.mem.eql(u8, item.item_type.identifier, "minecraft:air")) {
-            self.storage[idx] = null;
+            self.storage[slot] = null;
         }
 
-        self.updateSlot(idx);
+        self.updateSlot(slot);
     }
 
     pub fn clearSlot(self: *Container, slot: u32) void {
-        const idx = slot % self.getSize();
-        if (self.storage[idx]) |*item| item.deinit();
-        self.storage[idx] = null;
-        self.updateSlot(idx);
+        if (slot >= self.storage.len) return;
+        if (self.storage[slot]) |*item| item.deinit();
+        self.storage[slot] = null;
+        self.updateSlot(slot);
     }
 
     pub fn clear(self: *Container) void {
@@ -131,34 +135,35 @@ pub const Container = struct {
     }
 
     pub fn removeItem(self: *Container, slot: u32, amount: u16) void {
-        const idx = slot % self.getSize();
-        const item = &(self.storage[idx] orelse return);
+        if (slot >= self.storage.len) return;
+        const item = &(self.storage[slot] orelse return);
         const removed = @min(amount, item.stack_size);
         item.stack_size -= removed;
         if (item.stack_size == 0) {
             item.deinit();
-            self.storage[idx] = null;
+            self.storage[slot] = null;
         }
-        self.updateSlot(idx);
+        self.updateSlot(slot);
     }
 
     pub fn takeItem(self: *Container, slot: u32, amount: u16) ?ItemStack {
-        const idx = slot % self.getSize();
-        const item = self.storage[idx] orelse return null;
+        if (slot >= self.storage.len) return null;
+        const item = self.storage[slot] orelse return null;
         if (amount >= item.stack_size) {
-            self.storage[idx] = null;
-            self.updateSlot(idx);
+            self.storage[slot] = null;
+            self.updateSlot(slot);
             return item;
         }
-        self.storage[idx].?.stack_size -= amount;
-        self.updateSlot(idx);
+        self.storage[slot].?.stack_size -= amount;
+        self.updateSlot(slot);
         return item.cloneWithCount(self.allocator, amount) catch return null;
     }
 
     pub fn swapItems(self: *Container, slot: u32, other_slot: u32, other_container: ?*Container) void {
         const target = other_container orelse self;
-        const idx_a = slot % self.getSize();
-        const idx_b = other_slot % target.getSize();
+        if (slot >= self.storage.len or other_slot >= target.storage.len) return;
+        const idx_a = slot;
+        const idx_b = other_slot;
 
         const item_a = self.storage[idx_a];
         const item_b = target.storage[idx_b];
@@ -275,6 +280,44 @@ pub const Container = struct {
         return id;
     }
 };
+
+test "slot access beyond size returns null instead of wrapping" {
+    const allocator = std.testing.allocator;
+    const ItemType = @import("../items/item-type.zig").ItemType;
+    const NBT = @import("nbt");
+
+    try ItemType.initRegistry(allocator);
+    defer ItemType.deinitRegistry();
+
+    var container = try Container.init(allocator, .Inventory, 9);
+    defer container.deinit();
+
+    const test_type = try ItemType.init(
+        allocator,
+        try allocator.dupe(u8, "minecraft:test_oob_stone"),
+        1,
+        64,
+        true,
+        &.{},
+        false,
+        0,
+        NBT.Tag{ .Compound = NBT.CompoundTag.init(allocator, null) },
+    );
+    try test_type.register();
+
+    container.setItem(9, ItemStack.init(allocator, test_type, .{}));
+    try std.testing.expect(container.storage[0] == null);
+
+    try std.testing.expect(container.getItem(9) == null);
+    try std.testing.expect(container.getItemMut(27) == null);
+    try std.testing.expect(container.takeItem(100, 1) == null);
+
+    container.clearSlot(9);
+    container.removeItem(9, 1);
+    container.swapItems(0, 9, null);
+
+    try std.testing.expect(container.getItem(0) == null);
+}
 
 test "takeItem preserves item nbt when splitting a stack" {
     const allocator = std.testing.allocator;
