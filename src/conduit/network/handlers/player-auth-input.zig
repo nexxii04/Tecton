@@ -154,7 +154,7 @@ fn handleBlockAction(
     switch (action.action) {
         .StartBreak, .ContinueDestroyBlock => {
             if (player.block_target) |target| {
-                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
+                broadcastLevelEvent(network, player, .StopBlockCracking, target.toVector3f(), 0);
                 player.block_target = null;
             }
 
@@ -163,17 +163,17 @@ fn handleBlockAction(
 
             player.block_target = action.block_pos;
 
-            broadcastLevelEvent(network, .StartBlockCracking, action.block_pos.toVector3f(), 65535);
+            broadcastLevelEvent(network, player, .StartBlockCracking, action.block_pos.toVector3f(), 65535);
         },
         .AbortBreak => {
             if (player.block_target) |target| {
-                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
+                broadcastLevelEvent(network, player, .StopBlockCracking, target.toVector3f(), 0);
                 player.block_target = null;
             }
         },
         .PredictDestroyBlock, .CreativePlayerDestroyBlock => {
             if (player.block_target) |target| {
-                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
+                broadcastLevelEvent(network, player, .StopBlockCracking, target.toVector3f(), 0);
             }
             player.block_target = null;
 
@@ -216,7 +216,7 @@ fn handleBlockAction(
                 }
             }
 
-            broadcastLevelEvent(network, .ParticlesDestroyBlock, pos.toVector3f(), @bitCast(perm.network_id));
+            broadcastLevelEvent(network, player, .ParticlesDestroyBlock, pos.toVector3f(), @bitCast(perm.network_id));
 
             {
                 network.scratch_stream.reset();
@@ -236,7 +236,7 @@ fn handleBlockAction(
     }
 }
 
-fn broadcastLevelEvent(network: *NetworkHandler, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
+fn broadcastLevelEvent(network: *NetworkHandler, exclude: *Player, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
     network.scratch_stream.reset();
     const pkt = Protocol.LevelEventPacket{
         .event = event,
@@ -247,6 +247,7 @@ fn broadcastLevelEvent(network: *NetworkHandler, event: Protocol.LevelEvent, pos
     const snapshots = network.conduit.getPlayerSnapshots();
     for (snapshots) |p| {
         if (!p.spawned) continue;
+        if (p.entity.runtime_id == exclude.entity.runtime_id) continue;
         network.sendPacket(p.connection, serialized) catch {};
     }
 }
