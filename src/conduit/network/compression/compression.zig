@@ -193,17 +193,20 @@ pub const Compression = struct {
         var count: usize = 0;
         var offset: usize = 0;
         while (offset < payload.len) {
-            const v = readVarInt(payload[offset..]);
+            const v = readVarInt(payload[offset..]) orelse return error.MalformedPacketFraming;
             offset += v.size + v.value;
+            if (offset > payload.len) return error.MalformedPacketFraming;
             count += 1;
         }
 
         const packets = try allocator.alloc([]const u8, count);
+        errdefer allocator.free(packets);
         offset = 0;
         var idx: usize = 0;
         while (offset < payload.len) : (idx += 1) {
-            const v = readVarInt(payload[offset..]);
+            const v = readVarInt(payload[offset..]) orelse return error.MalformedPacketFraming;
             offset += v.size;
+            if (offset + v.value > payload.len) return error.MalformedPacketFraming;
             packets[idx] = payload[offset..][0..v.value];
             offset += v.value;
         }
@@ -231,17 +234,25 @@ pub const Compression = struct {
         return pos + 1;
     }
 
-    inline fn readVarInt(buffer: []const u8) struct { value: u32, size: usize } {
+    const VarIntResult = struct { value: u32, size: usize };
+
+    // Returns null for malformed input: truncated varints, more than 5 bytes,
+    // or values that do not fit in u32. Incoming framing is attacker-controlled,
+    // so callers must treat null as "discard the frame", never as a panic.
+    fn readVarInt(buffer: []const u8) ?VarIntResult {
         var result: u32 = 0;
-        var shift: u5 = 0;
         var pos: usize = 0;
-        while (pos < buffer.len) : (pos += 1) {
+        while (pos < buffer.len and pos < 5) : (pos += 1) {
             const byte = buffer[pos];
-            result |= @as(u32, byte & 0x7F) << shift;
-            if ((byte & 0x80) == 0) break;
-            shift += 7;
+            const chunk: u32 = byte & 0x7F;
+            if (pos == 4) {
+                if ((byte & 0x80) != 0) return null;
+                if (chunk > 0x0F) return null;
+            }
+            result |= chunk << @intCast(7 * pos);
+            if ((byte & 0x80) == 0) return .{ .value = result, .size = pos + 1 };
         }
-        return .{ .value = result, .size = pos + 1 };
+        return null;
     }
 };
 
@@ -307,4 +318,58 @@ test "batch compression round-trip preserves order and content" {
             try std.testing.expectEqualSlices(u8, pkts[i], result.packets[i]);
         }
     }
+}
+
+test "readVarInt round-trips values written by writeVarInt" {
+    const cases = [_]u32{ 0, 1, 127, 128, 16383, 16384, 2097151, 2097152, 268435455, 0xFFFFFFFF };
+    for (cases) |value| {
+        var buf: [5]u8 = undefined;
+        const size = Compression.writeVarInt(&buf, value);
+        const decoded = Compression.readVarInt(buf[0..size]) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(value, decoded.value);
+        try std.testing.expectEqual(size, decoded.size);
+    }
+}
+
+test "readVarInt rejects malformed varints" {
+    // more than 5 bytes of continuation
+    try std.testing.expect(Compression.readVarInt(&.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01 }) == null);
+    // continuation bit set at end of buffer (truncated)
+    try std.testing.expect(Compression.readVarInt(&.{0x80}) == null);
+    // empty buffer
+    try std.testing.expect(Compression.readVarInt(&.{}) == null);
+    // 5th byte carries bits beyond u32
+    try std.testing.expect(Compression.readVarInt(&.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x70 }) == null);
+}
+
+test "unframe rejects packet lengths beyond the payload" {
+    const allocator = std.testing.allocator;
+    // claims a 32767-byte packet, only 2 bytes follow
+    const payload = [_]u8{ 0xFF, 0xFF, 0x01, 0xAA, 0xBB };
+    try std.testing.expectError(error.MalformedPacketFraming, Compression.unframe(&payload, allocator));
+}
+
+test "unframe rejects unterminated varint framing" {
+    const allocator = std.testing.allocator;
+    const payload = [_]u8{0x80};
+    try std.testing.expectError(error.MalformedPacketFraming, Compression.unframe(&payload, allocator));
+}
+
+test "unframe rejects truncated packet data" {
+    const allocator = std.testing.allocator;
+    // varint says 5 bytes of packet data, only 2 follow
+    const payload = [_]u8{ 0x05, 0xAA, 0xBB };
+    try std.testing.expectError(error.MalformedPacketFraming, Compression.unframe(&payload, allocator));
+}
+
+test "unframe accepts valid framing" {
+    const allocator = std.testing.allocator;
+    // len=2 (AA BB), len=0 (empty), len=3 (CC DD EE)
+    const payload = [_]u8{ 0x02, 0xAA, 0xBB, 0x00, 0x03, 0xCC, 0xDD, 0xEE };
+    const packets = try Compression.unframe(&payload, allocator);
+    defer allocator.free(packets);
+    try std.testing.expectEqual(@as(usize, 3), packets.len);
+    try std.testing.expectEqualSlices(u8, &.{ 0xAA, 0xBB }, packets[0]);
+    try std.testing.expectEqual(@as(usize, 0), packets[1].len);
+    try std.testing.expectEqualSlices(u8, &.{ 0xCC, 0xDD, 0xEE }, packets[2]);
 }
