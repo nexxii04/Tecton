@@ -582,15 +582,16 @@ test "tick scheduler delivers at correct delay" {
 
         for (0..delay - 1) |_| {
             const ticks = sched.stepTick();
-            sched.clearCurrentSlot();
+            // Read the returned slice before clearCurrentSlot(): it clears the
+            // same backing list and would invalidate the slice.
             for (ticks) |t| {
                 try std.testing.expect(t.block_hash != block_hash or
                     Dimension.blockPosHash(t.pos) != Dimension.blockPosHash(pos));
             }
+            sched.clearCurrentSlot();
         }
 
         const delivered = sched.stepTick();
-        sched.clearCurrentSlot();
         var found = false;
         for (delivered) |t| {
             if (t.block_hash == block_hash and Dimension.blockPosHash(t.pos) == Dimension.blockPosHash(pos)) {
@@ -598,6 +599,7 @@ test "tick scheduler delivers at correct delay" {
                 break;
             }
         }
+        sched.clearCurrentSlot();
         try std.testing.expect(found);
     }
 }

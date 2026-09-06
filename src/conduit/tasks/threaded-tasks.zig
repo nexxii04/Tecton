@@ -271,7 +271,7 @@ test "task queue completeness with swapRemove" {
     while (attempts < 1000) : (attempts += 1) {
         queue.drainCompleted(std.math.maxInt(u64));
         if (@atomicLoad(usize, &completed_count, .seq_cst) == N) break;
-        std.Thread.sleep(1_000_000);
+        std.testing.io.sleep(.fromNanoseconds(1_000_000), .awake) catch {};
     }
 
     try std.testing.expectEqual(N, @atomicLoad(usize, &completed_count, .seq_cst));

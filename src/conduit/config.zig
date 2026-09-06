@@ -2,9 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Raknet = @import("Raknet");
 
-pub fn shouldEmitVerboseStartupLogs(_: std.builtin.OptimizeMode) bool {
-    return true;
-    // mode == .Debug;
+pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
+    return mode == .Debug;
 }
 
 pub const ServerProperties = struct {
