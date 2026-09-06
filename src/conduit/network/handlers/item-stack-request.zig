@@ -128,6 +128,7 @@ pub fn handleItemStackRequest(
                     src.clearSlot(d.source.slot);
                 },
                 .craft_creative => |c| {
+                    if (player.gamemode != .Creative) continue;
                     const cc = network.conduit.creative_content orelse continue;
                     const network_id = cc.getNetworkIdByCreativeIndex(c.creative_item_network_id) orelse continue;
                     const item_type = ItemType.getByNetworkId(network_id) orelse continue;
