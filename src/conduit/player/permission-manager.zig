@@ -225,3 +225,19 @@ pub const PermissionManager = struct {
         writer.writeAll("  }\n}\n") catch return;
     }
 };
+
+test "permission manager defaults restrict players to the member group" {
+    var mgr = PermissionManager.init(std.testing.io, std.testing.allocator, "test-permissions-missing.json", "member");
+    defer mgr.deinit();
+
+    try std.testing.expect(mgr.getPlayerGroup("alice").len > 0);
+    try std.testing.expectEqualStrings("member", mgr.getPlayerGroup("alice"));
+    try std.testing.expect(mgr.hasPermission("alice", "conduit.command.about"));
+    try std.testing.expect(!mgr.hasPermission("alice", "conduit.command.kick"));
+    try std.testing.expect(!mgr.hasPermission("alice", "conduit.command.op"));
+
+    try mgr.setPlayerGroup("bob", "operator");
+    try std.testing.expectEqualStrings("operator", mgr.getPlayerGroup("bob"));
+    try std.testing.expect(mgr.hasPermission("bob", "conduit.command.kick"));
+    try std.testing.expect(mgr.hasPermission("bob", "conduit.command.op"));
+}

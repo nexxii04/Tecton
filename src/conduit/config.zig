@@ -16,7 +16,7 @@ pub const ServerProperties = struct {
     worker_threads: u32 = 0,
     max_view_distance: u32 = 16,
     simulation_distance: u32 = 4,
-    default_group: []const u8 = "operator",
+    default_group: []const u8 = "member",
 
     allocator: std.mem.Allocator,
     _allocated_strings: std.ArrayList([]const u8) = .empty,
