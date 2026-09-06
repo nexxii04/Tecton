@@ -19,7 +19,20 @@ pub fn handleInventoryTransaction(
     stream: *BinaryStream,
 ) !void {
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
-    const packet = try Protocol.InventoryTransactionPacket.deserialize(stream);
+    const packet = Protocol.InventoryTransactionPacket.deserialize(stream) catch |err| {
+        var hex: [384]u8 = undefined;
+        var pos: usize = 0;
+        const raw = stream.getBuffer();
+        for (raw[0..@min(raw.len, 128)]) |b| {
+            const written = std.fmt.bufPrint(hex[pos..], "{x:0>2} ", .{b}) catch break;
+            pos += written.len;
+        }
+        Raknet.Logger.ERROR(
+            "InventoryTransaction deserialize failed: {any} (len={d}, offset={d}) hex: {s}",
+            .{ err, raw.len, stream.offset, hex[0..pos] },
+        );
+        return;
+    };
     // Raknet.Logger.WARN("{any}", .{packet});
 
     switch (packet.transaction_type) {
