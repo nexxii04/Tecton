@@ -8,14 +8,7 @@ pub fn handleClientCacheStatus(
     connection: *Raknet.Connection,
     stream: *BinaryStream,
 ) !void {
-    const status = try Protocol.ClientCacheStatusPacket.deserialize(stream);
-
-    var write = BinaryStream.init(network.allocator, null, null);
-    defer write.deinit();
-
-    var response = Protocol.ClientCacheStatusPacket{
-        .enabled = status.enabled,
-    };
-    const packet = try response.serialize(&write);
-    try network.sendPacket(connection, packet);
+    _ = network;
+    _ = connection;
+    _ = try Protocol.ClientCacheStatusPacket.deserialize(stream);
 }

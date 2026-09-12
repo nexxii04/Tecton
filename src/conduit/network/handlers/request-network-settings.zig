@@ -1,4 +1,5 @@
 const Raknet = @import("Raknet");
+const std = @import("std");
 const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
@@ -17,7 +18,6 @@ pub fn handleNetworkSettings(
         if (request.protocol > Protocol.PROTOCOL) reason = .OutdatedServer;
 
         var disconnect = Protocol.DisconnectPacket{
-            .hide_screen = true,
             .reason = reason,
         };
         const serialized = try disconnect.serialize(&str);

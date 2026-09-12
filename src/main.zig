@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
         try conduit.start();
 
         while (conduit.raknet.running) {
-            io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
+            try io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
         }
     }
 }

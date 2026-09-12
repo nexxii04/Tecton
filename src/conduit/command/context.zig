@@ -4,7 +4,6 @@ const Protocol = @import("protocol");
 const Player = @import("../player/player.zig").Player;
 const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
 
-
 pub const CommandContext = struct {
     player: ?*Player = null,
     args: []const u8,

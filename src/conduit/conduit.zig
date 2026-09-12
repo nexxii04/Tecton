@@ -9,6 +9,7 @@ const Raknet = @import("Raknet");
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
 const ServerProperties = @import("./config.zig").ServerProperties;
 const shouldEmitVerboseStartupLogs = @import("./config.zig").shouldEmitVerboseStartupLogs;
+const Console = @import("./console/console.zig").Console;
 const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
 const EntityType = @import("./entity/entity-type.zig").EntityType;
 const Entity = @import("./entity/entity.zig").Entity;
@@ -27,7 +28,6 @@ const WorkerCountResolution = @import("./tasks/threaded-tasks.zig").WorkerCountR
 const resolveWorkerCount = @import("./tasks/threaded-tasks.zig").resolveWorkerCount;
 const totalServerThreadCount = @import("./tasks/threaded-tasks.zig").totalServerThreadCount;
 const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
-const Console = @import("./console/console.zig").Console;
 const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
@@ -58,6 +58,7 @@ pub const Conduit = struct {
     player_entity_type: EntityType,
     creative_content: ?CreativeContentLoader.CreativeContentData,
     serialized_item_registry: ?[]const u8,
+    serialized_biome_definitions: ?[]const u8,
     tick_count: u64 = 0,
     work_time_accumulator: u64 = 0,
     raknet_time_accumulator: u64 = 0,
@@ -110,6 +111,7 @@ pub const Conduit = struct {
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
             .creative_content = null,
             .serialized_item_registry = null,
+            .serialized_biome_definitions = null,
             .network = undefined,
             .current_tps = @as(f64, @floatFromInt(@max(@as(u32, 1), config.max_tps))),
             .current_mspt = 1000.0 / @as(f64, @floatFromInt(@max(@as(u32, 1), config.max_tps))),
@@ -158,6 +160,18 @@ pub const Conduit = struct {
             self.serialized_item_registry = try self.allocator.dupe(u8, raw);
             if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
                 Raknet.Logger.INFO("Pre-serialized item registry ({d} bytes)", .{self.serialized_item_registry.?.len});
+            }
+        }
+
+        {
+            self.serialized_biome_definitions = Protocol.BiomeDefinitionsLoader.loadVanillaSerialized(self.allocator) catch |err| blk: {
+                Raknet.Logger.ERROR("Failed to serialize biome definitions: {any}", .{err});
+                break :blk null;
+            };
+            if (self.serialized_biome_definitions) |raw| {
+                if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+                    Raknet.Logger.INFO("Pre-serialized biome definitions ({d} bytes)", .{raw.len});
+                }
             }
         }
 
@@ -274,10 +288,11 @@ pub const Conduit = struct {
             var str = BinaryStream.init(self.allocator, null, null);
             defer str.deinit();
             var disconnect = Protocol.DisconnectPacket{
-                .hide_screen = false,
                 .reason = .Disconnected,
-                .message = "Server shutdown.",
-                .filtered = "Server shutdown.",
+                .messages = .{
+                    .message = "Server shutdown.",
+                    .filtered_message = "Server shutdown.",
+                },
             };
             const serialized = try disconnect.serialize(&str);
             try self.network.sendImmediate(player.connection, serialized);
@@ -538,6 +553,7 @@ pub const Conduit = struct {
         EntityTypeRegistry.EntityTypeRegistry.deinit();
         if (self.creative_content) |*cc| cc.deinit();
         if (self.serialized_item_registry) |s| self.allocator.free(s);
+        if (self.serialized_biome_definitions) |s| self.allocator.free(s);
         self.config.deinit();
         self.events.deinit();
         self.network.deinit();

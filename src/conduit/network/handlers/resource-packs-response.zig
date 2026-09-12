@@ -27,7 +27,8 @@ pub fn handleResourcePack(
     connection: *Raknet.Connection,
     stream: *BinaryStream,
 ) !void {
-    const response = try Protocol.ResourcePackResponsePacket.deserialize(stream);
+    const response = try Protocol.ResourcePackResponsePacket.deserialize(stream, network.allocator);
+    defer response.deinit(network.allocator);
 
     switch (response.response) {
         .HaveAllPacks => {
@@ -40,7 +41,7 @@ pub fn handleResourcePack(
             var stack = Protocol.ResourcePackStackPacket{
                 .must_accept = false,
                 .texture_packs = &empty_packs,
-                .game_version = "26.0",
+                .game_version = Protocol.MINECRAFT_VERSION,
                 .experiments = &empty_experiments,
                 .experiments_previously_toggled = false,
                 .has_editor_packs = false,
@@ -49,14 +50,12 @@ pub fn handleResourcePack(
             const serialized = try stack.serialize(&str);
             try network.sendPacket(connection, serialized);
         },
-        .None => {
-            Raknet.Logger.DEBUG("Unhandled ResourcePackClientResponse: None", .{});
-        },
         .Refused => {
             if (network.conduit.getPlayerByConnection(connection)) |player| {
                 try player.disconnect(null);
             }
         },
+        .None => {},
         .SendPacks => {},
         .Completed => {
             if (network.conduit.getPlayerByConnection(connection)) |player| {
@@ -223,7 +222,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .persona_disabled = false,
         .custom_skins_disabled = false,
         .emote_chat_muted = false,
-        .game_version = "26.20",
+        .game_version = Protocol.MINECRAFT_VERSION,
         .limited_world_width = 0,
         .limited_world_length = 0,
         .is_new_nether = true,
@@ -252,7 +251,6 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .client_side_generation = false,
         .block_network_ids_are_hashes = true,
         .server_controlled_sounds = true,
-        .is_logging_chat = false,
         .contains_server_join_info = false,
         .server_telemetry_data = Protocol.ServerTelemetryData.init(
             "Conduit",
@@ -267,7 +265,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
 }
 
 fn sendRegistryBatch(state: *JoinStartupTask) !void {
-    var batched_packets = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var batched_packets = std.ArrayList([]const u8).empty;
     defer batched_packets.deinit(state.network.allocator);
     var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
     defer freeOwnedPackets(state.network.allocator, &owned_packets);
@@ -276,6 +274,10 @@ fn sendRegistryBatch(state: *JoinStartupTask) !void {
         try batched_packets.append(state.network.allocator, serialized);
     }
     if (state.network.conduit.serialized_item_registry) |serialized| {
+        try batched_packets.append(state.network.allocator, serialized);
+    }
+
+    if (state.network.conduit.serialized_biome_definitions) |serialized| {
         try batched_packets.append(state.network.allocator, serialized);
     }
     if (state.network.conduit.creative_content) |cc| {
@@ -287,8 +289,6 @@ fn sendRegistryBatch(state: *JoinStartupTask) !void {
     const empty_shapes = [_]Protocol.SerializableVoxelShape{};
     var packet = Protocol.VoxelShapesPacket{
         .shapes = &empty_shapes,
-        .hash_string = "",
-        .registry_handle = 0,
     };
     try appendOwnedPacket(state.network, &batched_packets, &owned_packets, try packet.serialize(&str));
 

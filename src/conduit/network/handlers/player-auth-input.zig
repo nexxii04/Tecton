@@ -2,8 +2,15 @@ const std = @import("std");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const MoveDeltaFlags = Protocol.MoveDeltaFlags;
 const Raknet = @import("Raknet");
+
+/// Converts a rotation in degrees to the signed byte format used by
+/// MoveActorDelta (256 steps across a full 360° turn).
+fn rotationToByte(degrees: f32) i8 {
+    const normalized = @mod(degrees, 360.0);
+    const steps: u32 = @intFromFloat(normalized / 360.0 * 256.0);
+    return @bitCast(@as(u8, @truncate(steps)));
+}
 
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
 const Events = @import("../../events/types.zig");
@@ -15,6 +22,8 @@ const PlacementContext = @import("../../world/block/traits/rotation.zig").Placem
 const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
 const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
 const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+const BreakSpeed = @import("../../world/block/break-speed.zig").BreakSpeed;
+const processItemStackRequest = @import("./item-stack-request.zig").processItemStackRequest;
 
 pub fn handlePlayerAuthInput(
     network: *NetworkHandler,
@@ -22,12 +31,13 @@ pub fn handlePlayerAuthInput(
     stream: *BinaryStream,
 ) !void {
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
-    const packet = try Protocol.PlayerAuthInputPacket.deserialize(stream);
+    const packet = try Protocol.PlayerAuthInputPacket.deserialize(stream, network.allocator);
 
     player.entity.position = packet.position;
-    player.entity.rotation = packet.rotation;
+    player.entity.rotation.x = packet.rotation.x;
+    player.entity.rotation.y = packet.rotation.y;
     player.entity.motion = .{ .x = packet.motion.x, .y = 0, .z = packet.motion.y };
-    player.entity.head_yaw = packet.head_yaw;
+    player.entity.head_yaw = packet.rotation.z;
 
     {
         var flags_changed = false;
@@ -48,6 +58,10 @@ pub fn handlePlayerAuthInput(
         }
     }
 
+    if (packet.item_stack_request) |request| {
+        try processItemStackRequest(network, connection, request);
+    }
+
     if (packet.input_data.hasFlag(.PerformBlockActions)) {
         for (packet.getBlockActions()) |action| {
             try handleBlockAction(network, player, action);
@@ -58,13 +72,13 @@ pub fn handlePlayerAuthInput(
 
     const move_packet = Protocol.MoveActorDeltaPacket{
         .runtime_id = @intCast(player.entity.runtime_id),
-        .flags = MoveDeltaFlags.All,
         .x = player.entity.position.x,
         .y = player.entity.position.y,
         .z = player.entity.position.z,
-        .pitch = player.entity.rotation.x,
-        .yaw = player.entity.rotation.y,
-        .head_yaw = player.entity.head_yaw,
+        .rotation_x = rotationToByte(player.entity.rotation.x),
+        .rotation_y = rotationToByte(player.entity.rotation.y),
+        .rotation_y_head = rotationToByte(player.entity.head_yaw),
+        .on_ground = true,
     };
     const serialized = try move_packet.serialize(&network.scratch_stream);
 
@@ -82,7 +96,9 @@ fn handleItemUseTransaction(
     player: *Player,
     transaction: Protocol.ItemUseTransaction,
 ) !void {
-    if (transaction.action_type != 0) return;
+    if (transaction.action_type != 0) {
+        return;
+    }
 
     const dimension = player.entity.dimension orelse return;
 
@@ -153,9 +169,11 @@ fn handleBlockAction(
 
     switch (action.action) {
         .StartBreak, .ContinueDestroyBlock => {
+            if (player.gamemode == .Creative) return;
+
             if (player.block_target) |target| {
-                broadcastLevelEvent(network, player, .StopBlockCracking, target.toVector3f(), 0);
-                player.block_target = null;
+                if (target.eql(action.block_pos)) return;
+                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
             }
 
             const perm = dimension.getPermutation(action.block_pos, 0) catch return;
@@ -163,23 +181,34 @@ fn handleBlockAction(
 
             player.block_target = action.block_pos;
 
-            broadcastLevelEvent(network, player, .StartBlockCracking, action.block_pos.toVector3f(), 65535);
+            if (BreakSpeed.startBreakData(perm.identifier)) |data| {
+                broadcastLevelEvent(network, .StartBlockCracking, action.block_pos.toVector3f(), data);
+            }
         },
-        .AbortBreak => {
+        .CrackBreak => {
+            // The breaker's periodic crack tick: keep the target in sync but do
+            // not re-emit START, which would reset the crack animation.
+            player.block_target = action.block_pos;
+        },
+        .AbortBreak, .StopBreak => {
             if (player.block_target) |target| {
-                broadcastLevelEvent(network, player, .StopBlockCracking, target.toVector3f(), 0);
+                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
                 player.block_target = null;
             }
         },
         .PredictDestroyBlock, .CreativePlayerDestroyBlock => {
             if (player.block_target) |target| {
-                broadcastLevelEvent(network, player, .StopBlockCracking, target.toVector3f(), 0);
+                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
             }
             player.block_target = null;
 
             const pos = action.block_pos;
             const perm = dimension.getPermutation(pos, 0) catch return;
-            if (std.mem.eql(u8, perm.identifier, "minecraft:air")) return;
+            if (std.mem.eql(u8, perm.identifier, "minecraft:air")) {
+                const air = BlockPermutation.resolve(player.entity.allocator, "minecraft:air", null) catch return;
+                sendBlockCorrection(network, player, pos, @bitCast(air.network_id));
+                return;
+            }
 
             const default_drop = [_]Events.ItemDrop{.{ .identifier = perm.identifier, .count = 1 }};
             var break_event = Events.BlockBreakEvent{
@@ -188,7 +217,12 @@ fn handleBlockAction(
                 .permutation = perm,
                 .drops = if (player.gamemode != .Creative) &default_drop else null,
             };
-            if (!network.conduit.events.emit(.BlockBreak, &break_event)) return;
+            if (!network.conduit.events.emit(.BlockBreak, &break_event)) {
+                // The server refused the break; tell the breaker the truth so
+                // its client reverts the predicted destruction.
+                sendBlockCorrection(network, player, pos, @bitCast(perm.network_id));
+                return;
+            }
 
             if (dimension.getBlockPtr(pos)) |block| {
                 _ = block.fireEvent(.Break, .{ block, player });
@@ -200,11 +234,7 @@ fn handleBlockAction(
 
             if (player.gamemode != .Creative) {
                 if (break_event.getDrops().len > 0) {
-                    const spawn_pos = Protocol.Vector3f.init(
-                        @as(f32, @floatFromInt(pos.x)) + 0.5,
-                        @as(f32, @floatFromInt(pos.y)) + 0.5,
-                        @as(f32, @floatFromInt(pos.z)) + 0.5,
-                    );
+                    const spawn_pos = centered(pos);
                     var spawned = std.ArrayList(*@import("../../entity/entity.zig").Entity){ .items = &.{}, .capacity = 0 };
                     defer spawned.deinit(network.allocator);
                     for (break_event.getDrops()) |drop| {
@@ -216,7 +246,8 @@ fn handleBlockAction(
                 }
             }
 
-            broadcastLevelEvent(network, player, .ParticlesDestroyBlock, pos.toVector3f(), @bitCast(perm.network_id));
+            //std.debug.print("[breakdbg] auth destroy: burst 2001 for ({d},{d},{d}) gamemode={any}\n", .{ pos.x, pos.y, pos.z, player.gamemode });
+            broadcastLevelEvent(network, .ParticlesDestroyBlock, centered(pos), @bitCast(perm.network_id));
 
             {
                 network.scratch_stream.reset();
@@ -236,7 +267,25 @@ fn handleBlockAction(
     }
 }
 
-fn broadcastLevelEvent(network: *NetworkHandler, exclude: *Player, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
+fn centered(pos: Protocol.BlockPosition) Protocol.Vector3f {
+    return Protocol.Vector3f.init(
+        @as(f32, @floatFromInt(pos.x)) + 0.5,
+        @as(f32, @floatFromInt(pos.y)) + 0.5,
+        @as(f32, @floatFromInt(pos.z)) + 0.5,
+    );
+}
+
+fn sendBlockCorrection(network: *NetworkHandler, player: *Player, pos: Protocol.BlockPosition, network_block_id: u32) void {
+    network.scratch_stream.reset();
+    const update = Protocol.UpdateBlockPacket{
+        .position = pos,
+        .network_block_id = network_block_id,
+    };
+    const serialized = update.serialize(&network.scratch_stream) catch return;
+    network.sendPacket(player.connection, serialized) catch {};
+}
+
+fn broadcastLevelEvent(network: *NetworkHandler, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
     network.scratch_stream.reset();
     const pkt = Protocol.LevelEventPacket{
         .event = event,
@@ -247,7 +296,6 @@ fn broadcastLevelEvent(network: *NetworkHandler, exclude: *Player, event: Protoc
     const snapshots = network.conduit.getPlayerSnapshots();
     for (snapshots) |p| {
         if (!p.spawned) continue;
-        if (p.entity.runtime_id == exclude.entity.runtime_id) continue;
         network.sendPacket(p.connection, serialized) catch {};
     }
 }

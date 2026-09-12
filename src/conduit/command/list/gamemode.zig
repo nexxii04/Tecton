@@ -5,6 +5,7 @@ const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
 const types = @import("../types.zig");
+const buildAbilities = @import("../../network/handlers/abilities.zig").buildAbilities;
 
 pub fn register(registry: *CommandRegistry) !void {
     const enum_idx = try registry.registerEnum(.{
@@ -62,6 +63,13 @@ fn handle(raw: *anyopaque) void {
 
     for (targets) |target| {
         target.gamemode = gamemode;
+
+        var abilities = buildAbilities(ctx.allocator, target.entity.runtime_id, gamemode) catch continue;
+        defer abilities.deinit();
+        var abilities_stream = BinaryStream.init(ctx.allocator, null, null);
+        defer abilities_stream.deinit();
+        const abilities_serialized = abilities.serialize(&abilities_stream) catch continue;
+        target.network.sendPacket(target.connection, abilities_serialized) catch {};
 
         var stream = BinaryStream.init(ctx.allocator, null, null);
         defer stream.deinit();

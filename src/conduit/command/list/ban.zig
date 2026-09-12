@@ -75,10 +75,11 @@ fn handleBan(raw: *anyopaque) void {
         var stream = BinaryStream.init(ctx.allocator, null, null);
         defer stream.deinit();
         var disconnect = Protocol.DisconnectPacket{
-            .hide_screen = false,
             .reason = .Kicked,
-            .message = reason,
-            .filtered = reason,
+            .messages = .{
+                .message = reason,
+                .filtered_message = reason,
+            },
         };
         const serialized = disconnect.serialize(&stream) catch return;
         ctx.network.sendImmediate(player.connection, serialized) catch {};

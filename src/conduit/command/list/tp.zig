@@ -144,9 +144,11 @@ fn teleportPlayer(ctx: *CommandContext, player: *@import("../../player/player.zi
     const packet = Protocol.MovePlayerPacket{
         .runtime_id = @bitCast(player.entity.runtime_id),
         .position = pos,
-        .pitch = player.entity.rotation.x,
-        .yaw = player.entity.rotation.y,
-        .head_yaw = player.entity.rotation.y,
+        .rotation = .{
+            .x = player.entity.rotation.x,
+            .y = player.entity.rotation.y,
+            .z = player.entity.rotation.y,
+        },
         .mode = .Teleport,
         .on_ground = false,
     };

@@ -23,7 +23,6 @@ pub fn handleLogin(
         if (login.protocol > Protocol.PROTOCOL) reason = .OutdatedServer;
 
         var disconnect = Protocol.DisconnectPacket{
-            .hide_screen = true,
             .reason = reason,
         };
         const serialized = try disconnect.serialize(&str);
@@ -35,8 +34,8 @@ pub fn handleLogin(
     if (player_count >= network.conduit.config.max_players) {
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
+
         var disconnect = Protocol.DisconnectPacket{
-            .hide_screen = true,
             .reason = .ServerFull,
         };
         const serialized = try disconnect.serialize(&str);
@@ -85,10 +84,11 @@ pub fn handleLogin(
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
         var disconnect = Protocol.DisconnectPacket{
-            .hide_screen = false,
             .reason = .Kicked,
-            .message = "You are banned from this server.",
-            .filtered = "You are banned from this server.",
+            .messages = .{
+                .message = "You are banned from this server.",
+                .filtered_message = "You are banned from this server.",
+            },
         };
         const serialized = try disconnect.serialize(&str);
         try network.sendPacket(connection, serialized);
@@ -112,10 +112,11 @@ pub fn handleLogin(
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();
         var disconnect = Protocol.DisconnectPacket{
-            .hide_screen = true,
             .reason = .Disconnected,
-            .message = "PlayerJoinEvent was cancelled",
-            .filtered = "PlayerJoinEvent was cancelled",
+            .messages = .{
+                .message = "PlayerJoinEvent was cancelled",
+                .filtered_message = "PlayerJoinEvent was cancelled",
+            },
         };
         const serialized = try disconnect.serialize(&str);
         try network.sendPacket(connection, serialized);

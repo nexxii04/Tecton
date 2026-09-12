@@ -129,10 +129,11 @@ pub const Player = struct {
             var stream = BinaryStream.init(self.entity.allocator, null, null);
             defer stream.deinit();
             var dp = Protocol.DisconnectPacket{
-                .hide_screen = false,
                 .reason = .Kicked,
-                .message = msg,
-                .filtered = msg,
+                .messages = .{
+                    .message = msg,
+                    .filtered_message = msg,
+                },
             };
             if (dp.serialize(&stream)) |data| {
                 self.network.sendImmediate(self.connection, data) catch {};
@@ -167,6 +168,7 @@ pub const Player = struct {
             var stream = BinaryStream.init(allocator, null, null);
             defer stream.deinit();
             const entry = [_]Protocol.PlayerListEntry{.{
+                .action = .Remove,
                 .uuid = self.uuid,
                 .entity_unique_id = self.entity.runtime_id,
                 .username = self.username,
@@ -175,7 +177,6 @@ pub const Player = struct {
                 .build_platform = 0,
             }};
             var packet = Protocol.PlayerListPacket{
-                .action = .Remove,
                 .entries = &entry,
             };
             const serialized = packet.serialize(&stream, allocator) catch null;
@@ -233,9 +234,7 @@ pub const Player = struct {
             const move = Protocol.MovePlayerPacket{
                 .runtime_id = @bitCast(self.entity.runtime_id),
                 .position = pos,
-                .pitch = 0,
-                .yaw = 0,
-                .head_yaw = 0,
+                .rotation = .zero(),
                 .mode = .Teleport,
                 .on_ground = false,
             };

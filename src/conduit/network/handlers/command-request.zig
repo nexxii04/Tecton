@@ -15,7 +15,7 @@ pub fn handleCommandRequest(
         player,
         network,
         request.command_line,
-        request.origin_type,
+        request.origin_type.toString(),
         request.uuid,
         request.request_id,
     );
@@ -29,7 +29,7 @@ pub fn handleCommandRequest(
         };
 
         var output = Protocol.CommandOutputPacket{
-            .origin_type = request.origin_type,
+            .origin_type = request.origin_type.toString(),
             .uuid = request.uuid,
             .request_id = request.request_id,
             .player_unique_id = request.player_unique_id,

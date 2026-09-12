@@ -125,7 +125,7 @@ pub const ItemStack = struct {
             .network = self.item_type.network_id,
             .stack_size = self.stack_size,
             .metadata = self.metadata,
-            .item_stack_id = self.network_stack_id,
+            .item_stack_id = if (self.network_stack_id != 0) self.network_stack_id else null,
             .network_block_id = 0,
             .extras = null,
         };
@@ -133,7 +133,7 @@ pub const ItemStack = struct {
             .network = self.item_type.network_id,
             .stack_size = self.stack_size,
             .metadata = self.metadata,
-            .item_stack_id = self.network_stack_id,
+            .item_stack_id = if (self.network_stack_id != 0) self.network_stack_id else null,
             .network_block_id = 0,
             .extras = if (nbt.count() > 0) .{
                 .nbt = nbt,

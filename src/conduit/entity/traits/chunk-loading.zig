@@ -999,7 +999,6 @@ fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz
         .x = cx,
         .z = cz,
         .dimension = dim_type,
-        .highest_sub_chunk_count = 0,
         .sub_chunk_count = @intCast(chunk.getSubChunkSendCount()),
         .cache_enabled = false,
         .blobs = &[_]u64{},

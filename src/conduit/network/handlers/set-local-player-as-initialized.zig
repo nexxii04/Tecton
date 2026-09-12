@@ -77,12 +77,12 @@ fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
             return false;
         },
         .send_existing_players => {
-            try sendExistingPlayers(state);
+            //try sendExistingPlayers(state);
             state.stage = .broadcast_new_player;
             return false;
         },
         .broadcast_new_player => {
-            try broadcastNewPlayer(state);
+            //try broadcastNewPlayer(state);
             player.spawned = true;
             return true;
         },
@@ -115,6 +115,7 @@ fn sendExistingPlayers(state: *PlayerInitTask) !void {
         const p = snapshots[idx];
         if (p.entity.runtime_id == state.player.entity.runtime_id or !p.spawned) continue;
         entries[written] = .{
+            .action = .Add,
             .uuid = p.uuid,
             .entity_unique_id = p.entity.runtime_id,
             .username = p.username,
@@ -130,7 +131,6 @@ fn sendExistingPlayers(state: *PlayerInitTask) !void {
     var stream = BinaryStream.init(temp_allocator, null, null);
     defer stream.deinit();
     var packet = Protocol.PlayerListPacket{
-        .action = .Add,
         .entries = entries[0..written],
     };
     const serialized = try packet.serialize(&stream, temp_allocator);
@@ -146,6 +146,7 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
     const temp_allocator = arena.allocator();
 
     const entry = [_]Protocol.PlayerListEntry{.{
+        .action = .Add,
         .uuid = state.player.uuid,
         .entity_unique_id = state.player.entity.runtime_id,
         .username = state.player.username,
@@ -157,7 +158,6 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
     var stream = BinaryStream.init(temp_allocator, null, null);
     defer stream.deinit();
     var packet = Protocol.PlayerListPacket{
-        .action = .Add,
         .entries = &entry,
     };
     const serialized = try packet.serialize(&stream, temp_allocator);

@@ -54,31 +54,34 @@ fn writeGroups(stream: *BinaryStream, allocator: std.mem.Allocator) !usize {
 
     const arr = if (parsed.value == .array) parsed.value.array.items else return error.InvalidJsonFormat;
 
-    try stream.writeVarInt(@intCast(arr.len));
+    var temp_stream = BinaryStream.init(allocator, null, null);
+    defer temp_stream.deinit();
 
     var count: usize = 0;
     for (arr) |entry| {
         if (entry != .object) continue;
         const obj = entry.object;
 
-        const category_int = if (obj.get("category")) |c| if (c == .integer) @as(i32, @intCast(c.integer)) else continue else continue;
+        const category_int = if (obj.get("category")) |c| if (c == .integer) @as(u8, @intCast(c.integer)) else continue else continue;
         const name = if (obj.get("name")) |n| if (n == .string) n.string else continue else continue;
         const icon_id = if (obj.get("icon")) |i| if (i == .string) i.string else continue else continue;
 
         const item_type = ItemType.get(icon_id);
         const network_id: i32 = if (item_type) |it| it.network_id else 0;
 
-        try stream.writeInt32(category_int, .Little);
-        try stream.writeVarString(name);
-        try stream.writeZigZag(network_id);
-        if (network_id != 0) {
-            try stream.writeUint16(1, .Little);
-            try stream.writeVarInt(0);
-            try stream.writeZigZag(0);
-            try stream.writeVarInt(0);
-        }
+        try temp_stream.writeUint8(category_int);
+        try temp_stream.writeVarString(name);
+        try temp_stream.writeZigZag(network_id);
+        try temp_stream.writeUint16(if (network_id != 0) 1 else 0, .Little);
+        try temp_stream.writeVarInt(0);
+        try temp_stream.writeZigZag(0);
+        try temp_stream.writeVarInt(0);
+
         count += 1;
     }
+
+    try stream.writeVarInt(@intCast(count));
+    try stream.write(temp_stream.getBuffer());
 
     return count;
 }
@@ -99,12 +102,13 @@ fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !WriteItemsRe
 
     const arr = if (parsed.value == .array) parsed.value.array.items else return error.InvalidJsonFormat;
 
-    try stream.writeVarInt(@intCast(arr.len));
+    var temp_stream = BinaryStream.init(allocator, null, null);
+    defer temp_stream.deinit();
 
     var ids = std.ArrayList(i32){ .items = &.{}, .capacity = 0 };
 
     var count: usize = 0;
-    for (arr, 0..) |entry, i| {
+    for (arr) |entry| {
         if (entry != .object) continue;
         const obj = entry.object;
 
@@ -118,13 +122,16 @@ fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !WriteItemsRe
         defer reader.deinit();
         const network_id = reader.readZigZag() catch 0;
 
-        try stream.writeVarInt(@intCast(i + 1));
-        try stream.write(raw);
-        try stream.writeVarInt(group_index);
+        try temp_stream.writeVarInt(@intCast(count + 1));
+        try temp_stream.write(raw);
+        try temp_stream.writeVarInt(group_index);
 
         try ids.append(allocator, network_id);
         count += 1;
     }
+
+    try stream.writeVarInt(@intCast(count));
+    try stream.write(temp_stream.getBuffer());
 
     return .{
         .count = count,

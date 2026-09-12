@@ -4,7 +4,6 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const MoveDeltaFlags = Protocol.MoveDeltaFlags;
 
 pub const State = struct {
     force: f32,
@@ -94,11 +93,10 @@ fn broadcastMove(entity: *Entity, dimension: *Dimension, on_ground: bool) void {
     defer stream.deinit();
 
     var packet = Protocol.MoveActorDeltaPacket.init(@bitCast(entity.runtime_id));
-    packet.flags = MoveDeltaFlags.HasX | MoveDeltaFlags.HasY | MoveDeltaFlags.HasZ;
-    if (on_ground) packet.flags |= MoveDeltaFlags.OnGround;
     packet.x = entity.position.x;
     packet.y = entity.position.y;
     packet.z = entity.position.z;
+    packet.on_ground = on_ground;
 
     const serialized = packet.serialize(&stream) catch return;
 

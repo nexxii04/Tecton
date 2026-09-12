@@ -140,6 +140,7 @@ pub const NetworkHandler = struct {
                 .cleanup = decompressCleanup,
                 .ctx = @ptrCast(work),
             }) catch {
+                std.debug.print("[net-drain] threaded_tasks enqueue FAILED\n", .{});
                 self.allocator.free(entry.payload);
                 self.decompress_pool.destroy(work);
                 continue;
@@ -310,8 +311,13 @@ pub const NetworkHandler = struct {
                 Packet.EmoteList,
                 Packet.ServerboundLoadingScreenPacket,
                 Packet.SetPlayerInventoryOptions,
-                => {},
-                else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
+                => {
+                    std.debug.print("[net-dispatch] id=0x{x:0>2} explicitly ignored (no handler)\n", .{@as(u32, @intCast(id))});
+                },
+                else => {
+                    std.debug.print("[net-dispatch] id=0x{x:0>2} UNHANDLED -> falling through payload_len={d}\n", .{ @as(u32, @intCast(id)), packet.len });
+                    Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id});
+                },
             }
         }
     }

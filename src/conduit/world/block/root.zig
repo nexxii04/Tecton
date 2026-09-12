@@ -13,6 +13,7 @@ pub const TraitFactory = @import("./traits/trait.zig").TraitFactory;
 pub const initTraitRegistry = @import("./traits/trait.zig").initTraitRegistry;
 pub const deinitTraitRegistry = @import("./traits/trait.zig").deinitTraitRegistry;
 pub const applyTraitsForBlock = @import("./traits/trait.zig").applyTraitsForBlock;
+pub const BreakSpeed = @import("./break-speed.zig").BreakSpeed;
 
 pub fn loadBlockPermutations(allocator: std.mem.Allocator) !usize {
     var loader = Data.BlockPermutationLoader.init(allocator);
@@ -73,6 +74,7 @@ pub fn loadBlockPermutations(allocator: std.mem.Allocator) !usize {
 }
 
 pub fn initRegistries(allocator: std.mem.Allocator) !void {
+    try BreakSpeed.init(allocator);
     try BlockPermutation.initRegistry(allocator);
     try BlockType.initRegistry(allocator);
     initTraitRegistry(allocator);
@@ -82,4 +84,5 @@ pub fn deinitRegistries() void {
     deinitTraitRegistry();
     BlockType.deinitRegistry();
     BlockPermutation.deinitRegistry();
+    BreakSpeed.deinit();
 }
