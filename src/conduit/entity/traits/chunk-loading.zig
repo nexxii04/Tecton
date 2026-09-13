@@ -207,6 +207,7 @@ const ChunkStreamState = struct {
     ring: i32,
     ring_idx: i32,
     inflight: u32,
+    destroy_pending: bool = false,
     upgrade_coords: []ChunkCoord,
     upgrade_hashes: []i64,
     upgrade_idx: usize,
@@ -283,6 +284,7 @@ pub fn queueChunkStreaming(player: *Player) !void {
         .upgrade_idx = 0,
     };
 
+    errdefer freeStreamState(state);
     try conduit.tasks.enqueue(.{
         .func = chunkStreamStep,
         .ctx = @ptrCast(state),
@@ -294,6 +296,14 @@ pub fn queueChunkStreaming(player: *Player) !void {
 
 pub fn destroyStreamState(ctx: *anyopaque) void {
     const state: *ChunkStreamState = @ptrCast(@alignCast(ctx));
+    if (state.inflight > 0) {
+        state.destroy_pending = true;
+        return;
+    }
+    freeStreamState(state);
+}
+
+fn freeStreamState(state: *ChunkStreamState) void {
     state.allocator.free(state.upgrade_coords);
     state.allocator.free(state.upgrade_hashes);
     state.allocator.destroy(state);
@@ -354,6 +364,10 @@ const ChunkBatchWork = struct {
     // buffer. Cleared on failure so onBatchComplete can leave the hash
     // retryable instead of punching a permanent hole in the client's world.
     delivery_mask: u32 = 0,
+    // State that queued this batch and owns its inflight slot. The state
+    // may already be detached from the player (moved/disconnected); it
+    // stays alive until the last batch referencing it completes.
+    owner_state: ?*ChunkStreamState = null,
 };
 
 fn workerLoadAndCompress(ctx: *anyopaque) void {
@@ -704,7 +718,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
     const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
     const allocator = work.allocator;
     defer {
-        decrementInflight(work.conduit, work.runtime_id);
+        if (work.owner_state) |owner| onBatchOwnedComplete(owner);
         allocator.free(work.coords);
         allocator.free(work.hashes);
         allocator.free(work.in_simulation);
@@ -976,7 +990,7 @@ fn sendTileFixAt(allocator: std.mem.Allocator, player: *Player, dim: *Dimension,
 fn cleanupBatchWork(ctx: *anyopaque) void {
     const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
     const allocator = work.allocator;
-    decrementInflight(work.conduit, work.runtime_id);
+    if (work.owner_state) |owner| onBatchOwnedComplete(owner);
     for (0..work.count) |i| {
         if (work.packets[i].len > 0) allocator.free(work.packets[i]);
         if (work.chunks[i]) |chunk| {
@@ -1021,13 +1035,10 @@ fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz
     return allocator.dupe(u8, serialized) catch null;
 }
 
-fn decrementInflight(conduit: *Conduit, runtime_id: i64) void {
-    for (conduit.tasks.tasks.items) |*task| {
-        if (task.owner_id == runtime_id and std.mem.eql(u8, task.name, "chunk_streaming")) {
-            const state: *ChunkStreamState = @ptrCast(@alignCast(task.ctx));
-            if (state.inflight > 0) state.inflight -= 1;
-            return;
-        }
+fn onBatchOwnedComplete(state: *ChunkStreamState) void {
+    if (state.inflight > 0) state.inflight -= 1;
+    if (state.destroy_pending and state.inflight == 0) {
+        freeStreamState(state);
     }
 }
 
@@ -1131,6 +1142,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
                 .sim_distance = dimension.simulation_distance,
                 .center_x = state.center_x,
                 .center_z = state.center_z,
+                .owner_state = state,
             };
 
             state.upgrade_idx += count;
@@ -1295,6 +1307,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             .sim_distance = dimension.simulation_distance,
             .center_x = state.center_x,
             .center_z = state.center_z,
+            .owner_state = state,
         };
 
         state.inflight += 1;
