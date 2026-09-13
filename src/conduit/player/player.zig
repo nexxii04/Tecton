@@ -53,6 +53,7 @@ pub const Player = struct {
 
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
+    pending_chunks: std.AutoHashMap(i64, void),
     visible_players: std.AutoHashMap(i64, void),
     pending_removal: std.atomic.Value(bool) = .init(false),
     spawned: bool = false,
@@ -79,6 +80,7 @@ pub const Player = struct {
             .username = loginData.identity_data.display_name,
             .uuid = loginData.identity_data.identity,
             .sent_chunks = std.AutoHashMap(i64, void).init(allocator),
+            .pending_chunks = std.AutoHashMap(i64, void).init(allocator),
             .visible_players = std.AutoHashMap(i64, void).init(allocator),
         };
 
@@ -118,6 +120,7 @@ pub const Player = struct {
 
     pub fn deinit(self: *Player) void {
         self.sent_chunks.deinit();
+        self.pending_chunks.deinit();
         self.visible_players.deinit();
         self.login_data.deinit();
         self.entity.deinit();
@@ -294,6 +297,7 @@ pub const Player = struct {
             hashes.append(allocator, key.*) catch {};
         }
         self.sent_chunks.clearAndFree();
+        self.pending_chunks.clearRetainingCapacity();
         dimension.releaseUnrenderedChunks(hashes.items);
         hashes.deinit(allocator);
     }

@@ -68,6 +68,7 @@ fn onTick(state: *State, entity: *Entity) void {
     if (!state.initialized) {
         state.initialized = true;
         player.sent_chunks.clearRetainingCapacity();
+        player.pending_chunks.clearRetainingCapacity();
         sendPublisherUpdate(player);
         queueChunkStreaming(player) catch {};
         return;
@@ -349,6 +350,10 @@ const ChunkBatchWork = struct {
     sim_distance: i32,
     center_x: i32,
     center_z: i32,
+    // Bit i set: the packet for chunk i reached a compressed outgoing
+    // buffer. Cleared on failure so onBatchComplete can leave the hash
+    // retryable instead of punching a permanent hole in the client's world.
+    delivery_mask: u32 = 0,
 };
 
 fn workerLoadAndCompress(ctx: *anyopaque) void {
@@ -398,6 +403,7 @@ fn workerLoadAndCompress(ctx: *anyopaque) void {
                 work.packets[i] = pkt;
                 raw_packets[raw_count] = pkt;
                 raw_count += 1;
+                work.delivery_mask |= @as(u32, 1) << @intCast(i);
                 work.chunks[i] = null;
                 continue;
             }
@@ -441,6 +447,7 @@ fn workerLoadAndCompress(ctx: *anyopaque) void {
             work.packets[i] = pkt;
             raw_packets[raw_count] = pkt;
             raw_count += 1;
+            work.delivery_mask |= @as(u32, 1) << @intCast(i);
         }
     }
 
@@ -454,6 +461,7 @@ fn workerLoadAndCompress(ctx: *anyopaque) void {
                     work.packets[i] = Compression.compress(&pkts, work.options, allocator) catch {
                         allocator.free(work.packets[i]);
                         work.packets[i] = &.{};
+                        work.delivery_mask &= ~(@as(u32, 1) << @intCast(i));
                         continue;
                     };
                 }
@@ -473,6 +481,7 @@ fn workerLoadAndCompress(ctx: *anyopaque) void {
                 work.packets[i] = Compression.compress(&pkts, work.options, allocator) catch {
                     allocator.free(pkt);
                     work.packets[i] = &.{};
+                    work.delivery_mask &= ~(@as(u32, 1) << @intCast(i));
                     continue;
                 };
                 allocator.free(pkt);
@@ -789,7 +798,10 @@ fn onBatchComplete(ctx: *anyopaque) void {
         }
 
         for (0..work.count) |i| {
-            player.sent_chunks.put(work.hashes[i], {}) catch {};
+            _ = player.pending_chunks.remove(work.hashes[i]);
+            if ((work.delivery_mask >> @intCast(i)) & 1 != 0) {
+                player.sent_chunks.put(work.hashes[i], {}) catch {};
+            }
         }
     }
 
@@ -1147,7 +1159,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
                 state.ring = 1;
                 state.ring_idx = 0;
                 const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = state.center_x, .z = state.center_z });
-                if (!player.sent_chunks.contains(chunk_hash)) {
+                if (!player.sent_chunks.contains(chunk_hash) and !player.pending_chunks.contains(chunk_hash)) {
                     if (sim_dist <= 0) {
                         if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
                             player.connection.sendReliableMessage(cached, .Normal);
@@ -1179,7 +1191,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             if (dx * dx + dz * dz > state.radius * state.radius) continue;
 
             const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = coords[0], .z = coords[1] });
-            if (player.sent_chunks.contains(chunk_hash)) continue;
+            if (player.sent_chunks.contains(chunk_hash) or player.pending_chunks.contains(chunk_hash)) continue;
 
             const in_simulation = dx * dx + dz * dz <= sim_dist * sim_dist;
             if (!in_simulation) {
@@ -1248,7 +1260,6 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             w_packets[i] = &.{};
             w_cached_packets[i] = &.{};
             w_block_data[i] = .{ .parsed_entities = &.{}, .trait_positions = &.{} };
-            player.sent_chunks.put(w_hashes[i], {}) catch {};
         }
 
         const work = allocator.create(ChunkBatchWork) catch {
@@ -1295,7 +1306,12 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             .ctx = @ptrCast(work),
         }) catch {
             cleanupBatchWork(@ptrCast(work));
+            continue;
         };
+
+        for (0..count) |i| {
+            player.pending_chunks.put(w_hashes[i], {}) catch {};
+        }
     }
 
     if (state.upgrade_idx >= state.upgrade_hashes.len and state.ring > state.radius) {
