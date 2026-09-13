@@ -54,6 +54,8 @@ pub const Conduit = struct {
     connection_map: std.AutoHashMap(usize, *Player),
     players_mutex: std.Io.Mutex = .init,
     snapshot_buf: std.ArrayList(*Player),
+    pending_player_removals: std.ArrayList(*Player),
+    pending_player_removals_mutex: std.Io.Mutex = .init,
     worlds: std.StringHashMap(*World),
     player_entity_type: EntityType,
     creative_content: ?CreativeContentLoader.CreativeContentData,
@@ -106,7 +108,8 @@ pub const Conduit = struct {
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
             .connection_map = std.AutoHashMap(usize, *Player).init(allocator),
-            .snapshot_buf = std.ArrayList(*Player){ .items = &.{}, .capacity = 0 },
+            .snapshot_buf = std.ArrayList(*Player).empty,
+            .pending_player_removals = std.ArrayList(*Player).empty,
             .worlds = std.StringHashMap(*World).init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
             .creative_content = null,
@@ -328,6 +331,40 @@ pub const Conduit = struct {
         _ = self.connection_map.remove(@intFromPtr(player.connection));
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
+    pub fn removeConnectionMapping(self: *Conduit, connection: *Raknet.Connection) void {
+        self.players_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
+        defer self.players_mutex.unlock(self.io);
+        _ = self.connection_map.remove(@intFromPtr(connection));
+    }
+
+    pub fn enqueuePlayerRemoval(self: *Conduit, player: *Player) void {
+        self.pending_player_removals_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
+        defer self.pending_player_removals_mutex.unlock(self.io);
+        self.pending_player_removals.append(self.allocator, player) catch {
+            std.log.err("failed to enqueue player removal: {s}", .{player.username});
+        };
+    }
+
+    pub fn drainPendingPlayerRemovals(self: *Conduit) void {
+        self.pending_player_removals_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
+        var pending = self.pending_player_removals;
+        self.pending_player_removals = .empty;
+        self.pending_player_removals_mutex.unlock(self.io);
+
+        defer pending.deinit(self.allocator);
+        for (pending.items) |player| {
+            player.finalizeRemoval();
+        }
+    }
 
     pub fn getEntityByRuntimeId(self: *Conduit, runtime_id: i64) ?*Entity {
         var worlds_it = self.worlds.valueIterator();
@@ -350,6 +387,7 @@ pub const Conduit = struct {
         self.snapshot_buf.clearRetainingCapacity();
         var it = self.players.valueIterator();
         while (it.next()) |p| {
+            if (p.*.pending_removal.load(.acquire)) continue;
             self.snapshot_buf.append(self.allocator, p.*) catch break;
         }
         return self.snapshot_buf.items;
@@ -399,6 +437,8 @@ pub const Conduit = struct {
                 self.network.decompress_pending,
             });
         }
+
+        self.drainPendingPlayerRemovals();
 
         var phase_start = Timestamp.now(self.io, .awake);
         const snapshots = self.getPlayerSnapshots();
@@ -526,6 +566,7 @@ pub const Conduit = struct {
         self.threaded_tasks.clearPending();
         self.threaded_tasks.stop();
         self.threaded_tasks.drainCompleted(std.math.maxInt(u64));
+        self.drainPendingPlayerRemovals();
         self.saveAllWorlds();
         self.threaded_tasks.deinit();
 
@@ -546,6 +587,8 @@ pub const Conduit = struct {
         self.worlds.deinit();
 
         self.raknet.deinit();
+
+        self.pending_player_removals.deinit(self.allocator);
 
         deinitRegistries();
         EntityTraits.deinitEntityTraitRegistry();

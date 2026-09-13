@@ -54,6 +54,7 @@ pub const Player = struct {
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
     visible_players: std.AutoHashMap(i64, void),
+    pending_removal: std.atomic.Value(bool) = .init(false),
     spawned: bool = false,
     join_startup_started: bool = false,
     pending_dimension: ?*Dimension = null,
@@ -124,6 +125,8 @@ pub const Player = struct {
 
     pub fn getCommandPermission(_: *Player) void {}
 
+    /// Main-thread entry point (console kick, join refusal). Sends the
+    /// reason packet and frees the player inline.
     pub fn disconnect(self: *Player, reason: ?[]const u8) !void {
         if (reason) |msg| {
             var stream = BinaryStream.init(self.entity.allocator, null, null);
@@ -140,6 +143,31 @@ pub const Player = struct {
             } else |_| {}
         }
 
+        if (!self.beginRemoval()) return;
+        self.finalizeRemoval();
+    }
+
+    /// Network-thread entry point (RakNet onDisconnect). Marks the player
+    /// and hands it to the tick thread; memory is only freed by
+    /// Conduit.drainPendingPlayerRemovals.
+    pub fn disconnectFromNetwork(self: *Player) void {
+        if (!self.beginRemoval()) return;
+        self.network.conduit.enqueuePlayerRemoval(self);
+    }
+
+    /// Marks the player as leaving and drops its connection mapping so no
+    /// new packets are routed to it. Safe from any thread. Returns false if
+    /// removal already started.
+    fn beginRemoval(self: *Player) bool {
+        if (self.pending_removal.swap(true, .acq_rel)) return false;
+        self.connection.active = false;
+        self.network.conduit.removeConnectionMapping(self.connection);
+        return true;
+    }
+
+    /// Frees the player. Main thread only — broadcast targets and task
+    /// cancellation assume tick-thread exclusive access.
+    pub fn finalizeRemoval(self: *Player) void {
         self.savePlayerData();
         self.network.conduit.tasks.cancelByOwner("chunk_streaming", self.entity.runtime_id, ChunkLoadingTrait.destroyStreamState);
         self.network.conduit.tasks.cancelByOwner("join_startup", self.entity.runtime_id, null);

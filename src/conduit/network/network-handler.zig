@@ -87,9 +87,7 @@ pub const NetworkHandler = struct {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
         const player = self.conduit.getPlayerByConnection(connection) orelse return;
         PlayerLog.logDisconnect(player.username);
-        player.disconnect(null) catch |err| {
-            Raknet.Logger.ERROR("Failed to disconnect player: {any}", .{err});
-        };
+        player.disconnectFromNetwork();
     }
 
     pub fn onPacket(conn: *Raknet.Connection, payload: []const u8, context: ?*anyopaque) void {
