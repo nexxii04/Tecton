@@ -1,35 +1,67 @@
-## Conduit - MCBE Server Software in Zig
+# Conduit
 
-<p>
-Why Zig? Zig is fast - very fast - and for a Bedrock server, performance really matters.
-Building Conduit in Zig means we can deliver the performance we need.
-</p>
+<div align="center">
 
-![Screenshot](public/screenshot.png)
+![Conduit](public/screenshot.png)
 
-## TODO
-- [x] Accept Connections
-- [x] Handle Login
-- [x] Player Spawning
-- [x] Text Handling
-- [x] Block Permutation loading
-- [x] Chunk System
-- [x] World System
-- [x] Terrain Generators
-- [x] Player Actor Flags and Abilities
-- [x] MultiPlayer
-- [x] Item System
-- [x] Containers
-- [ ] Inventory System (WIP)
-- [x] Item Trait System
-- [x] Block Placement & Breaking
-- [x] Block Drops
-- [x] Terminal console commands
-- [ ] Entity System (WIP)
-- [x] Entity Trait System
-- [ ] Entity Drops
-- [x] LevelDB
-- [x] Command System (tp, gamemode, kick, ban, give, weather, summon, stop, about)
+**A high-performance Minecraft Bedrock Edition server written in [Zig](https://ziglang.org).**
+
+![Zig](https://img.shields.io/badge/Zig-0.16.0-f7a41d?logo=zig&logoColor=f7a41d)
+![Minecraft](https://img.shields.io/badge/Bedrock-1.26.45-44b389?logo=minecraft&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows-66788a)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+</div>
+
+## Why Zig?
+
+For a Bedrock server, performance is everything: dozens of players, thousands of chunks, and a 20-ticks-per-second loop all competing for the same CPU. Zig gives Conduit manual memory control, no hidden runtime, and compiler-checked safety in debug builds — all with C-level speed. The result is a server that stays fast under load without giving up correctness.
+
+## Roadmap
+
+- [x] Connections, login, and player spawning
+- [x] Chat and text handling
+- [x] Chunk & world system with terrain generators
+- [x] Multiplayer
+- [x] Item system, containers, and item traits
+- [x] Block placement, breaking, and drops
+- [x] Entity trait system
+- [x] LevelDB world storage
+- [x] Command system & terminal console
+- [ ] Inventory system *(in progress)*
+- [ ] Entity system & entity drops *(in progress)*
+- [ ] Multi-world system
 - [ ] Plugin API
-- [ ] Resource Pack loading
-- [ ] Multi World System
+- [ ] Resource pack loading
+
+## Getting started
+
+### Requirements
+
+- [Zig](https://ziglang.org/download/) **0.16.0**
+- A C++17 compiler (LevelDB is built from source)
+
+### Build & run
+
+```bash
+git clone https://github.com/VantStudios/Conduit.git
+cd Conduit
+zig build run
+```
+
+Connect from Minecraft Bedrock on port **19132** (default).
+
+## Testing
+
+```bash
+zig build test        # Run the full test suite
+zig build test-chest  # Chest regression tests only (double-chest trait serialization)
+```
+
+Tests are colocated with the source as standard Zig `test` blocks.
+
+---
+
+## Credits
+
+Conduit is based on the original Conduit project by [@AnyBananaGAME](https://github.com/AnyBananaGAME).
