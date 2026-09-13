@@ -1,8 +1,8 @@
 .{
     .name = .Conduit,
-    .version = "0.0.1",
+    .version = "0.2.0",
     .fingerprint = 0x32066b1dbd1df1eb,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zlib = .{
             .url = "git+https://github.com/allyourcodebase/zlib.git#d3b5519d3b73616a6bfece0712f080029d2a9244",

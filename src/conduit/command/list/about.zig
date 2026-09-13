@@ -1,8 +1,12 @@
+const std = @import("std");
+const builtin = @import("builtin");
+
+const Protocol = @import("protocol");
+
+const version = @import("../../version.zig").version;
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-
-pub const version = "0.1.0";
 
 pub fn register(registry: *CommandRegistry) !void {
     const cmd = try Command.init(
@@ -18,11 +22,24 @@ pub fn register(registry: *CommandRegistry) !void {
 
 fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    ctx.sendOutput(
-        true,
-        "\xc2\xa77--------- \xc2\xa7bConduit \xc2\xa77---------\n" ++
-            "\xc2\xa7fA Minecraft Bedrock server written in \xc2\xa76Zig\n" ++
-            "\xc2\xa77Version: \xc2\xa7a" ++ version ++ "\n" ++
-            "\xc2\xa77GitHub: \xc2\xa7bhttps://github.com/SanctumTerra/Conduit",
-    );
+    const conduit = ctx.network.conduit;
+    const snapshots = conduit.getPlayerSnapshots();
+
+    var buf: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+
+    std.Io.Writer.print(
+        &writer,
+        "§7--------- §bConduit §7---------§r\n" ++
+            "§fA Minecraft Bedrock server written in §6Zig§r\n" ++
+            "§7Version: §a" ++ version ++ "§r\n" ++
+            "§7Client: §f" ++ Protocol.MINECRAFT_VERSION ++ " §8(protocol §f{d}§8)§r\n" ++
+            "§7License: §fMIT §7GitHub: §bhttps://github.com/VantStudios/Conduit§r\n" ++
+            "§7Zig: §f" ++ builtin.zig_version_string ++ " §7Build: §f" ++ @tagName(builtin.mode) ++
+            " §7Platform: §f" ++ @tagName(builtin.os.tag) ++ " (" ++ @tagName(builtin.cpu.arch) ++ ")§r\n" ++
+            "§7Players: §f{d}§7/§f{d}",
+        .{ Protocol.PROTOCOL, snapshots.len, conduit.config.max_players },
+    ) catch return;
+
+    ctx.sendOutput(true, writer.buffered());
 }
