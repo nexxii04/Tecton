@@ -31,6 +31,7 @@ const PlayerLog = @import("./player-log.zig");
 
 const QueuedPacket = struct {
     conn: *Raknet.Connection,
+    generation: u64,
     payload: []u8,
 };
 
@@ -41,10 +42,64 @@ const PacketDrainResult = struct {
 
 const DecompressWork = struct {
     conn: *Raknet.Connection,
+    generation: u64,
     raw: []u8,
     allocator: std.mem.Allocator,
     handler: *NetworkHandler,
     decompressed: ?DecompressResult = null,
+};
+
+const ConnectionRegistry = struct {
+    generations: std.AutoHashMap(usize, u64),
+    counter: u64 = 0,
+    mutex: std.Io.Mutex = .init,
+    allocator: std.mem.Allocator,
+
+    fn init(allocator: std.mem.Allocator) ConnectionRegistry {
+        return .{
+            .generations = std.AutoHashMap(usize, u64).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: *ConnectionRegistry) void {
+        self.generations.deinit();
+    }
+
+    fn register(self: *ConnectionRegistry, io: std.Io, connection: *Raknet.Connection) void {
+        self.mutex.lock(io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
+        defer self.mutex.unlock(io);
+        self.counter += 1;
+        self.generations.put(@intFromPtr(connection), self.counter) catch {
+            std.log.err("failed to register connection", .{});
+        };
+    }
+
+    fn unregister(self: *ConnectionRegistry, io: std.Io, connection: *Raknet.Connection) void {
+        self.mutex.lock(io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
+        defer self.mutex.unlock(io);
+        _ = self.generations.remove(@intFromPtr(connection));
+    }
+
+    fn currentGeneration(self: *ConnectionRegistry, io: std.Io, connection: *Raknet.Connection) ?u64 {
+        self.mutex.lock(io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return null;
+        };
+        defer self.mutex.unlock(io);
+        return self.generations.get(@intFromPtr(connection));
+    }
+
+    fn isCurrent(self: *ConnectionRegistry, io: std.Io, connection: *Raknet.Connection, generation: u64) bool {
+        const current = self.currentGeneration(io, connection) orelse return false;
+        return current == generation;
+    }
 };
 
 pub const NetworkHandler = struct {
@@ -56,6 +111,7 @@ pub const NetworkHandler = struct {
     decompress_pool: std.heap.MemoryPool(DecompressWork),
     decompress_pending: usize = 0,
     scratch_stream: BinaryStream,
+    connections: ConnectionRegistry,
 
     pub fn init(c: *Conduit) !*NetworkHandler {
         const self = try c.allocator.create(NetworkHandler);
@@ -70,6 +126,7 @@ pub const NetworkHandler = struct {
             .packet_queue_mutex = .init,
             .decompress_pool = undefined,
             .scratch_stream = undefined,
+            .connections = ConnectionRegistry.init(c.allocator),
         };
         self.decompress_pool = try std.heap.MemoryPool(DecompressWork).initCapacity(c.allocator, 1024);
         self.scratch_stream = BinaryStream.init(c.allocator, null, null);
@@ -80,11 +137,16 @@ pub const NetworkHandler = struct {
 
     pub fn onConnect(connection: *Raknet.Connection, context: ?*anyopaque) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
+        self.connections.register(self.conduit.io, connection);
         connection.setGamePacketCallback(onPacket, self);
     }
 
     pub fn onDisconnect(connection: *Raknet.Connection, context: ?*anyopaque) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
+        // Must happen before RakNet frees the connection: every queued
+        // packet from it becomes a validated-and-dropped entry instead of a
+        // dangling pointer dereference at dispatch time.
+        self.connections.unregister(self.conduit.io, connection);
         const player = self.conduit.getPlayerByConnection(connection) orelse return;
         PlayerLog.logDisconnect(player.username);
         player.disconnectFromNetwork();
@@ -92,6 +154,7 @@ pub const NetworkHandler = struct {
 
     pub fn onPacket(conn: *Raknet.Connection, payload: []const u8, context: ?*anyopaque) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
+        const generation = self.connections.currentGeneration(self.conduit.io, conn) orelse return;
         const copy = self.allocator.dupe(u8, payload) catch return;
 
         self.packet_queue_mutex.lock(self.conduit.io) catch |err| {
@@ -101,7 +164,7 @@ pub const NetworkHandler = struct {
         };
         defer self.packet_queue_mutex.unlock(self.conduit.io);
 
-        self.packet_queue.append(self.allocator, .{ .conn = conn, .payload = copy }) catch {
+        self.packet_queue.append(self.allocator, .{ .conn = conn, .generation = generation, .payload = copy }) catch {
             self.allocator.free(copy);
         };
     }
@@ -121,12 +184,17 @@ pub const NetworkHandler = struct {
 
         var enqueued: usize = 0;
         for (queue.items) |entry| {
+            if (!self.connections.isCurrent(self.conduit.io, entry.conn, entry.generation)) {
+                self.allocator.free(entry.payload);
+                continue;
+            }
             const work = self.decompress_pool.create(self.allocator) catch {
                 self.allocator.free(entry.payload);
                 continue;
             };
             work.* = .{
                 .conn = entry.conn,
+                .generation = entry.generation,
                 .raw = entry.payload,
                 .allocator = self.allocator,
                 .handler = self,
@@ -341,11 +409,13 @@ pub const NetworkHandler = struct {
     fn decompressCallback(ctx: *anyopaque) void {
         const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
         if (work.decompressed) |result| {
-            const io = work.handler.conduit.io;
-            const pd_start = std.Io.Timestamp.now(io, .awake);
-            work.handler.dispatchPackets(work.conn, result.packets);
-            const pd_end = pd_start.durationTo(.now(io, .awake));
-            work.handler.conduit.profiler.record(.packet_dispatch, @intCast(@max(0, pd_end.nanoseconds)));
+            if (work.handler.connections.isCurrent(work.handler.conduit.io, work.conn, work.generation)) {
+                const io = work.handler.conduit.io;
+                const pd_start = std.Io.Timestamp.now(io, .awake);
+                work.handler.dispatchPackets(work.conn, result.packets);
+                const pd_end = pd_start.durationTo(.now(io, .awake));
+                work.handler.conduit.profiler.record(.packet_dispatch, @intCast(@max(0, pd_end.nanoseconds)));
+            }
             result.deinit();
         }
         std.debug.assert(work.handler.decompress_pending > 0);
@@ -399,6 +469,32 @@ pub const NetworkHandler = struct {
         self.packet_queue.deinit(self.allocator);
         self.decompress_pool.deinit(self.allocator);
         self.scratch_stream.deinit();
+        self.connections.deinit();
         self.allocator.destroy(self);
     }
 };
+
+test "connection registry validates generations across pointer reuse" {
+    const registry_box = try std.testing.allocator.create(ConnectionRegistry);
+    defer std.testing.allocator.destroy(registry_box);
+    registry_box.* = ConnectionRegistry.init(std.testing.allocator);
+    defer registry_box.deinit();
+
+    var conn_storage: u128 align(16) = 0;
+    const conn: *Raknet.Connection = @ptrCast(&conn_storage);
+
+    registry_box.register(std.testing.io, conn);
+    const first_gen = registry_box.currentGeneration(std.testing.io, conn) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(registry_box.isCurrent(std.testing.io, conn, first_gen));
+
+    // Same address, new connection: the old generation must be rejected.
+    registry_box.unregister(std.testing.io, conn);
+    try std.testing.expectEqual(@as(?u64, null), registry_box.currentGeneration(std.testing.io, conn));
+    try std.testing.expect(!registry_box.isCurrent(std.testing.io, conn, first_gen));
+
+    registry_box.register(std.testing.io, conn);
+    const second_gen = registry_box.currentGeneration(std.testing.io, conn) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(second_gen != first_gen);
+    try std.testing.expect(registry_box.isCurrent(std.testing.io, conn, second_gen));
+    try std.testing.expect(!registry_box.isCurrent(std.testing.io, conn, first_gen));
+}
