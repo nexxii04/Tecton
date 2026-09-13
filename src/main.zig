@@ -35,7 +35,7 @@ pub fn main(init: std.process.Init) !void {
             try io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
         }
     } else {
-        const allocator = std.heap.c_allocator;
+        const allocator = std.heap.smp_allocator;
 
         var conduit = try Conduit.init(io, allocator);
         defer conduit.deinit();
