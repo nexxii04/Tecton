@@ -33,6 +33,3 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [ ] Plugin API
 - [ ] Resource Pack loading
 - [ ] Multi World System
-
-## Discord
-<p>Join our <a href="https://discord.gg/tBpMb6Hv7S">Discord</a></p>
