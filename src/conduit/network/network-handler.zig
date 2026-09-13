@@ -205,6 +205,9 @@ pub const NetworkHandler = struct {
                 .callback = decompressCallback,
                 .cleanup = decompressCleanup,
                 .ctx = @ptrCast(work),
+                // Same-connection frames must dispatch in receive order:
+                // pin them to one worker's FIFO shard.
+                .shard_key = @intFromPtr(entry.conn),
             }) catch {
                 std.debug.print("[net-drain] threaded_tasks enqueue FAILED\n", .{});
                 self.allocator.free(entry.payload);

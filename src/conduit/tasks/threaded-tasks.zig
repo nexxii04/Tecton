@@ -9,6 +9,10 @@ pub const ThreadedTask = struct {
     callback: ?CallbackFn = null,
     cleanup: ?CleanupFn = null,
     ctx: *anyopaque,
+    // Tasks sharing a shard_key run on a single worker, so they execute and
+    // complete in submission order (used to keep same-connection packets
+    // ordered). 0 = no ordering requirement, distributed round-robin.
+    shard_key: u64 = 0,
 };
 
 pub const WorkerCountResolution = struct {
@@ -59,28 +63,40 @@ fn recommendedWorkerCountForCpu(cpu_count: usize) usize {
     return @max(@as(usize, 1), @min(count, 16));
 }
 
+/// One worker owns one shard; tasks within a shard run strictly FIFO from
+/// the front (head index, no swapRemove reordering). A shard's queue may
+/// fall behind if its owner is saturated — acceptable: cross-shard balance
+/// comes from keyless tasks round-robining over all shards.
+const TaskShard = struct {
+    pending: std.ArrayList(ThreadedTask) = .empty,
+    head: usize = 0,
+    mutex: std.Io.Mutex = .init,
+    cond: std.Io.Condition = .init,
+
+    fn count(self: *const TaskShard) usize {
+        return self.pending.items.len - self.head;
+    }
+};
+
 pub const ThreadedTaskQueue = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
-    pending: std.ArrayList(ThreadedTask),
+    shards: []TaskShard = &.{},
     completed: std.ArrayList(ThreadedTask),
-    pending_mutex: std.Io.Mutex,
-    pending_cond: std.Io.Condition,
+    completed_head: usize = 0,
     completed_mutex: std.Io.Mutex,
     workers: []?std.Thread,
     running: bool,
     configured_worker_count: usize,
     detected_cpu_count: usize,
     active_worker_count: usize,
+    next_shard: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, configured_worker_count: usize) ThreadedTaskQueue {
         return .{
             .io = io,
             .allocator = allocator,
-            .pending = std.ArrayList(ThreadedTask){ .items = &.{}, .capacity = 0 },
-            .completed = std.ArrayList(ThreadedTask){ .items = &.{}, .capacity = 0 },
-            .pending_mutex = .init,
-            .pending_cond = .init,
+            .completed = std.ArrayList(ThreadedTask).empty,
             .completed_mutex = .init,
             .workers = &.{},
             .running = false,
@@ -96,9 +112,13 @@ pub const ThreadedTaskQueue = struct {
         self.detected_cpu_count = resolution.cpu_count;
         self.active_worker_count = resolution.resolved_count;
         const worker_count = resolution.resolved_count;
+        self.shards = try self.allocator.alloc(TaskShard, worker_count);
+        for (self.shards) |*shard| {
+            shard.* = .{};
+        }
         self.workers = try self.allocator.alloc(?std.Thread, worker_count);
-        for (self.workers) |*w| {
-            w.* = try std.Thread.spawn(.{}, workerLoop, .{self});
+        for (self.workers, 0..) |*w, i| {
+            w.* = try std.Thread.spawn(.{}, workerLoop, .{ self, i });
         }
     }
 
@@ -110,11 +130,19 @@ pub const ThreadedTaskQueue = struct {
         return self.detected_cpu_count;
     }
 
+    fn shardIndexFor(self: *ThreadedTaskQueue, task: ThreadedTask) usize {
+        if (task.shard_key != 0) return @intCast(task.shard_key % self.shards.len);
+        const n = self.next_shard.fetchAdd(1, .monotonic);
+        return @intCast(n % self.shards.len);
+    }
+
     pub fn enqueue(self: *ThreadedTaskQueue, task: ThreadedTask) !void {
-        try self.pending_mutex.lock(self.io);
-        defer self.pending_mutex.unlock(self.io);
-        try self.pending.append(self.allocator, task);
-        self.pending_cond.signal(self.io);
+        if (self.shards.len == 0) return error.QueueNotStarted;
+        const shard = &self.shards[self.shardIndexFor(task)];
+        try shard.mutex.lock(self.io);
+        defer shard.mutex.unlock(self.io);
+        try shard.pending.append(self.allocator, task);
+        shard.cond.signal(self.io);
     }
 
     pub fn drainCompleted(self: *ThreadedTaskQueue, budget_ns: u64) void {
@@ -122,12 +150,18 @@ pub const ThreadedTaskQueue = struct {
         while (true) {
             self.completed_mutex.lock(self.io) catch |err| {
                 std.log.err("failed to acquire lock: {}", .{err});
+                return;
             };
-            if (self.completed.items.len == 0) {
+            if (self.completed_head == self.completed.items.len) {
                 self.completed_mutex.unlock(self.io);
                 return;
             }
-            const task = self.completed.swapRemove(0);
+            const task = self.completed.items[self.completed_head];
+            self.completed_head += 1;
+            if (self.completed_head == self.completed.items.len) {
+                self.completed.clearRetainingCapacity();
+                self.completed_head = 0;
+            }
             self.completed_mutex.unlock(self.io);
 
             if (task.callback) |cb| cb(task.ctx);
@@ -138,29 +172,30 @@ pub const ThreadedTaskQueue = struct {
     }
 
     pub fn clearPending(self: *ThreadedTaskQueue) void {
-        self.pending_mutex.lock(self.io) catch |err| {
-            std.log.err("failed to acquire lock: {}", .{err});
-        };
-
-        for (self.pending.items) |task| {
-            if (task.cleanup) |c_fn| c_fn(task.ctx);
+        for (self.shards) |*shard| {
+            shard.mutex.lock(self.io) catch |err| {
+                std.log.err("failed to acquire lock: {}", .{err});
+                continue;
+            };
+            for (shard.pending.items[shard.head..]) |task| {
+                if (task.cleanup) |c_fn| c_fn(task.ctx);
+            }
+            shard.pending.clearRetainingCapacity();
+            shard.head = 0;
+            shard.mutex.unlock(self.io);
         }
-        self.pending.clearRetainingCapacity();
-        self.pending_mutex.unlock(self.io);
     }
 
     pub fn stop(self: *ThreadedTaskQueue) void {
-        self.pending_mutex.lock(self.io) catch |err| {
-            std.log.err("failed to acquire lock: {}", .{err});
-            for (self.workers) |*w| {
-                if (w.*) |t| t.join();
-            }
-            return;
-        };
-
         self.running = false;
-        self.pending_cond.broadcast(self.io);
-        self.pending_mutex.unlock(self.io);
+        for (self.shards) |*shard| {
+            shard.mutex.lock(self.io) catch |err| {
+                std.log.err("failed to acquire lock: {}", .{err});
+                continue;
+            };
+            shard.cond.broadcast(self.io);
+            shard.mutex.unlock(self.io);
+        }
 
         for (self.workers) |*w| {
             if (w.*) |t| {
@@ -172,36 +207,49 @@ pub const ThreadedTaskQueue = struct {
 
     pub fn deinit(self: *ThreadedTaskQueue) void {
         self.stop();
-        for (self.pending.items) |task| {
-            if (task.cleanup) |c_fn| c_fn(task.ctx);
+        for (self.shards) |*shard| {
+            for (shard.pending.items[shard.head..]) |task| {
+                if (task.cleanup) |c_fn| c_fn(task.ctx);
+            }
+            if (shard.pending.capacity > 0) shard.pending.deinit(self.allocator);
         }
-        if (self.pending.capacity > 0) self.pending.deinit(self.allocator);
-        for (self.completed.items) |task| {
+        if (self.shards.len > 0) self.allocator.free(self.shards);
+        self.shards = &.{};
+
+        for (self.completed.items[self.completed_head..]) |task| {
             if (task.cleanup) |c_fn| c_fn(task.ctx);
         }
         if (self.completed.capacity > 0) self.completed.deinit(self.allocator);
+        self.completed = .empty;
+        self.completed_head = 0;
         if (self.workers.len > 0) self.allocator.free(self.workers);
     }
 
-    fn workerLoop(self: *ThreadedTaskQueue) void {
+    fn workerLoop(self: *ThreadedTaskQueue, shard_idx: usize) void {
+        const shard = &self.shards[shard_idx];
         while (true) {
-            self.pending_mutex.lock(self.io) catch |err| {
+            shard.mutex.lock(self.io) catch |err| {
                 std.log.err("failed to acquire lock: {}", .{err});
                 std.Thread.yield() catch {};
                 continue;
             };
-            while (self.pending.items.len == 0 and self.running) {
-                self.pending_cond.wait(self.io, &self.pending_mutex) catch |err| {
+            while (shard.count() == 0 and self.running) {
+                shard.cond.wait(self.io, &shard.mutex) catch |err| {
                     std.log.err("worker condition wait failed: {}", .{err});
                     return;
                 };
             }
-            if (!self.running and self.pending.items.len == 0) {
-                self.pending_mutex.unlock(self.io);
+            if (!self.running and shard.count() == 0) {
+                shard.mutex.unlock(self.io);
                 return;
             }
-            const task = self.pending.swapRemove(0);
-            self.pending_mutex.unlock(self.io);
+            const task = shard.pending.items[shard.head];
+            shard.head += 1;
+            if (shard.head == shard.pending.items.len) {
+                shard.pending.clearRetainingCapacity();
+                shard.head = 0;
+            }
+            shard.mutex.unlock(self.io);
 
             task.work(task.ctx);
 
@@ -237,7 +285,7 @@ test "server thread count includes main raknet and workers" {
     try std.testing.expectEqual(@as(usize, 4), totalServerThreadCount(1));
 }
 
-test "task queue completeness with swapRemove" {
+test "task queue completeness across shards" {
     const allocator = std.testing.allocator;
     var completed_count: usize = 0;
 
@@ -277,4 +325,56 @@ test "task queue completeness with swapRemove" {
     }
 
     try std.testing.expectEqual(N, @atomicLoad(usize, &completed_count, .seq_cst));
+}
+
+test "tasks with the same shard key complete in submission order" {
+    const allocator = std.testing.allocator;
+
+    const Context = struct {
+        index: usize,
+        seq: *std.atomic.Value(usize),
+        recorded: []usize,
+    };
+
+    const work_fn = struct {
+        fn f(ctx: *anyopaque) void {
+            const c: *Context = @ptrCast(@alignCast(ctx));
+            const pos = c.seq.fetchAdd(1, .seq_cst);
+            c.recorded[pos] = c.index;
+        }
+    }.f;
+
+    const N: usize = 64;
+    const recorded = try allocator.alloc(usize, N);
+    defer allocator.free(recorded);
+    var seq = std.atomic.Value(usize).init(0);
+
+    var contexts: [N]Context = undefined;
+    for (&contexts, 0..) |*ctx, i| {
+        ctx.* = .{ .index = i, .seq = &seq, .recorded = recorded };
+    }
+
+    var queue = ThreadedTaskQueue.init(std.testing.io, allocator, 0);
+    defer queue.deinit();
+    try queue.start();
+
+    for (&contexts) |*ctx| {
+        try queue.enqueue(.{
+            .work = work_fn,
+            .ctx = @ptrCast(ctx),
+            .shard_key = 0x1234,
+        });
+    }
+
+    var attempts: usize = 0;
+    while (attempts < 1000) : (attempts += 1) {
+        queue.drainCompleted(std.math.maxInt(u64));
+        if (seq.load(.seq_cst) == N) break;
+        std.testing.io.sleep(.fromNanoseconds(1_000_000), .awake) catch {};
+    }
+
+    try std.testing.expectEqual(N, seq.load(.seq_cst));
+    for (recorded, 0..) |index, position| {
+        try std.testing.expectEqual(position, index);
+    }
 }
