@@ -154,6 +154,19 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
     {
         var stream = BinaryStream.init(allocator, null, null);
         defer stream.deinit();
+
+        var abilities: [20]Protocol.AbilitySet = undefined;
+        for (&abilities, 0..) |*set, i| {
+            set.* = .{ .ability = @enumFromInt(i), .value = false };
+        }
+        const layers = [1]Protocol.AbilityLayer{.{
+            .layer_type = @intFromEnum(Protocol.AbilityLayerType.Base),
+            .abilities = &abilities,
+            .fly_speed = 0.0,
+            .vertical_fly_speed = 0.0,
+            .walk_speed = 0.0,
+        }};
+
         const packet = Protocol.AddPlayerPacket{
             .uuid = target.uuid,
             .username = target.username,
@@ -161,19 +174,10 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
             .position = target.entity.position,
             .entity_properties = Protocol.PropertySyncData.init(allocator),
             .ability_entity_unique_id = target.entity.runtime_id,
+            .ability_layers = &layers,
+            .build_platform = @intCast(target.login_data.client_data.device_os),
         };
         const serialized = packet.serialize(&stream) catch return;
-        viewer.network.sendPacket(viewer.connection, serialized) catch {};
-    }
-
-    {
-        var stream = BinaryStream.init(allocator, null, null);
-        defer stream.deinit();
-        const packet = Protocol.PlayerSkinPacket{
-            .uuid = target.uuid,
-            .skin = &target.login_data.client_data,
-        };
-        const serialized = packet.serialize(&stream, allocator) catch return;
         viewer.network.sendPacket(viewer.connection, serialized) catch {};
     }
 

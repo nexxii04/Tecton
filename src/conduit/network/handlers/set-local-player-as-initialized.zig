@@ -17,10 +17,7 @@ const PlayerInitTask = struct {
     network: *NetworkHandler,
     player: *Player,
     stage: PlayerInitStage = .on_spawn,
-    existing_idx: usize = 0,
 };
-
-const PLAYER_LIST_BATCH_SIZE: usize = 1;
 
 pub fn handleSetLocalPlayerAsInitialized(
     network: *NetworkHandler,
@@ -77,12 +74,12 @@ fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
             return false;
         },
         .send_existing_players => {
-            //try sendExistingPlayers(state);
+            try sendExistingPlayers(state);
             state.stage = .broadcast_new_player;
             return false;
         },
         .broadcast_new_player => {
-            //try broadcastNewPlayer(state);
+            try broadcastNewPlayer(state);
             player.spawned = true;
             return true;
         },
@@ -96,24 +93,16 @@ fn destroyPlayerInitTask(ctx: *anyopaque) void {
 
 fn sendExistingPlayers(state: *PlayerInitTask) !void {
     const snapshots = state.network.conduit.getPlayerSnapshots();
-    while (state.existing_idx < snapshots.len) {
-        const candidate = snapshots[state.existing_idx];
-        if (candidate.entity.runtime_id != state.player.entity.runtime_id and candidate.spawned) break;
-        state.existing_idx += 1;
-    }
-    if (state.existing_idx >= snapshots.len) return;
+    if (snapshots.len == 0) return;
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const temp_allocator = arena.allocator();
 
-    const count = @min(PLAYER_LIST_BATCH_SIZE, snapshots.len - state.existing_idx);
-    const entries = try temp_allocator.alloc(Protocol.PlayerListEntry, count);
+    const entries = try temp_allocator.alloc(Protocol.PlayerListEntry, snapshots.len);
     var written: usize = 0;
-    var idx = state.existing_idx;
-    while (idx < snapshots.len and written < count) : (idx += 1) {
-        const p = snapshots[idx];
-        if (p.entity.runtime_id == state.player.entity.runtime_id or !p.spawned) continue;
+    for (snapshots) |p| {
+        if (!p.spawned and p.entity.runtime_id != state.player.entity.runtime_id) continue;
         entries[written] = .{
             .action = .Add,
             .uuid = p.uuid,
@@ -125,7 +114,6 @@ fn sendExistingPlayers(state: *PlayerInitTask) !void {
         };
         written += 1;
     }
-    state.existing_idx = idx;
     if (written == 0) return;
 
     var stream = BinaryStream.init(temp_allocator, null, null);
