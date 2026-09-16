@@ -134,11 +134,16 @@ pub const LevelDBProvider = struct {
 
         for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
             if (chunk.subchunks[i]) |sc| {
-                if (sc.isEmpty()) continue;
+                const key = subchunkKey(chunk.x, chunk.z, @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))), dim_index);
+                if (sc.isEmpty()) {
+                    // The subchunk exists but holds only air now; drop its
+                    // persisted copy instead of leaving stale blocks behind.
+                    batch.delete(key.slice());
+                    continue;
+                }
                 var stream = BinaryStream.init(self.allocator, null, null);
                 defer stream.deinit();
                 try sc.serializePersistence(&stream, self.allocator);
-                const key = subchunkKey(chunk.x, chunk.z, @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))), dim_index);
                 batch.put(key.slice(), stream.getBuffer());
             }
         }
@@ -166,11 +171,16 @@ pub const LevelDBProvider = struct {
 
                 for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
                     if (chunk.subchunks[i]) |sc| {
-                        if (sc.isEmpty()) continue;
+                        const key = subchunkKey(chunk.x, chunk.z, @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))), dim_index);
+                        if (sc.isEmpty()) {
+                            // See writeChunk: an in-memory subchunk cleared to
+                            // air must remove its persisted copy.
+                            batch.delete(key.slice());
+                            continue;
+                        }
                         var stream = BinaryStream.init(self.allocator, null, null);
                         defer stream.deinit();
                         sc.serializePersistence(&stream, self.allocator) catch continue;
-                        const key = subchunkKey(chunk.x, chunk.z, @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))), dim_index);
                         batch.put(key.slice(), stream.getBuffer());
                     }
                 }
@@ -828,7 +838,7 @@ test "WriteBatch chunk column round-trip" {
     var db = try LevelDB.DB.open("test_prop4_db\x00", true);
     defer {
         db.close();
-        std.fs.cwd().deleteTree("test_prop4_db") catch {};
+        std.Io.Dir.cwd().deleteTree(std.testing.io, "test_prop4_db") catch {};
     }
 
     var rng = std.Random.DefaultPrng.init(0xdeadbeef);
@@ -895,11 +905,118 @@ test "WriteBatch chunk column round-trip" {
     }
 }
 
+test "cleared subchunks are deleted from persisted chunk data" {
+    const allocator = std.testing.allocator;
+    const BlockType = @import("../block/block-type.zig").BlockType;
+    const BlockState = @import("../block/block-permutation.zig").BlockState;
+
+    try BlockPermutation.initRegistry(allocator);
+    defer BlockPermutation.deinitRegistry();
+    try BlockType.initRegistry(allocator);
+    defer BlockType.deinitRegistry();
+
+    const air_type = try BlockType.init(allocator, "minecraft:air");
+    try air_type.register();
+    const air_state = BlockState.init(allocator);
+    const air_perm = try BlockPermutation.init(allocator, 0, "minecraft:air", air_state);
+    try air_perm.register();
+    try air_type.addPermutation(air_perm);
+
+    const stone_type = try BlockType.init(allocator, "minecraft:stone");
+    try stone_type.register();
+    const stone_state = BlockState.init(allocator);
+    const stone_perm = try BlockPermutation.init(allocator, 1, "minecraft:stone", stone_state);
+    try stone_perm.register();
+    try stone_type.addPermutation(stone_perm);
+
+    var provider = try LevelDBProvider.init(allocator, "test_prop7_db\x00");
+    defer {
+        provider.deinit();
+        std.Io.Dir.cwd().deleteTree(std.testing.io, "test_prop7_db") catch {};
+    }
+
+    var dimension = Dimension.init(undefined, allocator, "overworld", .Overworld, null);
+    defer dimension.deinit();
+
+    var chunk = Chunk.init(allocator, 0, 0, .Overworld);
+    defer chunk.deinit();
+
+    const sc_slot: usize = 8;
+    const sc_index: i8 = @intCast(sc_slot - chunk_mod.yOffset(.Overworld));
+
+    const replaceWithEmptySubChunk = struct {
+        fn f(c: *Chunk, alloc: std.mem.Allocator, slot: usize, index: i8) !void {
+            if (c.subchunks[slot]) |old_sc| {
+                old_sc.deinit();
+                alloc.destroy(old_sc);
+            }
+            const sc = try alloc.create(SubChunk);
+            sc.* = try SubChunk.init(alloc, index);
+            c.subchunks[slot] = sc;
+            c.dirty = true;
+        }
+    }.f;
+
+    try chunk.setPermutation(1, 64, 1, stone_perm, 0);
+    try provider.writeChunk(&chunk, &dimension);
+
+    {
+        const persisted = try provider.readChunkDirect(0, 0, .Overworld);
+        defer {
+            persisted.deinit();
+            allocator.destroy(persisted);
+        }
+        try std.testing.expect(persisted.subchunks[sc_slot] != null);
+        try std.testing.expect(!persisted.subchunks[sc_slot].?.isEmpty());
+        const perm = try persisted.getPermutation(1, 64, 1, 0);
+        try std.testing.expectEqualStrings("minecraft:stone", perm.identifier);
+    }
+
+    try replaceWithEmptySubChunk(&chunk, allocator, sc_slot, sc_index);
+    try std.testing.expect(chunk.subchunks[sc_slot].?.isEmpty());
+    try provider.writeChunk(&chunk, &dimension);
+
+    {
+        const persisted = try provider.readChunkDirect(0, 0, .Overworld);
+        defer {
+            persisted.deinit();
+            allocator.destroy(persisted);
+        }
+        try std.testing.expect(persisted.subchunks[sc_slot] == null);
+    }
+
+    try chunk.setPermutation(1, 64, 1, stone_perm, 0);
+    provider.saveAll();
+
+    {
+        const persisted = try provider.readChunkDirect(0, 0, .Overworld);
+        defer {
+            persisted.deinit();
+            allocator.destroy(persisted);
+        }
+        try std.testing.expect(persisted.subchunks[sc_slot] != null);
+        const perm = try persisted.getPermutation(1, 64, 1, 0);
+        try std.testing.expectEqualStrings("minecraft:stone", perm.identifier);
+    }
+
+    try replaceWithEmptySubChunk(&chunk, allocator, sc_slot, sc_index);
+    provider.saveAll();
+
+    {
+        const persisted = try provider.readChunkDirect(0, 0, .Overworld);
+        defer {
+            persisted.deinit();
+            allocator.destroy(persisted);
+        }
+        try std.testing.expect(persisted.subchunks[sc_slot] == null);
+    }
+}
+
 test "WriteBatch saveAll multi-chunk persistence" {
     var db = try LevelDB.DB.open("test_prop6_db\x00", true);
     defer {
         db.close();
-        std.fs.cwd().deleteTree("test_prop6_db") catch {};
+        std.Io.Dir.cwd().deleteTree(std.testing.io, "test_prop6_db") catch {};
     }
 
     var rng = std.Random.DefaultPrng.init(0xcafebabe);
@@ -934,7 +1051,7 @@ test "readChunkColumn skips block entities when flag is false" {
     var provider = try LevelDBProvider.init(std.testing.allocator, "test_prop5_db\x00");
     defer {
         provider.deinit();
-        std.fs.cwd().deleteTree("test_prop5_db") catch {};
+        std.Io.Dir.cwd().deleteTree(std.testing.io, "test_prop5_db") catch {};
     }
 
     var rng = std.Random.DefaultPrng.init(0xfeed1234);
@@ -951,6 +1068,7 @@ test "readChunkColumn skips block entities when flag is false" {
         const ver_key = versionKey(x, z, dim_index);
         batch.put(ver_key.slice(), &[_]u8{40});
 
+        const slot_offset: usize = chunk_mod.yOffset(.Overworld);
         const num_sc = random.intRangeAtMost(usize, 1, 4);
         var expected_sc: [chunk_mod.MAX_SUBCHUNKS]?[]u8 = .{null} ** chunk_mod.MAX_SUBCHUNKS;
         defer {
@@ -963,7 +1081,8 @@ test "readChunkColumn skips block entities when flag is false" {
             const len = random.intRangeAtMost(usize, 4, 32);
             const data = try std.testing.allocator.alloc(u8, len);
             random.bytes(data);
-            expected_sc[i] = data;
+            // Keys are dimension-relative; overworld slots start at the y offset.
+            expected_sc[slot_offset + i] = data;
             const sc_index: i8 = @intCast(@as(i32, @intCast(i)));
             const key = subchunkKey(x, z, sc_index, dim_index);
             batch.put(key.slice(), data);

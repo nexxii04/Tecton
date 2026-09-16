@@ -148,6 +148,55 @@ fn updatePlayerVisibility(player: *Player) void {
     for (stale.items) |rid| {
         _ = player.visible_players.remove(rid);
     }
+
+    updateTrackedEntities(player);
+}
+
+fn updateTrackedEntities(player: *Player) void {
+    const dimension = player.entity.dimension orelse return;
+    const allocator = player.entity.allocator;
+
+    const center_x = @as(i32, @intFromFloat(@floor(player.entity.position.x))) >> 4;
+    const center_z = @as(i32, @intFromFloat(@floor(player.entity.position.z))) >> 4;
+    const view = player.view_distance;
+
+    // Mirror chunk streaming's circular chunk radius: every entity the client
+    // could know about lives in one of these buckets.
+    var chunk_dx: i32 = -view;
+    while (chunk_dx <= view) : (chunk_dx += 1) {
+        var chunk_dz: i32 = -view;
+        while (chunk_dz <= view) : (chunk_dz += 1) {
+            if (chunk_dx * chunk_dx + chunk_dz * chunk_dz > view * view) continue;
+            for (dimension.entitiesInChunk(center_x + chunk_dx, center_z + chunk_dz)) |entity| {
+                if (player.visible_entities.contains(entity.runtime_id)) continue;
+                const dx = player.entity.position.x - entity.position.x;
+                const dz = player.entity.position.z - entity.position.z;
+                if (!Dimension.withinViewDistance(dx, dz, view)) continue;
+                if (dimension.sendAddEntityToPlayer(player, entity)) {
+                    player.visible_entities.put(entity.runtime_id, entity.unique_id) catch {};
+                }
+            }
+        }
+    }
+
+    var stale = std.ArrayList(i64).empty;
+    defer stale.deinit(allocator);
+    var tracked_it = player.visible_entities.keyIterator();
+    while (tracked_it.next()) |runtime_id| {
+        const entity = dimension.entities.get(runtime_id.*) orelse {
+            stale.append(allocator, runtime_id.*) catch {};
+            continue;
+        };
+        const dx = player.entity.position.x - entity.position.x;
+        const dz = player.entity.position.z - entity.position.z;
+        if (!Dimension.withinViewDistance(dx, dz, view)) {
+            dimension.sendRemoveEntityToPlayer(player, entity);
+            stale.append(allocator, runtime_id.*) catch {};
+        }
+    }
+    for (stale.items) |runtime_id| {
+        _ = player.visible_entities.remove(runtime_id);
+    }
 }
 
 fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator) void {
@@ -720,6 +769,8 @@ fn serializeChunkPacketFromColumn(
 
 fn onBatchComplete(ctx: *anyopaque) void {
     const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
+    std.debug.assert(work.dimension.inflight_batches > 0);
+    work.dimension.inflight_batches -= 1;
     const allocator = work.allocator;
     defer {
         if (work.owner_state) |owner| onBatchOwnedComplete(owner);
@@ -993,6 +1044,8 @@ fn sendTileFixAt(allocator: std.mem.Allocator, player: *Player, dim: *Dimension,
 
 fn cleanupBatchWork(ctx: *anyopaque) void {
     const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
+    std.debug.assert(work.dimension.inflight_batches > 0);
+    work.dimension.inflight_batches -= 1;
     const allocator = work.allocator;
     if (work.owner_state) |owner| onBatchOwnedComplete(owner);
     for (0..work.count) |i| {
@@ -1043,6 +1096,16 @@ fn onBatchOwnedComplete(state: *ChunkStreamState) void {
     if (state.inflight > 0) state.inflight -= 1;
     if (state.destroy_pending and state.inflight == 0) {
         freeStreamState(state);
+    }
+}
+
+fn flushChunkStateForStreaming(dimension: *Dimension, x: i32, z: i32) void {
+    const chunk = dimension.getChunk(x, z) orelse return;
+    if (dimension.getBlocksInChunk(x, z).len > 0) {
+        dimension.world.provider.writeBlockEntities(chunk, dimension) catch {};
+    }
+    if (chunk.dirty) {
+        dimension.world.provider.writeChunk(chunk, dimension) catch {};
     }
 }
 
@@ -1151,6 +1214,8 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
 
             state.upgrade_idx += count;
             state.inflight += 1;
+            dimension.inflight_batches += 1;
+            for (work.coords) |coord| flushChunkStateForStreaming(dimension, coord.x, coord.z);
 
             state.conduit.threaded_tasks.enqueue(.{
                 .work = workerLoadAndCompress,
@@ -1315,6 +1380,8 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
         };
 
         state.inflight += 1;
+        dimension.inflight_batches += 1;
+        for (work.coords) |coord| flushChunkStateForStreaming(dimension, coord.x, coord.z);
 
         state.conduit.threaded_tasks.enqueue(.{
             .work = workerLoadAndCompress,
