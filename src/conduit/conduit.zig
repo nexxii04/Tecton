@@ -92,7 +92,8 @@ pub const Conduit = struct {
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !Conduit {
         Raknet.Logger.init(allocator);
-        const config = try ServerProperties.load(io, allocator, "server.properties");
+        var config = try ServerProperties.load(io, allocator, "server.properties");
+        errdefer config.deinit();
         return Conduit{
             .io = io,
             .allocator = allocator,

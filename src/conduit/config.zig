@@ -36,6 +36,7 @@ pub const ServerProperties = struct {
 
     pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !ServerProperties {
         var self = ServerProperties{ .allocator = allocator };
+        errdefer self.deinit();
 
         const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
