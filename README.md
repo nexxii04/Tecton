@@ -28,9 +28,9 @@ For a Bedrock server, performance is everything: dozens of players, thousands of
 - [x] Entity trait system
 - [x] LevelDB world storage
 - [x] Command system & terminal console
-- [ ] Inventory system *(in progress)*
-- [ ] Entity system & entity drops *(in progress)*
-- [ ] Multi-world system
+- [ ] Inventory system _(in progress)_
+- [ ] Entity system & entity drops _(in progress)_
+- [x] Multi-world system
 - [ ] Plugin API
 - [ ] Resource pack loading
 

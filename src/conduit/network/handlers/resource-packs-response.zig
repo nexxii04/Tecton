@@ -4,6 +4,10 @@ const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const Player = @import("../../player/player.zig").Player;
+const PlayerLocation = @import("../../player/player-locations.zig").Location;
+const Conduit = @import("../../conduit.zig").Conduit;
+const World = @import("../../world/world.zig").World;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
 
 const JoinStartupStage = enum(u8) {
@@ -103,12 +107,22 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
 
     switch (state.stage) {
         .prepare_player => {
-            const world = state.network.conduit.getWorld("world");
-            const dimension = if (world) |w| w.getDimension("overworld") else null;
+            const location = state.network.conduit.resolvePlayerLocation(player.uuid);
+            const world = resolveJoinWorld(state.network.conduit, location) orelse {
+                Raknet.Logger.ERROR("Join startup failed for {s}: no world available", .{player.username});
+                player.join_startup_started = false;
+                return true;
+            };
+
+            const dimension = resolveJoinDimension(world, location) orelse {
+                Raknet.Logger.ERROR("Join startup failed for {s}: no dimension available", .{player.username});
+                player.join_startup_started = false;
+                return true;
+            };
             player.entity.dimension = dimension;
 
             const loaded = player.loadPlayerData();
-            state.spawn_pos = if (dimension) |dim| dim.spawn_position else Protocol.BlockPosition.init(0, 100, 0);
+            state.spawn_pos = dimension.spawn_position;
 
             if (!loaded) {
                 player.entity.position = Protocol.Vector3f.init(
@@ -151,6 +165,26 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
 fn destroyJoinStartupTask(ctx: *anyopaque) void {
     const state: *JoinStartupTask = @ptrCast(@alignCast(ctx));
     state.network.allocator.destroy(state);
+}
+
+fn resolveJoinWorld(conduit: *Conduit, location: ?*const PlayerLocation) ?*World {
+    if (location) |loc| {
+        if (conduit.getWorld(loc.world)) |world| return world;
+    }
+    if (conduit.getWorld("world")) |world| return world;
+    var it = conduit.worlds.valueIterator();
+    const entry = it.next() orelse return null;
+    return entry.*;
+}
+
+fn resolveJoinDimension(world: *World, location: ?*const PlayerLocation) ?*Dimension {
+    if (location) |loc| {
+        if (world.getDimension(loc.dimension)) |dimension| return dimension;
+    }
+    if (world.getDimension("overworld")) |dimension| return dimension;
+    var it = world.dimensions.valueIterator();
+    const entry = it.next() orelse return null;
+    return entry.*;
 }
 
 fn sendStartGameBatch(state: *JoinStartupTask) !void {

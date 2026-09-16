@@ -225,7 +225,11 @@ pub fn serializePlayer(allocator: std.mem.Allocator, player: *Player) !CompoundT
         try tag.set("MaxHealth", .{ .Float = FloatTag.init(health_state.max, null) });
     }
 
-    try tag.set("DimensionId", .{ .Int = IntTag.init(0, null) });
+    const dimension_id: i32 = if (player.entity.dimension) |dimension|
+        @intCast(@intFromEnum(dimension.dimension_type))
+    else
+        0;
+    try tag.set("DimensionId", .{ .Int = IntTag.init(dimension_id, null) });
 
     return tag;
 }

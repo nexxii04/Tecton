@@ -68,6 +68,17 @@ pub const CommandRegistry = struct {
         return idx;
     }
 
+    pub fn updateEnumValues(self: *CommandRegistry, name: []const u8, values: []const []const u8) !bool {
+        for (self.enums.items) |*cmd_enum| {
+            if (!std.mem.eql(u8, cmd_enum.name, name)) continue;
+            if (cmd_enum.owned) self.allocator.free(cmd_enum.values);
+            cmd_enum.values = values;
+            cmd_enum.owned = true;
+            return true;
+        }
+        return false;
+    }
+
     pub fn registerSoftEnum(self: *CommandRegistry, soft_enum: SoftEnum) !u32 {
         const idx: u32 = @intCast(self.soft_enums.items.len);
         try self.soft_enums.append(self.allocator, soft_enum);
@@ -318,3 +329,35 @@ pub const CommandRegistry = struct {
         return stream.getBuffer();
     }
 };
+
+test "updateEnumValues replaces owned values and keeps the enum index" {
+    const allocator = std.testing.allocator;
+
+    var registry = CommandRegistry.init(allocator);
+    defer registry.deinit();
+
+    const initial = try allocator.alloc([]const u8, 1);
+    initial[0] = "world";
+    const enum_index = try registry.registerEnum(.{
+        .name = "TransferWorld",
+        .values = initial,
+        .owned = true,
+    });
+    try std.testing.expectEqual(@as(u32, 0), enum_index);
+
+    const updated = try allocator.alloc([]const u8, 2);
+    updated[0] = "world";
+    updated[1] = "arena";
+
+    try std.testing.expect(try registry.updateEnumValues("TransferWorld", updated));
+
+    try std.testing.expectEqual(@as(usize, 1), registry.enums.items.len);
+    try std.testing.expectEqual(@as(usize, 2), registry.enums.items[0].values.len);
+    try std.testing.expectEqualStrings("arena", registry.enums.items[0].values[1]);
+    try std.testing.expect(registry.enums.items[0].owned);
+
+    const orphaned = try allocator.alloc([]const u8, 1);
+    orphaned[0] = "x";
+    try std.testing.expect(!(try registry.updateEnumValues("MissingEnum", orphaned)));
+    allocator.free(orphaned);
+}

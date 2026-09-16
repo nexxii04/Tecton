@@ -13,6 +13,8 @@ pub const World = struct {
     dimensions: std.StringHashMap(*Dimension),
     provider: WorldProvider,
 
+    unloading: bool = false,
+
     pub fn init(
         conduit: *Conduit,
         allocator: std.mem.Allocator,
@@ -38,18 +40,45 @@ pub const World = struct {
         identifier: []const u8,
         dimension_type: Protocol.DimensionType,
         generator: ?*ThreadedGenerator,
+        load_spawn_chunks: bool,
     ) !*Dimension {
         if (self.dimensions.get(identifier)) |existing| return existing;
 
         const dim = try self.allocator.create(Dimension);
         dim.* = Dimension.init(self, self.allocator, identifier, dimension_type, generator);
-        try dim.loadSpawnChunks();
+        errdefer {
+            dim.deinit();
+            self.allocator.destroy(dim);
+        }
+        if (load_spawn_chunks) try dim.loadSpawnChunks();
         try self.dimensions.put(identifier, dim);
         return dim;
     }
 
     pub fn getDimension(self: *World, identifier: []const u8) ?*Dimension {
         return self.dimensions.get(identifier);
+    }
+
+    pub fn hasInflightBatches(self: *const World) bool {
+        var iter = self.dimensions.valueIterator();
+        while (iter.next()) |dim| {
+            if (dim.*.inflight_batches > 0) return true;
+        }
+        return false;
+    }
+
+    pub fn save(self: *World) void {
+        var dims_iter = self.dimensions.valueIterator();
+        while (dims_iter.next()) |dim| {
+            var chunk_iter = dim.*.chunks.valueIterator();
+            while (chunk_iter.next()) |chunk| {
+                self.provider.writeChunkEntities(chunk.*, dim.*) catch {};
+                self.provider.writeBlockEntities(chunk.*, dim.*) catch {};
+                if (chunk.*.dirty) {
+                    self.provider.writeChunk(chunk.*, dim.*) catch continue;
+                }
+            }
+        }
     }
 
     pub fn deinit(self: *World) void {

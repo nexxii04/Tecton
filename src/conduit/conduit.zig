@@ -12,7 +12,6 @@ const shouldEmitVerboseStartupLogs = @import("./config.zig").shouldEmitVerboseSt
 const Console = @import("./console/console.zig").Console;
 const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
 const EntityType = @import("./entity/entity-type.zig").EntityType;
-const Entity = @import("./entity/entity.zig").Entity;
 const EntityTraits = @import("./entity/traits/root.zig");
 const GravityTrait = EntityTraits.GravityTrait;
 const HealthTrait = EntityTraits.HealthTrait;
@@ -22,6 +21,8 @@ const ItemPalette = @import("./items/item-palette.zig");
 const BanManager = @import("./network/ban-manager.zig").BanManager;
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
+const PlayerLocations = @import("./player/player-locations.zig").PlayerLocations;
+const PlayerLocation = @import("./player/player-locations.zig").Location;
 const Player = @import("./player/player.zig").Player;
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 const ThreadedTaskQueue = @import("./tasks/threaded-tasks.zig").ThreadedTaskQueue;
@@ -58,6 +59,8 @@ pub const Conduit = struct {
     pending_player_removals: std.ArrayList(*Player),
     pending_player_removals_mutex: std.Io.Mutex = .init,
     worlds: std.StringHashMap(*World),
+    /// Names of worlds with a create/unload operation in flight. Tick-thread only.
+    world_ops: std.StringHashMap(void),
     player_entity_type: EntityType,
     creative_content: ?CreativeContentLoader.CreativeContentData,
     serialized_item_registry: ?[]const u8,
@@ -80,6 +83,7 @@ pub const Conduit = struct {
     console: Console,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
+    player_locations: PlayerLocations,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !Conduit {
         Raknet.Logger.init(allocator);
@@ -112,6 +116,7 @@ pub const Conduit = struct {
             .snapshot_buf = std.ArrayList(*Player).empty,
             .pending_player_removals = std.ArrayList(*Player).empty,
             .worlds = std.StringHashMap(*World).init(allocator),
+            .world_ops = std.StringHashMap(void).init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
             .creative_content = null,
             .serialized_item_registry = null,
@@ -128,6 +133,7 @@ pub const Conduit = struct {
             .console = undefined,
             .ban_manager = BanManager.init(io, allocator, "banned-players.json"),
             .permission_manager = PermissionManager.init(io, allocator, "permissions.json", config.default_group),
+            .player_locations = PlayerLocations.init(io, allocator, "player_locations.json"),
         };
     }
 
@@ -201,25 +207,10 @@ pub const Conduit = struct {
             var dir_it = worlds_dir.iterate();
             while (dir_it.next(self.io) catch null) |entry| {
                 if (entry.kind != .directory) continue;
-                var path_buf: [512]u8 = undefined;
-                const db_path = std.fmt.bufPrintZ(&path_buf, "worlds/{s}/db", .{entry.name}) catch continue;
-                std.Io.Dir.cwd().createDirPath(self.io, db_path) catch {};
-                const provider = LevelDBProvider.init(self.allocator, db_path) catch |err| {
-                    Raknet.Logger.ERROR("Failed to open world '{s}': {any}", .{ entry.name, err });
+                _ = self.loadWorld(entry.name) catch |err| {
+                    Raknet.Logger.ERROR("Failed to load world '{s}': {any}", .{ entry.name, err });
                     continue;
                 };
-                const props = Generator.GeneratorProperties.init(self.io, null, .Overworld);
-                const superflat = Generator.SuperflatGenerator.init(self.allocator, props) catch continue;
-                const threaded = Generator.ThreadedGenerator.init(self.io, self.allocator, superflat.asGenerator()) catch continue;
-                const world = self.createWorld(entry.name, provider.asProvider()) catch continue;
-                const dim = world.createDimension("overworld", .Overworld, threaded) catch continue;
-                dim.simulation_distance = @intCast(self.config.simulation_distance);
-                var level_dat_buf: [512]u8 = undefined;
-                const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "worlds/{s}/level.dat", .{entry.name}) catch continue;
-                if (readLevelDatSpawn(self.io, self.allocator, level_dat_path)) |spawn| {
-                    dim.spawn_position = spawn;
-                    Raknet.Logger.INFO("World '{s}' spawn: {d}, {d}, {d}", .{ entry.name, spawn.x, spawn.y, spawn.z });
-                } else |_| {}
                 Raknet.Logger.INFO("Loaded world: {s}", .{entry.name});
             }
         } else |_| {
@@ -228,14 +219,12 @@ pub const Conduit = struct {
 
         if (self.worlds.count() == 0) {
             Raknet.Logger.INFO("No worlds found, creating default world", .{});
-            std.Io.Dir.cwd().createDirPath(self.io, "worlds/world/db") catch {};
-            const leveldb_provider = try LevelDBProvider.init(self.allocator, "worlds/world/db");
-            const props = Generator.GeneratorProperties.init(self.io, null, .Overworld);
-            const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
-            const threaded = try Generator.ThreadedGenerator.init(self.io, self.allocator, superflat.asGenerator());
-            const world = try self.createWorld("world", leveldb_provider.asProvider());
-            const dim = try world.createDimension("overworld", .Overworld, threaded);
-            dim.simulation_distance = @intCast(self.config.simulation_distance);
+            _ = try self.loadWorld("world");
+        }
+
+        self.player_locations.load();
+        if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+            Raknet.Logger.INFO("Loaded {d} player locations", .{self.player_locations.count()});
         }
 
         self.network = try NetworkHandler.init(self);
@@ -368,17 +357,6 @@ pub const Conduit = struct {
         }
     }
 
-    pub fn getEntityByRuntimeId(self: *Conduit, runtime_id: i64) ?*Entity {
-        var worlds_it = self.worlds.valueIterator();
-        while (worlds_it.next()) |world| {
-            var dims_it = world.*.dimensions.valueIterator();
-            while (dims_it.next()) |dim| {
-                if (dim.*.getEntity(runtime_id)) |entity| return entity;
-            }
-        }
-        return null;
-    }
-
     pub fn getPlayerSnapshots(self: *Conduit) []*Player {
         self.players_mutex.lock(self.io) catch |err| {
             std.log.err("failed to acquire lock: {}", .{err});
@@ -459,6 +437,7 @@ pub const Conduit = struct {
                 var ent_it = dim.*.entities.valueIterator();
                 while (ent_it.next()) |entity| {
                     entity.*.fireEvent(.Tick, .{entity.*});
+                    dim.*.reindexEntity(entity.*);
                 }
                 dim.*.flushPendingRemovals();
             }
@@ -527,33 +506,130 @@ pub const Conduit = struct {
         }
     }
 
-    pub fn createWorld(self: *Conduit, identifier: []const u8, provider: ?WorldProvider) !*World {
-        if (self.worlds.get(identifier)) |existing| return existing;
+    pub fn buildWorld(self: *Conduit, name: []const u8) !*World {
+        var path_buf: [512]u8 = undefined;
+        const db_path = try std.fmt.bufPrintZ(&path_buf, "worlds/{s}/db", .{name});
+        std.Io.Dir.cwd().createDirPath(self.io, db_path) catch {};
 
-        const world = try self.allocator.create(World);
-        world.* = try World.init(self, self.allocator, identifier, provider);
-        try self.worlds.put(world.identifier, world);
+        const provider = try LevelDBProvider.init(self.allocator, db_path);
+        const world = self.allocator.create(World) catch |err| {
+            provider.deinit();
+            return err;
+        };
+
+        world.* = World.init(self, self.allocator, name, provider.asProvider()) catch |err| {
+            self.allocator.destroy(world);
+            provider.deinit();
+            return err;
+        };
+        errdefer {
+            world.deinit();
+            self.allocator.destroy(world);
+        }
+        try self.createWorldDimensions(world);
         return world;
+    }
+
+    pub fn loadWorld(self: *Conduit, name: []const u8) !*World {
+        const world = try self.buildWorld(name);
+        self.worlds.put(world.identifier, world) catch |err| {
+            world.deinit();
+            self.allocator.destroy(world);
+            return err;
+        };
+        return world;
+    }
+
+    fn createWorldDimensions(self: *Conduit, world: *World) !void {
+        try self.createWorldDimension(world, "overworld", .Overworld, true);
+        try self.createWorldDimension(world, "nether", .Nether, false);
+        try self.createWorldDimension(world, "end", .End, false);
+
+        var level_dat_buf: [512]u8 = undefined;
+        const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "worlds/{s}/level.dat", .{world.identifier}) catch return;
+        if (readLevelDatSpawn(self.io, self.allocator, level_dat_path)) |spawn| {
+            if (world.getDimension("overworld")) |dim| {
+                dim.spawn_position = spawn;
+                Raknet.Logger.INFO("World '{s}' spawn: {d}, {d}, {d}", .{ world.identifier, spawn.x, spawn.y, spawn.z });
+            }
+        } else |_| {}
+    }
+
+    fn createWorldDimension(
+        self: *Conduit,
+        world: *World,
+        identifier: []const u8,
+        dimension_type: Protocol.DimensionType,
+        load_spawn_chunks: bool,
+    ) !void {
+        const props = Generator.GeneratorProperties.init(self.io, null, dimension_type);
+        const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
+        const threaded = Generator.ThreadedGenerator.init(self.io, self.allocator, superflat.asGenerator()) catch |err| {
+            superflat.deinit();
+            return err;
+        };
+        const dim = try world.createDimension(identifier, dimension_type, threaded, load_spawn_chunks);
+        dim.simulation_distance = @intCast(self.config.simulation_distance);
+    }
+
+    pub fn destroyWorld(self: *Conduit, world: *World) void {
+        _ = self.worlds.remove(world.identifier);
+        world.deinit();
+        self.allocator.destroy(world);
     }
 
     pub fn getWorld(self: *Conduit, identifier: []const u8) ?*World {
         return self.worlds.get(identifier);
     }
 
+    pub fn setPlayerLocation(self: *Conduit, uuid: []const u8, world_identifier: []const u8, dimension_identifier: []const u8) void {
+        self.player_locations.set(uuid, world_identifier, dimension_identifier);
+        self.player_locations.flush();
+    }
+
+    pub fn resolvePlayerLocation(self: *Conduit, uuid: []const u8) ?*const PlayerLocation {
+        return self.player_locations.getPtr(uuid);
+    }
+
+    pub fn broadcastAvailableCommands(self: *Conduit) void {
+        const snapshots = self.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            var stream = BinaryStream.init(self.allocator, null, null);
+            defer stream.deinit();
+            const serialized = self.command_registry.buildAvailableCommandsPacket(&stream) catch continue;
+            self.network.sendPacket(player.connection, serialized) catch {};
+        }
+    }
+
+    pub fn refreshWorldCommandEnums(self: *Conduit) void {
+        const world_count = self.worlds.count();
+        const world_name_values = self.allocator.alloc([]const u8, world_count) catch return;
+        const transfer_values = self.allocator.alloc([]const u8, world_count) catch {
+            self.allocator.free(world_name_values);
+            return;
+        };
+
+        var index: usize = 0;
+        var names_it = self.worlds.keyIterator();
+        while (names_it.next()) |name| {
+            world_name_values[index] = name.*;
+            transfer_values[index] = name.*;
+            index += 1;
+        }
+
+        const world_name_updated = self.command_registry.updateEnumValues("WorldName", world_name_values) catch false;
+        if (!world_name_updated) self.allocator.free(world_name_values);
+        const transfer_updated = self.command_registry.updateEnumValues("TransferWorld", transfer_values) catch false;
+        if (!transfer_updated) self.allocator.free(transfer_values);
+
+        self.broadcastAvailableCommands();
+    }
+
     pub fn saveAllWorlds(self: *Conduit) void {
         var worlds_it = self.worlds.valueIterator();
         while (worlds_it.next()) |world| {
-            var dims_it = world.*.dimensions.valueIterator();
-            while (dims_it.next()) |dim| {
-                var chunk_iter = dim.*.chunks.valueIterator();
-                while (chunk_iter.next()) |chunk| {
-                    world.*.provider.writeChunkEntities(chunk.*, dim.*) catch {};
-                    world.*.provider.writeBlockEntities(chunk.*, dim.*) catch {};
-                    if (chunk.*.dirty) {
-                        world.*.provider.writeChunk(chunk.*, dim.*) catch continue;
-                    }
-                }
-            }
+            world.*.save();
         }
 
         const snapshots = self.getPlayerSnapshots();
@@ -604,9 +680,12 @@ pub const Conduit = struct {
         self.network.deinit();
         self.console.deinit();
         self.tasks.deinit();
+        self.world_ops.deinit();
         self.command_registry.deinit();
         self.ban_manager.deinit();
         self.permission_manager.deinit();
+        self.player_locations.flush();
+        self.player_locations.deinit();
     }
 };
 
@@ -639,4 +718,9 @@ fn readLevelDatSpawn(io: std.Io, allocator: std.mem.Allocator, path: []const u8)
     };
 
     return Protocol.BlockPosition{ .x = sx, .y = sy, .z = sz };
+}
+
+test {
+    _ = @import("./command/list/world.zig");
+    _ = @import("./world/provider/leveldb-provider.zig");
 }

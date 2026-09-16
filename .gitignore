@@ -24,3 +24,4 @@ worlds/
 libs/leveldb/lib/
 permissions.json
 banned-players.json
+player_locations.json
