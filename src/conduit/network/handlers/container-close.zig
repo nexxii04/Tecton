@@ -7,6 +7,7 @@ const TradeWindowTrait = @import("../../entity/traits/trade-window.zig").TradeWi
 const trade_window = @import("../../entity/traits/trade-window.zig");
 const BarrelTrait = @import("../../world/block/traits/barrel.zig").BarrelTrait;
 const ChestTrait = @import("../../world/block/traits/chest.zig").ChestTrait;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 
 pub fn handleContainerClose(
@@ -71,7 +72,7 @@ fn trySendBlockClose(player: *@import("../../player/player.zig").Player, network
     const block = dimension.getBlockPtr(position) orelse return;
 
     if (block.hasTrait(BarrelTrait.identifier)) {
-        sendBarrelClose(network, block, position);
+        sendBarrelClose(dimension, network, block, position);
         return;
     }
 
@@ -79,9 +80,9 @@ fn trySendBlockClose(player: *@import("../../player/player.zig").Player, network
 
     const state = block.getTraitState(ChestTrait) orelse return;
 
-    sendCloseAt(network, block, position);
+    sendCloseAt(dimension, network, block, position);
     if (state.pair_position) |pair_pos| {
-        sendCloseAt(network, block, .{
+        sendCloseAt(dimension, network, block, .{
             .x = pair_pos.x,
             .y = position.y,
             .z = pair_pos.z,
@@ -89,45 +90,40 @@ fn trySendBlockClose(player: *@import("../../player/player.zig").Player, network
     }
 }
 
-fn sendCloseAt(network: *NetworkHandler, block: *@import("../../world/block/block.zig").Block, position: Protocol.BlockPosition) void {
+fn sendCloseAt(dimension: *Dimension, network: *NetworkHandler, block: *@import("../../world/block/block.zig").Block, position: Protocol.BlockPosition) void {
     const perm = block.getPermutation(0) catch return;
-    const snapshots = network.conduit.getPlayerSnapshots();
 
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        {
-            var s = BinaryStream.init(network.allocator, null, null);
-            defer s.deinit();
-            const event_packet = Protocol.BlockEventPacket{
-                .position = position,
-                .event_type = .ChangeState,
-                .data = 0,
-            };
-            const serialized = event_packet.serialize(&s) catch continue;
-            network.sendPacket(p.connection, serialized) catch {};
-        }
-        {
-            var s = BinaryStream.init(network.allocator, null, null);
-            defer s.deinit();
-            const sound_packet = Protocol.LevelSoundEventPacket{
-                .event = .chest_closed,
-                .position = .{
-                    .x = @floatFromInt(position.x),
-                    .y = @floatFromInt(position.y),
-                    .z = @floatFromInt(position.z),
-                },
-                .data = perm.network_id,
-                .actor_identifier = "",
-                .is_baby_mob = false,
-                .is_global = false,
-            };
-            const serialized = sound_packet.serialize(&s) catch continue;
-            network.sendPacket(p.connection, serialized) catch {};
-        }
-    }
+    var event_stream = BinaryStream.init(network.allocator, null, null);
+    defer event_stream.deinit();
+    const event_packet = Protocol.BlockEventPacket{
+        .position = position,
+        .event_type = .ChangeState,
+        .data = 0,
+    };
+    const event_serialized = event_packet.serialize(&event_stream) catch return;
+    dimension.broadcastBlockUpdateToViewers(position, event_serialized);
+
+    const sound_position = Protocol.Vector3f.init(
+        @floatFromInt(position.x),
+        @floatFromInt(position.y),
+        @floatFromInt(position.z),
+    );
+
+    var sound_stream = BinaryStream.init(network.allocator, null, null);
+    defer sound_stream.deinit();
+    const sound_packet = Protocol.LevelSoundEventPacket{
+        .event = .chest_closed,
+        .position = sound_position,
+        .data = perm.network_id,
+        .actor_identifier = "",
+        .is_baby_mob = false,
+        .is_global = false,
+    };
+    const sound_serialized = sound_packet.serialize(&sound_stream) catch return;
+    dimension.broadcastToNearby(sound_position, Dimension.SOUND_BROADCAST_RADIUS, sound_serialized);
 }
 
-fn sendBarrelClose(network: *NetworkHandler, block: *@import("../../world/block/block.zig").Block, position: Protocol.BlockPosition) void {
+fn sendBarrelClose(dimension: *Dimension, network: *NetworkHandler, block: *@import("../../world/block/block.zig").Block, position: Protocol.BlockPosition) void {
     const BlockType = @import("../../world/block/block-type.zig").BlockType;
     const BlockState = @import("../../world/block/block-permutation.zig").BlockState;
 
@@ -147,37 +143,33 @@ fn sendBarrelClose(network: *NetworkHandler, block: *@import("../../world/block/
     const new_perm = block_type.getPermutation(state);
     block.setPermutation(new_perm, 0) catch {};
 
-    const snapshots = network.conduit.getPlayerSnapshots();
     const network_id: u32 = @bitCast(new_perm.network_id);
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        {
-            var s = BinaryStream.init(network.allocator, null, null);
-            defer s.deinit();
-            const update = Protocol.UpdateBlockPacket{
-                .position = position,
-                .network_block_id = network_id,
-            };
-            const serialized = update.serialize(&s) catch continue;
-            network.sendPacket(p.connection, serialized) catch {};
-        }
-        {
-            var s = BinaryStream.init(network.allocator, null, null);
-            defer s.deinit();
-            const sound = Protocol.LevelSoundEventPacket{
-                .event = .block_barrel_close,
-                .position = .{
-                    .x = @floatFromInt(position.x),
-                    .y = @floatFromInt(position.y),
-                    .z = @floatFromInt(position.z),
-                },
-                .data = new_perm.network_id,
-                .actor_identifier = "",
-                .is_baby_mob = false,
-                .is_global = false,
-            };
-            const serialized = sound.serialize(&s) catch continue;
-            network.sendPacket(p.connection, serialized) catch {};
-        }
-    }
+
+    var update_stream = BinaryStream.init(network.allocator, null, null);
+    defer update_stream.deinit();
+    const update = Protocol.UpdateBlockPacket{
+        .position = position,
+        .network_block_id = network_id,
+    };
+    const update_serialized = update.serialize(&update_stream) catch return;
+    dimension.broadcastBlockUpdateToViewers(position, update_serialized);
+
+    const sound_position = Protocol.Vector3f.init(
+        @floatFromInt(position.x),
+        @floatFromInt(position.y),
+        @floatFromInt(position.z),
+    );
+
+    var sound_stream = BinaryStream.init(network.allocator, null, null);
+    defer sound_stream.deinit();
+    const sound = Protocol.LevelSoundEventPacket{
+        .event = .block_barrel_close,
+        .position = sound_position,
+        .data = new_perm.network_id,
+        .actor_identifier = "",
+        .is_baby_mob = false,
+        .is_global = false,
+    };
+    const sound_serialized = sound.serialize(&sound_stream) catch return;
+    dimension.broadcastToNearby(sound_position, Dimension.SOUND_BROADCAST_RADIUS, sound_serialized);
 }

@@ -33,11 +33,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
         };
         const serialized = packet.serialize(&stream) catch return;
 
-        const snapshots = conduit.getPlayerSnapshots();
-        for (snapshots) |player| {
-            if (!player.spawned) continue;
-            conduit.network.sendPacket(player.connection, serialized) catch {};
-        }
+        dimension.broadcastToEntityViewers(entity, serialized);
     }
 
     {
@@ -55,11 +51,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
         };
         const serialized = attr_packet.serialize(&stream) catch return;
 
-        const snapshots = conduit.getPlayerSnapshots();
-        for (snapshots) |player| {
-            if (!player.spawned) continue;
-            conduit.network.sendPacket(player.connection, serialized) catch {};
-        }
+        dimension.broadcastToEntityViewers(entity, serialized);
     }
 
     if (state.current <= 0) {
@@ -75,11 +67,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
         };
         const serialized = death_packet.serialize(&stream) catch return;
 
-        const snapshots = conduit.getPlayerSnapshots();
-        for (snapshots) |player| {
-            if (!player.spawned) continue;
-            conduit.network.sendPacket(player.connection, serialized) catch {};
-        }
+        dimension.broadcastToEntityViewers(entity, serialized);
 
         dimension.removeEntity(entity) catch {};
     }

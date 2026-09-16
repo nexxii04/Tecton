@@ -160,7 +160,6 @@ fn updateWallBlock(block: *Block, send_blocks: bool) void {
 }
 
 fn sendBlockUpdate(block: *Block, perm: *Permutation) void {
-    const snapshots = block.dimension.world.conduit.getPlayerSnapshots();
     const network_id: u32 = @bitCast(perm.network_id);
 
     var s = BinaryStream.init(block.allocator, null, null);
@@ -172,9 +171,7 @@ fn sendBlockUpdate(block: *Block, perm: *Permutation) void {
     };
     const serialized = packet.serialize(&s) catch return;
 
-    for (snapshots) |p| {
-        if (p.spawned) p.network.sendPacket(p.connection, serialized) catch {};
-    }
+    block.dimension.broadcastBlockUpdateToViewers(block.position, serialized);
 }
 
 pub const WallConnectionTrait = trait_mod.BlockTrait(State, .{

@@ -1,21 +1,24 @@
 const std = @import("std");
+
+const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 
-const World = @import("../world.zig").World;
-const Chunk = @import("../chunk/chunk.zig").Chunk;
+const EntityType = @import("../../entity/entity-type.zig").EntityType;
+const Entity = @import("../../entity/entity.zig").Entity;
+const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
+const ItemEntityTrait = @import("../../entity/traits/item-entity.zig").ItemEntityTrait;
+const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
+const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemType = @import("../../items/item-type.zig").ItemType;
+const Player = @import("../../player/player.zig").Player;
 const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
 const BlockState = @import("../block/block-permutation.zig").BlockState;
 const Block = @import("../block/block.zig").Block;
+const Chunk = @import("../chunk/chunk.zig").Chunk;
 const TerrainGenerator = @import("../generator/terrain-generator.zig").TerrainGenerator;
 const ThreadedGenerator = @import("../generator/threaded-generator.zig").ThreadedGenerator;
-const Entity = @import("../../entity/entity.zig").Entity;
-const EntityType = @import("../../entity/entity-type.zig").EntityType;
-const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
-
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const ItemType = @import("../../items/item-type.zig").ItemType;
-const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
-const ItemEntityTrait = @import("../../entity/traits/item-entity.zig").ItemEntityTrait;
+const World = @import("../world.zig").World;
+const ChunkEntityIndex = @import("./entity-index.zig").ChunkEntityIndex;
 
 pub const ChunkHash = i64;
 
@@ -42,6 +45,7 @@ pub const Dimension = struct {
     dimension_type: Protocol.DimensionType,
     chunks: std.AutoHashMap(ChunkHash, *Chunk),
     entities: std.AutoHashMap(i64, *Entity),
+    entity_index: ChunkEntityIndex,
     blocks: std.AutoHashMap(i64, *Block),
     blocks_by_chunk: std.AutoHashMap(ChunkHash, std.ArrayList(*Block)),
     chunk_packet_cache: std.AutoHashMap(ChunkHash, CachedPacket),
@@ -50,6 +54,7 @@ pub const Dimension = struct {
     spawn_position: Protocol.BlockPosition,
     simulation_distance: i32,
     generator: ?*ThreadedGenerator,
+    inflight_batches: usize = 0,
 
     pub fn init(
         world: *World,
@@ -70,6 +75,7 @@ pub const Dimension = struct {
             .dimension_type = dimension_type,
             .chunks = std.AutoHashMap(ChunkHash, *Chunk).init(allocator),
             .entities = std.AutoHashMap(i64, *Entity).init(allocator),
+            .entity_index = ChunkEntityIndex.init(allocator),
             .blocks = std.AutoHashMap(i64, *Block).init(allocator),
             .blocks_by_chunk = std.AutoHashMap(ChunkHash, std.ArrayList(*Block)).init(allocator),
             .chunk_packet_cache = std.AutoHashMap(ChunkHash, CachedPacket).init(allocator),
@@ -78,6 +84,7 @@ pub const Dimension = struct {
             .spawn_position = spawn,
             .simulation_distance = 4,
             .generator = generator,
+            .inflight_batches = 0,
         };
     }
 
@@ -101,6 +108,7 @@ pub const Dimension = struct {
             self.allocator.destroy(entity.*);
         }
         self.entities.deinit();
+        self.entity_index.deinit();
 
         self.pending_removals.deinit(self.allocator);
 
@@ -198,6 +206,7 @@ pub const Dimension = struct {
 
             var still_needed = false;
             for (snapshots) |player| {
+                if (player.entity.dimension != self) continue;
                 if (player.sent_chunks.contains(h)) {
                     still_needed = true;
                     break;
@@ -333,6 +342,15 @@ pub const Dimension = struct {
         return self.entities.get(runtime_id);
     }
 
+    /// Re-buckets an entity after movement; cheap when the chunk is unchanged.
+    pub fn reindexEntity(self: *Dimension, entity: *Entity) void {
+        self.entity_index.reindex(entity);
+    }
+
+    pub fn entitiesInChunk(self: *Dimension, x: i32, z: i32) []const *Entity {
+        return self.entity_index.bucket(x, z) orelse &.{};
+    }
+
     pub fn spawnEntity(self: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f) !*Entity {
         return self.spawnEntityWithOptions(entity_type, position, "", false);
     }
@@ -345,12 +363,14 @@ pub const Dimension = struct {
         entity.nametag_always_visible = nametag_always_visible;
         try applyGlobalTraits(self.allocator, entity);
         try self.entities.put(entity.runtime_id, entity);
+        self.entity_index.add(entity);
         try self.broadcastAddEntity(entity);
         return entity;
     }
 
     pub fn removeEntity(self: *Dimension, entity: *Entity) !void {
         try self.broadcastRemoveEntity(entity);
+        self.entity_index.remove(entity.runtime_id);
         _ = self.entities.remove(entity.runtime_id);
         entity.deinit();
         self.allocator.destroy(entity);
@@ -360,6 +380,7 @@ pub const Dimension = struct {
         for (self.pending_removals.items) |rid| {
             if (self.entities.fetchRemove(rid)) |entry| {
                 var entity = entry.value;
+                self.entity_index.remove(rid);
                 self.broadcastRemoveEntity(entity) catch {};
                 entity.deinit();
                 self.allocator.destroy(entity);
@@ -374,8 +395,6 @@ pub const Dimension = struct {
     }
 
     pub fn spawnItemStackEntity(self: *Dimension, stack: ItemStack, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !*Entity {
-        const BinaryStream = @import("BinaryStream").BinaryStream;
-
         const entity = try self.allocator.create(Entity);
         entity.* = Entity.init(self.allocator, &item_entity_type, self);
         entity.position = position;
@@ -400,36 +419,103 @@ pub const Dimension = struct {
 
         entity.motion = velocity;
         try self.entities.put(entity.runtime_id, entity);
-        const item_state = entity.getTraitState(ItemEntityTrait) orelse return error.MissingItemEntityTrait;
-        const net_item = item_state.stack.toNetworkStack();
+        self.entity_index.add(entity);
 
         var stream = BinaryStream.init(self.allocator, null, null);
         defer stream.deinit();
-
-        const packet = Protocol.AddItemActorPacket{
-            .unique_entity_id = entity.unique_id,
-            .runtime_entity_id = @bitCast(entity.runtime_id),
-            .item = net_item,
-            .position = position,
-            .velocity = velocity,
-        };
-        const serialized = try packet.serialize(&stream, self.allocator);
-
-        const conduit = self.world.conduit;
-        const snapshots = conduit.getPlayerSnapshots();
-        for (snapshots) |player| {
-            if (!player.spawned) continue;
-            conduit.network.sendPacket(player.connection, serialized) catch {};
-        }
+        const serialized = try self.serializeAddItemActor(entity, &stream);
+        self.sendAddToViewers(entity, serialized);
 
         return entity;
     }
 
-    fn broadcastAddEntity(self: *Dimension, entity: *Entity) !void {
-        const BinaryStream = @import("BinaryStream").BinaryStream;
-        var stream = BinaryStream.init(self.allocator, null, null);
-        defer stream.deinit();
+    /// Sends `data` to spawned players whose current dimension is this one.
+    /// Never call this while holding an outer getPlayerSnapshots() slice.
+    pub fn broadcastToViewers(self: *Dimension, data: []const u8) void {
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            if (player.entity.dimension != self) continue;
+            conduit.network.sendPacket(player.connection, data) catch {};
+        }
+    }
 
+    /// Sends `data` only to same-dimension players tracking `entity`.
+    pub fn broadcastToEntityViewers(self: *Dimension, entity: *const Entity, data: []const u8) void {
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            if (player.entity.dimension != self) continue;
+            if (!player.visible_entities.contains(entity.runtime_id)) continue;
+            conduit.network.sendPacket(player.connection, data) catch {};
+        }
+    }
+
+    pub const SOUND_BROADCAST_RADIUS: f32 = 32.0;
+    pub const PARTICLE_BROADCAST_RADIUS: f32 = 64.0;
+
+    /// Block state updates must reach every player whose client already holds
+    /// the chunk; a tighter radius would leave those clients desynced.
+    pub fn broadcastBlockUpdateToViewers(self: *Dimension, pos: Protocol.BlockPosition, data: []const u8) void {
+        self.sendBlockUpdateToViewers(pos, null, data);
+    }
+
+    /// Block update variant that never echoes to `except` (the actor already
+    /// predicted the change client-side).
+    pub fn broadcastBlockUpdateToViewersExcept(self: *Dimension, pos: Protocol.BlockPosition, except: *Player, data: []const u8) void {
+        self.sendBlockUpdateToViewers(pos, except, data);
+    }
+
+    fn sendBlockUpdateToViewers(self: *Dimension, pos: Protocol.BlockPosition, except: ?*Player, data: []const u8) void {
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        const block_cx = pos.x >> 4;
+        const block_cz = pos.z >> 4;
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            if (player.entity.dimension != self) continue;
+            if (except) |skip| {
+                if (player == skip) continue;
+            }
+            const player_cx = @as(i32, @intFromFloat(@floor(player.entity.position.x))) >> 4;
+            const player_cz = @as(i32, @intFromFloat(@floor(player.entity.position.z))) >> 4;
+            if (!withinChunkViewDistance(block_cx - player_cx, block_cz - player_cz, player.view_distance)) continue;
+            conduit.network.sendPacket(player.connection, data) catch {};
+        }
+    }
+
+    /// Sends `data` to same-dimension players within `radius` blocks of `pos`.
+    pub fn broadcastToNearby(self: *Dimension, pos: Protocol.Vector3f, radius: f32, data: []const u8) void {
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            if (player.entity.dimension != self) continue;
+            const dx = player.entity.position.x - pos.x;
+            const dy = player.entity.position.y - pos.y;
+            const dz = player.entity.position.z - pos.z;
+            if (!withinRadius(dx, dy, dz, radius)) continue;
+            conduit.network.sendPacket(player.connection, data) catch {};
+        }
+    }
+
+    fn withinChunkViewDistance(dx: i32, dz: i32, view_distance: i32) bool {
+        return @max(@abs(dx), @abs(dz)) <= view_distance;
+    }
+
+    fn withinRadius(dx: f32, dy: f32, dz: f32, radius: f32) bool {
+        return dx * dx + dy * dy + dz * dz <= radius * radius;
+    }
+
+    pub fn withinViewDistance(dx: f32, dz: f32, view_distance: i32) bool {
+        const range = view_distance * 16;
+        const range_sq: f32 = @floatFromInt(range * range);
+        return dx * dx + dz * dz <= range_sq;
+    }
+
+    fn serializeAddEntity(self: *Dimension, entity: *Entity, stream: *BinaryStream) ![]const u8 {
         const flags_data = try entity.flags.buildDataItems(self.allocator);
         defer self.allocator.free(flags_data);
 
@@ -465,31 +551,78 @@ pub const Dimension = struct {
             .entity_properties = Protocol.PropertySyncData.init(self.allocator),
         };
 
-        const serialized = try packet.serialize(&stream);
+        return try packet.serialize(stream);
+    }
 
+    fn serializeAddItemActor(self: *Dimension, entity: *Entity, stream: *BinaryStream) ![]const u8 {
+        const item_state = entity.getTraitState(ItemEntityTrait) orelse return error.MissingItemEntityTrait;
+        const packet = Protocol.AddItemActorPacket{
+            .unique_entity_id = entity.unique_id,
+            .runtime_entity_id = @bitCast(entity.runtime_id),
+            .item = item_state.stack.toNetworkStack(),
+            .position = entity.position,
+            .velocity = entity.motion,
+        };
+        return try packet.serialize(stream, self.allocator);
+    }
+
+    /// Sends the matching add packet for `entity` to one player. Returns
+    /// whether the packet was handed to the connection.
+    pub fn sendAddEntityToPlayer(self: *Dimension, player: *Player, entity: *Entity) bool {
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+        const serialized = if (entity.getTraitState(ItemEntityTrait) != null)
+            self.serializeAddItemActor(entity, &stream) catch return false
+        else
+            self.serializeAddEntity(entity, &stream) catch return false;
+        self.world.conduit.network.sendPacket(player.connection, serialized) catch return false;
+        return true;
+    }
+
+    pub fn sendRemoveEntityToPlayer(self: *Dimension, player: *Player, entity: *Entity) void {
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+        const packet = Protocol.RemoveEntityPacket{ .unique_entity_id = entity.unique_id };
+        const serialized = packet.serialize(&stream) catch return;
+        self.world.conduit.network.sendPacket(player.connection, serialized) catch {};
+    }
+
+    /// Sends a pre-serialized add packet to same-dimension players within
+    /// view range and records the entity in their tracker.
+    fn sendAddToViewers(self: *Dimension, entity: *Entity, serialized: []const u8) void {
         const conduit = self.world.conduit;
         const snapshots = conduit.getPlayerSnapshots();
         for (snapshots) |player| {
             if (!player.spawned) continue;
-            conduit.network.sendPacket(player.connection, serialized) catch {};
+            if (player.entity.dimension != self) continue;
+            const dx = player.entity.position.x - entity.position.x;
+            const dz = player.entity.position.z - entity.position.z;
+            if (!withinViewDistance(dx, dz, player.view_distance)) continue;
+            conduit.network.sendPacket(player.connection, serialized) catch continue;
+            player.visible_entities.put(entity.runtime_id, entity.unique_id) catch {};
         }
     }
 
+    fn broadcastAddEntity(self: *Dimension, entity: *Entity) !void {
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+        const serialized = try self.serializeAddEntity(entity, &stream);
+        self.sendAddToViewers(entity, serialized);
+    }
+
     fn broadcastRemoveEntity(self: *Dimension, entity: *Entity) !void {
-        const BinaryStream = @import("BinaryStream").BinaryStream;
         var stream = BinaryStream.init(self.allocator, null, null);
         defer stream.deinit();
 
         const packet = Protocol.RemoveEntityPacket{
             .unique_entity_id = entity.unique_id,
         };
-
         const serialized = try packet.serialize(&stream);
 
         const conduit = self.world.conduit;
         const snapshots = conduit.getPlayerSnapshots();
         for (snapshots) |player| {
-            if (!player.spawned) continue;
+            if (player.visible_entities.fetchRemove(entity.runtime_id) == null) continue;
             conduit.network.sendPacket(player.connection, serialized) catch {};
         }
     }
@@ -697,6 +830,41 @@ pub fn isChunkInSimRange(cx: i32, cz: i32, px: i32, pz: i32, sim_dist: i32) bool
     const dx = cx - px;
     const dz = cz - pz;
     return dx * dx + dz * dz <= sim_dist * sim_dist;
+}
+
+test "view distance range predicate compares squared horizontal distance" {
+    try std.testing.expect(Dimension.withinViewDistance(0, 0, 8));
+    try std.testing.expect(Dimension.withinViewDistance(128, 0, 8));
+    try std.testing.expect(!Dimension.withinViewDistance(129, 0, 8));
+    try std.testing.expect(Dimension.withinViewDistance(90, 90, 8));
+    try std.testing.expect(!Dimension.withinViewDistance(100, 100, 8));
+    try std.testing.expect(Dimension.withinViewDistance(16, 0, 1));
+    try std.testing.expect(!Dimension.withinViewDistance(17, 0, 1));
+}
+
+test "chunk view distance predicate uses chebyshev distance" {
+    try std.testing.expect(Dimension.withinChunkViewDistance(0, 0, 4));
+    try std.testing.expect(Dimension.withinChunkViewDistance(4, -4, 4));
+    try std.testing.expect(!Dimension.withinChunkViewDistance(5, 4, 4));
+    try std.testing.expect(!Dimension.withinChunkViewDistance(-4, 5, 4));
+    try std.testing.expect(Dimension.withinChunkViewDistance(8, 0, 8));
+    try std.testing.expect(!Dimension.withinChunkViewDistance(9, 0, 8));
+}
+
+test "entity index chunk hash matches dimension chunk hash" {
+    const entity_index = @import("./entity-index.zig");
+    try std.testing.expectEqual(chunkHash(0, 0), entity_index.chunkHash(0, 0));
+    try std.testing.expectEqual(chunkHash(-33, 17), entity_index.chunkHash(-33, 17));
+    try std.testing.expectEqual(chunkHash(1000, -1000), entity_index.chunkHash(1000, -1000));
+    try std.testing.expectEqual(chunkHash(-1, -1), entity_index.chunkHash(-1, -1));
+}
+
+test "nearby broadcast predicate compares 3d euclidean distance" {
+    try std.testing.expect(Dimension.withinRadius(0, 0, 0, 32));
+    try std.testing.expect(Dimension.withinRadius(32, 0, 0, 32));
+    try std.testing.expect(!Dimension.withinRadius(33, 0, 0, 32));
+    try std.testing.expect(Dimension.withinRadius(16, 16, 16, 32));
+    try std.testing.expect(!Dimension.withinRadius(20, 20, 20, 32));
 }
 
 test "random tick spatial filtering" {

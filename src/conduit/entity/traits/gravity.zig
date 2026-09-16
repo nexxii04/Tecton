@@ -100,11 +100,7 @@ fn broadcastMove(entity: *Entity, dimension: *Dimension, on_ground: bool) void {
 
     const serialized = packet.serialize(&stream) catch return;
 
-    const snapshots = conduit.getPlayerSnapshots();
-    for (snapshots) |player| {
-        if (!player.spawned) continue;
-        conduit.network.sendPacket(player.connection, serialized) catch {};
-    }
+    dimension.broadcastToEntityViewers(entity, serialized);
 }
 
 pub const GravityTrait = EntityTrait(State, .{

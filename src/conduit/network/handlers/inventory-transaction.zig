@@ -61,13 +61,15 @@ pub fn handleInventoryTransaction(
         },
         .UseItemOnEntity => {
             const data = packet.transaction_data.use_item_on_entity;
+            const dimension = player.entity.dimension orelse return;
             if (data.action_type == 0) {
-                const target = network.conduit.getEntityByRuntimeId(@bitCast(data.target_entity_runtime_id)) orelse return;
+                const target = dimension.getEntity(@bitCast(data.target_entity_runtime_id)) orelse return;
                 _ = target.fireEvent(.Interact, .{ target, player });
                 return;
             }
+
             if (data.action_type == 1) {
-                const target = network.conduit.getEntityByRuntimeId(@bitCast(data.target_entity_runtime_id)) orelse return;
+                const target = dimension.getEntity(@bitCast(data.target_entity_runtime_id)) orelse return;
 
                 const dx = target.position.x - player.entity.position.x;
                 const dz = target.position.z - player.entity.position.z;
@@ -171,19 +173,14 @@ fn handleUseItem(
     }
 
     const network_id: u32 = @bitCast(permutation.network_id);
-    const snapshots = network.conduit.getPlayerSnapshots();
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        if (p.entity.runtime_id == player.entity.runtime_id) continue;
-        var s = BinaryStream.init(network.allocator, null, null);
-        defer s.deinit();
-        const update = Protocol.UpdateBlockPacket{
-            .position = pos,
-            .network_block_id = network_id,
-        };
-        const serialized = try update.serialize(&s);
-        try network.sendPacket(p.connection, serialized);
-    }
+    var s = BinaryStream.init(network.allocator, null, null);
+    defer s.deinit();
+    const update = Protocol.UpdateBlockPacket{
+        .position = pos,
+        .network_block_id = network_id,
+    };
+    const serialized = try update.serialize(&s);
+    dimension.broadcastBlockUpdateToViewersExcept(pos, player, serialized);
 }
 
 fn broadcastMotion(network: *NetworkHandler, entity: *const @import("../../entity/entity.zig").Entity) void {
@@ -197,9 +194,5 @@ fn broadcastMotion(network: *NetworkHandler, entity: *const @import("../../entit
     };
     const serialized = motion_packet.serialize(&stream) catch return;
 
-    const snapshots = network.conduit.getPlayerSnapshots();
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        network.sendPacket(p.connection, serialized) catch {};
-    }
+    (entity.dimension orelse return).broadcastToEntityViewers(entity, serialized);
 }

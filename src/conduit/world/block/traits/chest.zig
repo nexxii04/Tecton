@@ -4,6 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Block = @import("../block.zig").Block;
 const Chunk = @import("../../chunk/chunk.zig").Chunk;
 const Dimension = @import("../../dimension/dimension.zig").Dimension;
+const ChunkEntityIndex = @import("../../dimension/entity-index.zig").ChunkEntityIndex;
 const CachedPacket = @import("../../dimension/dimension.zig").CachedPacket;
 const chunkHash = @import("../../dimension/dimension.zig").chunkHash;
 const BlockPermutation = @import("../block-permutation.zig").BlockPermutation;
@@ -415,48 +416,38 @@ fn sendBlockEvent(block: *Block, data: i32) void {
 }
 
 fn sendBlockEventAt(block: *Block, position: Protocol.BlockPosition, data: i32) void {
-    const conduit = block.dimension.world.conduit;
-    const snapshots = conduit.getPlayerSnapshots();
-
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        var stream = BinaryStream.init(block.allocator, null, null);
-        defer stream.deinit();
-        const packet = Protocol.BlockEventPacket{
-            .position = position,
-            .event_type = .ChangeState,
-            .data = data,
-        };
-        const serialized = packet.serialize(&stream) catch continue;
-        p.network.sendPacket(p.connection, serialized) catch {};
-    }
+    var stream = BinaryStream.init(block.allocator, null, null);
+    defer stream.deinit();
+    const packet = Protocol.BlockEventPacket{
+        .position = position,
+        .event_type = .ChangeState,
+        .data = data,
+    };
+    const serialized = packet.serialize(&stream) catch return;
+    block.dimension.broadcastBlockUpdateToViewers(position, serialized);
 }
 
 fn sendSound(block: *Block, event: Protocol.SoundEvent) void {
-    const conduit = block.dimension.world.conduit;
-    const snapshots = conduit.getPlayerSnapshots();
     const perm = block.getPermutation(0) catch return;
     const network_id: i32 = perm.network_id;
+    const position = Protocol.Vector3f.init(
+        @floatFromInt(block.position.x),
+        @floatFromInt(block.position.y),
+        @floatFromInt(block.position.z),
+    );
 
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        var stream = BinaryStream.init(block.allocator, null, null);
-        defer stream.deinit();
-        const packet = Protocol.LevelSoundEventPacket{
-            .event = event,
-            .position = .{
-                .x = @floatFromInt(block.position.x),
-                .y = @floatFromInt(block.position.y),
-                .z = @floatFromInt(block.position.z),
-            },
-            .data = network_id,
-            .actor_identifier = "",
-            .is_baby_mob = false,
-            .is_global = false,
-        };
-        const serialized = packet.serialize(&stream) catch continue;
-        p.network.sendPacket(p.connection, serialized) catch {};
-    }
+    var stream = BinaryStream.init(block.allocator, null, null);
+    defer stream.deinit();
+    const packet = Protocol.LevelSoundEventPacket{
+        .event = event,
+        .position = position,
+        .data = network_id,
+        .actor_identifier = "",
+        .is_baby_mob = false,
+        .is_global = false,
+    };
+    const serialized = packet.serialize(&stream) catch return;
+    block.dimension.broadcastToNearby(position, Dimension.SOUND_BROADCAST_RADIUS, serialized);
 }
 
 pub const ChestTrait = trait_mod.BlockTrait(State, .{
@@ -525,6 +516,7 @@ test "double chest preserves upper-half items when halves load in reverse order"
         .dimension_type = .Overworld,
         .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
         .entities = std.AutoHashMap(i64, *Entity).init(allocator),
+        .entity_index = ChunkEntityIndex.init(allocator),
         .blocks = std.AutoHashMap(i64, *Block).init(allocator),
         .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
         .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
@@ -624,6 +616,7 @@ test "tile fix uses air then real block" {
         .dimension_type = .Overworld,
         .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
         .entities = std.AutoHashMap(i64, *Entity).init(allocator),
+        .entity_index = ChunkEntityIndex.init(allocator),
         .blocks = std.AutoHashMap(i64, *Block).init(allocator),
         .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
         .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
@@ -693,6 +686,7 @@ test "double chest serialization writes pairlead as int tag" {
         .dimension_type = .Overworld,
         .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
         .entities = std.AutoHashMap(i64, *Entity).init(allocator),
+        .entity_index = ChunkEntityIndex.init(allocator),
         .blocks = std.AutoHashMap(i64, *Block).init(allocator),
         .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
         .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
@@ -780,6 +774,7 @@ test "double chest preserves upper-half items across repeated unload cycles" {
         .dimension_type = .Overworld,
         .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
         .entities = std.AutoHashMap(i64, *Entity).init(allocator),
+        .entity_index = ChunkEntityIndex.init(allocator),
         .blocks = std.AutoHashMap(i64, *Block).init(allocator),
         .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
         .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),

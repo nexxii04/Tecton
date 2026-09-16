@@ -124,20 +124,15 @@ pub fn placeUpperBlock(allocator: std.mem.Allocator, dimension: *Dimension, pos:
     try dimension.setPermutation(above, upper_perm, 0);
 
     const BinaryStream = @import("BinaryStream").BinaryStream;
-    const conduit = dimension.world.conduit;
-    const snapshots = conduit.getPlayerSnapshots();
     const network_id: u32 = @bitCast(upper_perm.network_id);
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        var s = BinaryStream.init(allocator, null, null);
-        defer s.deinit();
-        const update = Protocol.UpdateBlockPacket{
-            .position = above,
-            .network_block_id = network_id,
-        };
-        const serialized = update.serialize(&s) catch continue;
-        p.network.sendPacket(p.connection, serialized) catch {};
-    }
+    var s = BinaryStream.init(allocator, null, null);
+    defer s.deinit();
+    const update = Protocol.UpdateBlockPacket{
+        .position = above,
+        .network_block_id = network_id,
+    };
+    const serialized = update.serialize(&s) catch return;
+    dimension.broadcastBlockUpdateToViewers(above, serialized);
 
     const trait_apply = @import("./trait.zig").applyTraitsForBlock;
     try trait_apply(allocator, dimension, above);

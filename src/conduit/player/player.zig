@@ -57,6 +57,7 @@ pub const Player = struct {
     sent_chunks: std.AutoHashMap(i64, void),
     pending_chunks: std.AutoHashMap(i64, void),
     visible_players: std.AutoHashMap(i64, void),
+    visible_entities: std.AutoHashMap(i64, i64),
     pending_removal: std.atomic.Value(bool) = .init(false),
     spawned: bool = false,
     join_startup_started: bool = false,
@@ -84,6 +85,7 @@ pub const Player = struct {
             .sent_chunks = std.AutoHashMap(i64, void).init(allocator),
             .pending_chunks = std.AutoHashMap(i64, void).init(allocator),
             .visible_players = std.AutoHashMap(i64, void).init(allocator),
+            .visible_entities = std.AutoHashMap(i64, i64).init(allocator),
         };
 
         self.entity.flags.setFlag(.HasGravity, true);
@@ -136,6 +138,7 @@ pub const Player = struct {
         self.sent_chunks.deinit();
         self.pending_chunks.deinit();
         self.visible_players.deinit();
+        self.visible_entities.deinit();
         self.login_data.deinit();
         self.entity.deinit();
     }
@@ -186,6 +189,10 @@ pub const Player = struct {
     /// cancellation assume tick-thread exclusive access.
     pub fn finalizeRemoval(self: *Player) void {
         self.savePlayerData();
+        if (self.entity.dimension) |dimension| {
+            self.network.conduit.setPlayerLocation(self.uuid, dimension.world.identifier, dimension.identifier);
+        }
+
         self.network.conduit.tasks.cancelByOwner("chunk_streaming", self.entity.runtime_id, ChunkLoadingTrait.destroyStreamState);
         self.network.conduit.tasks.cancelByOwner("join_startup", self.entity.runtime_id, null);
         self.network.conduit.tasks.cancelByOwner("player_init", self.entity.runtime_id, null);
@@ -200,11 +207,14 @@ pub const Player = struct {
             const remove = Protocol.RemoveEntityPacket{ .unique_entity_id = self.entity.unique_id };
             const serialized = remove.serialize(&stream) catch null;
             if (serialized) |data| {
-                for (snapshots) |other| {
-                    if (other.entity.runtime_id == self.entity.runtime_id) continue;
-                    if (!other.spawned) continue;
-                    _ = other.visible_players.remove(self.entity.runtime_id);
-                    self.network.sendPacket(other.connection, data) catch {};
+                if (self.entity.dimension) |dimension| {
+                    for (snapshots) |other| {
+                        if (other.entity.runtime_id == self.entity.runtime_id) continue;
+                        if (!other.spawned) continue;
+                        if (other.entity.dimension != dimension) continue;
+                        _ = other.visible_players.remove(self.entity.runtime_id);
+                        self.network.sendPacket(other.connection, data) catch {};
+                    }
                 }
             }
         }
@@ -252,6 +262,11 @@ pub const Player = struct {
     }
 
     pub fn transferToDimension(self: *Player, dimension: *Dimension) void {
+        if (self.pending_dimension != null) {
+            Raknet.Logger.WARN("Player {s} already has a pending dimension transfer", .{self.username});
+            return;
+        }
+
         self.savePlayerData();
         self.network.conduit.tasks.cancelByOwner("chunk_streaming", self.entity.runtime_id, ChunkLoadingTrait.destroyStreamState);
         self.network.conduit.tasks.cancelByOwner("join_startup", self.entity.runtime_id, null);
@@ -261,6 +276,8 @@ pub const Player = struct {
             const s: *ChunkLoadingTrait.State = @ptrCast(@alignCast(state));
             s.initialized = false;
         }
+
+        self.clearTransferVisibility();
 
         const spawn = dimension.spawn_position;
         const pos = Protocol.Vector3f.init(
@@ -273,6 +290,7 @@ pub const Player = struct {
         if (current_type != null and current_type.? == dimension.dimension_type) {
             self.entity.dimension = dimension;
             self.entity.position = pos;
+            self.network.conduit.setPlayerLocation(self.uuid, dimension.world.identifier, dimension.identifier);
 
             var stream = BinaryStream.init(self.entity.allocator, null, null);
             defer stream.deinit();
@@ -298,6 +316,33 @@ pub const Player = struct {
             };
             const serialized = pkt.serialize(&stream) catch return;
             self.network.sendPacket(self.connection, serialized) catch {};
+        }
+    }
+
+    fn clearTransferVisibility(self: *Player) void {
+        const conduit = self.network.conduit;
+
+        var visible_it = self.visible_players.keyIterator();
+        while (visible_it.next()) |runtime_id| {
+            const other = conduit.players.get(runtime_id.*) orelse continue;
+            if (other.pending_removal.load(.acquire)) continue;
+            sendRemoveEntity(self, other.entity.unique_id);
+        }
+        self.visible_players.clearRetainingCapacity();
+
+        var entity_it = self.visible_entities.iterator();
+        while (entity_it.next()) |entry| {
+            sendRemoveEntity(self, entry.value_ptr.*);
+        }
+        self.visible_entities.clearRetainingCapacity();
+
+        const snapshots = conduit.getPlayerSnapshots();
+        for (snapshots) |other| {
+            if (other.entity.runtime_id == self.entity.runtime_id) continue;
+            if (!other.spawned) continue;
+            if (other.visible_players.remove(self.entity.runtime_id)) {
+                sendRemoveEntity(other, self.entity.unique_id);
+            }
         }
     }
 
@@ -363,6 +408,14 @@ pub const Player = struct {
         ChunkLoadingTrait.queueChunkStreaming(self) catch {};
     }
 };
+
+fn sendRemoveEntity(player: *Player, unique_entity_id: i64) void {
+    var stream = BinaryStream.init(player.entity.allocator, null, null);
+    defer stream.deinit();
+    const packet = Protocol.RemoveEntityPacket{ .unique_entity_id = unique_entity_id };
+    const serialized = packet.serialize(&stream) catch return;
+    player.network.sendPacket(player.connection, serialized) catch {};
+}
 
 test "player drop velocity matches pocketmine direction toss" {
     const vel = playerDropVelocity(Protocol.Vector2f.init(0, 0));

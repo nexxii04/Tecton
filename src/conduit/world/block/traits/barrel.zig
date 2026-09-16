@@ -6,6 +6,7 @@ const BlockPermutation = @import("../block-permutation.zig").BlockPermutation;
 const BlockType = @import("../block-type.zig").BlockType;
 const BlockState = @import("../block-permutation.zig").BlockState;
 const Player = @import("../../../player/player.zig").Player;
+const Dimension = @import("../../dimension/dimension.zig").Dimension;
 const BlockContainer = @import("../../../container/block-container.zig").BlockContainer;
 const trait_mod = @import("./trait.zig");
 const CompoundTag = @import("nbt").CompoundTag;
@@ -124,46 +125,37 @@ fn setOpenBit(block: *Block, open: bool) void {
     const new_perm = block_type.getPermutation(state);
     block.setPermutation(new_perm, 0) catch {};
 
-    const conduit = block.dimension.world.conduit;
-    const snapshots = conduit.getPlayerSnapshots();
     const network_id: u32 = @bitCast(new_perm.network_id);
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        var s = BinaryStream.init(block.allocator, null, null);
-        defer s.deinit();
-        const update = Protocol.UpdateBlockPacket{
-            .position = block.position,
-            .network_block_id = network_id,
-        };
-        const serialized = update.serialize(&s) catch continue;
-        p.network.sendPacket(p.connection, serialized) catch {};
-    }
+    var s = BinaryStream.init(block.allocator, null, null);
+    defer s.deinit();
+    const update = Protocol.UpdateBlockPacket{
+        .position = block.position,
+        .network_block_id = network_id,
+    };
+    const serialized = update.serialize(&s) catch return;
+    block.dimension.broadcastBlockUpdateToViewers(block.position, serialized);
 }
 
 fn sendSound(block: *Block, event: Protocol.SoundEvent) void {
-    const conduit = block.dimension.world.conduit;
-    const snapshots = conduit.getPlayerSnapshots();
     const perm = block.getPermutation(0) catch return;
+    const position = Protocol.Vector3f.init(
+        @floatFromInt(block.position.x),
+        @floatFromInt(block.position.y),
+        @floatFromInt(block.position.z),
+    );
 
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        var s = BinaryStream.init(block.allocator, null, null);
-        defer s.deinit();
-        const packet = Protocol.LevelSoundEventPacket{
-            .event = event,
-            .position = .{
-                .x = @floatFromInt(block.position.x),
-                .y = @floatFromInt(block.position.y),
-                .z = @floatFromInt(block.position.z),
-            },
-            .data = perm.network_id,
-            .actor_identifier = "",
-            .is_baby_mob = false,
-            .is_global = false,
-        };
-        const serialized = packet.serialize(&s) catch continue;
-        p.network.sendPacket(p.connection, serialized) catch {};
-    }
+    var s = BinaryStream.init(block.allocator, null, null);
+    defer s.deinit();
+    const packet = Protocol.LevelSoundEventPacket{
+        .event = event,
+        .position = position,
+        .data = perm.network_id,
+        .actor_identifier = "",
+        .is_baby_mob = false,
+        .is_global = false,
+    };
+    const serialized = packet.serialize(&s) catch return;
+    block.dimension.broadcastToNearby(position, Dimension.SOUND_BROADCAST_RADIUS, serialized);
 }
 
 pub const BarrelTrait = trait_mod.BlockTrait(State, .{

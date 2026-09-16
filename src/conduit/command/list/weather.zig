@@ -4,6 +4,7 @@ const Protocol = @import("protocol");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const types = @import("../types.zig");
 
 pub fn register(registry: *CommandRegistry) !void {
@@ -54,17 +55,29 @@ fn handle(raw: *anyopaque) void {
 }
 
 fn broadcastLevelEvent(ctx: *CommandContext, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
-    const snapshots = ctx.network.conduit.getPlayerSnapshots();
-    for (snapshots) |player| {
-        if (!player.spawned) continue;
-        var stream = BinaryStream.init(ctx.allocator, null, null);
-        defer stream.deinit();
-        const pkt = Protocol.LevelEventPacket{
-            .event = event,
-            .position = position,
-            .data = data,
-        };
-        const serialized = pkt.serialize(&stream) catch continue;
-        player.network.sendPacket(player.connection, serialized) catch {};
+    const dimension = resolveWeatherDimension(ctx) orelse return;
+
+    var stream = BinaryStream.init(ctx.allocator, null, null);
+    defer stream.deinit();
+    const pkt = Protocol.LevelEventPacket{
+        .event = event,
+        .position = position,
+        .data = data,
+    };
+    const serialized = pkt.serialize(&stream) catch return;
+    dimension.broadcastToViewers(serialized);
+}
+
+fn resolveWeatherDimension(ctx: *CommandContext) ?*Dimension {
+    if (ctx.player) |player| return player.entity.dimension;
+
+    const conduit = ctx.network.conduit;
+    if (conduit.getWorld("world")) |world| {
+        if (world.getDimension("overworld")) |dimension| return dimension;
     }
+    var worlds_it = conduit.worlds.valueIterator();
+    const world_entry = worlds_it.next() orelse return null;
+    var dims_it = world_entry.*.dimensions.valueIterator();
+    const dim_entry = dims_it.next() orelse return null;
+    return dim_entry.*;
 }

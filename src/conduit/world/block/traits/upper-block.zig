@@ -21,20 +21,15 @@ fn onBreak(_: *State, block: *Block, _: ?*Player) bool {
     const air = BlockPermutation.resolve(block.allocator, "minecraft:air", null) catch return true;
     block.dimension.setPermutation(other_pos, air, 0) catch {};
 
-    const conduit = block.dimension.world.conduit;
-    const snapshots = conduit.getPlayerSnapshots();
     const network_id: u32 = @bitCast(air.network_id);
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        var s = BinaryStream.init(block.allocator, null, null);
-        defer s.deinit();
-        const update = Protocol.UpdateBlockPacket{
-            .position = other_pos,
-            .network_block_id = network_id,
-        };
-        const serialized = update.serialize(&s) catch continue;
-        p.network.sendPacket(p.connection, serialized) catch {};
-    }
+    var s = BinaryStream.init(block.allocator, null, null);
+    defer s.deinit();
+    const update = Protocol.UpdateBlockPacket{
+        .position = other_pos,
+        .network_block_id = network_id,
+    };
+    const serialized = update.serialize(&s) catch return true;
+    block.dimension.broadcastBlockUpdateToViewers(other_pos, serialized);
 
     return true;
 }

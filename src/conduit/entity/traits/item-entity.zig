@@ -72,8 +72,12 @@ fn onTick(state: *State, entity: *Entity) void {
 
     const snapshots = conduit.getPlayerSnapshots();
 
+    var collector: ?*Player = null;
+    var magnet_motion: ?Protocol.Vector3f = null;
+
     for (snapshots) |player| {
         if (!player.spawned) continue;
+        if (player.entity.dimension != dimension) continue;
         if (player.gamemode == .Spectator) continue;
         const feet_pos = Protocol.Vector3f.init(player.entity.position.x, player.entity.position.y - PLAYER_EYE_HEIGHT, player.entity.position.z);
         const dist = feet_pos.distance(entity.position);
@@ -84,20 +88,28 @@ fn onTick(state: *State, entity: *Entity) void {
 
             if (!tryStackIntoInventory(&inv_state.container.base, &state.stack)) continue;
             inv_state.container.sendOwnerContentUpdate();
-
-            broadcastPickup(dimension, entity, player);
-            markForRemoval(state, entity);
-            return;
+            collector = player;
+            break;
         }
 
         const dir = feet_pos.subtract(entity.position);
         const speed: f32 = 0.4;
-        entity.motion = Protocol.Vector3f.init(
+        magnet_motion = Protocol.Vector3f.init(
             dir.x / dist * speed,
             dir.y / dist * speed + 0.06,
             dir.z / dist * speed,
         );
+        break;
+    }
+
+    if (collector) |player| {
+        broadcastPickup(dimension, entity, player);
+        markForRemoval(state, entity);
         return;
+    }
+
+    if (magnet_motion) |motion| {
+        entity.motion = motion;
     }
 }
 
@@ -152,11 +164,8 @@ fn broadcastPickup(dimension: *Dimension, entity: *Entity, player: *Player) void
     };
     const serialized = packet.serialize(&stream) catch return;
 
-    const snapshots = conduit.getPlayerSnapshots();
-    for (snapshots) |p| {
-        if (!p.spawned) continue;
-        conduit.network.sendPacket(p.connection, serialized) catch {};
-    }
+    player.network.sendPacket(player.connection, serialized) catch {};
+    dimension.broadcastToEntityViewers(entity, serialized);
 }
 
 fn tryMergeGroundedEntity(dimension: *Dimension, entity: *Entity, state: *State) void {
@@ -190,11 +199,7 @@ fn refreshMergedItemEntity(dimension: *Dimension, entity: *Entity) void {
     };
     const serialized = packet.serialize(&stream, conduit.allocator) catch return;
 
-    const snapshots = conduit.getPlayerSnapshots();
-    for (snapshots) |player| {
-        if (!player.spawned) continue;
-        conduit.network.sendPacket(player.connection, serialized) catch {};
-    }
+    dimension.broadcastToEntityViewers(entity, serialized);
 }
 
 fn tryMergeNearbyGrounded(dimension: *Dimension, entity: *Entity, state: *const State, incoming_grounded: bool) ?*Entity {

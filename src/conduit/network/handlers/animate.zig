@@ -22,8 +22,10 @@ pub fn handleAnimate(
     };
     const serialized = try out_packet.serialize(&out_stream);
 
+    const dimension = player.entity.dimension orelse return;
     const snapshots = network.conduit.getPlayerSnapshots();
     for (snapshots) |other| {
+        if (other.entity.dimension != dimension) continue;
         if (other.entity.runtime_id == player.entity.runtime_id) continue;
         if (!other.spawned) continue;
         if (!other.visible_players.contains(player.entity.runtime_id)) continue;
