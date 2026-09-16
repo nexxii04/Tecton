@@ -43,9 +43,10 @@ pub const EntityActorFlags = struct {
     }
 
     pub fn buildDataItems(self: *const EntityActorFlags, allocator: std.mem.Allocator) ![]Protocol.DataItem {
-        const data = try allocator.alloc(Protocol.DataItem, 2);
+        const data = try allocator.alloc(Protocol.DataItem, 3);
         data[0] = Protocol.DataItem.init(ActorDataId.Flags, .Long, .{ .Long = self.flags_one });
         data[1] = Protocol.DataItem.init(ActorDataId.FlagsTwo, .Long, .{ .Long = self.flags_two });
+        data[2] = Protocol.DataItem.initFloat(ActorDataId.Scale, 1.0);
         return data;
     }
 

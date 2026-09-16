@@ -54,6 +54,7 @@ pub const Dimension = struct {
     spawn_position: Protocol.BlockPosition,
     simulation_distance: i32,
     generator: ?*ThreadedGenerator,
+    instance_id: u32 = 0,
     inflight_batches: usize = 0,
 
     pub fn init(
@@ -84,6 +85,7 @@ pub const Dimension = struct {
             .spawn_position = spawn,
             .simulation_distance = 4,
             .generator = generator,
+            .instance_id = 0,
             .inflight_batches = 0,
         };
     }
@@ -206,7 +208,7 @@ pub const Dimension = struct {
 
             var still_needed = false;
             for (snapshots) |player| {
-                if (player.entity.dimension != self) continue;
+                if (player.entity.dimension != self or player.entity.instance_id != self.instance_id) continue;
                 if (player.sent_chunks.contains(h)) {
                     still_needed = true;
                     break;
@@ -358,6 +360,7 @@ pub const Dimension = struct {
     pub fn spawnEntityWithOptions(self: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f, name_tag: []const u8, nametag_always_visible: bool) !*Entity {
         const entity = try self.allocator.create(Entity);
         entity.* = Entity.init(self.allocator, entity_type, self);
+        entity.instance_id = self.instance_id;
         entity.position = position;
         entity.name_tag = name_tag;
         entity.nametag_always_visible = nametag_always_visible;
@@ -436,7 +439,7 @@ pub const Dimension = struct {
         const snapshots = conduit.getPlayerSnapshots();
         for (snapshots) |player| {
             if (!player.spawned) continue;
-            if (player.entity.dimension != self) continue;
+            if (player.entity.dimension != self or player.entity.instance_id != self.instance_id) continue;
             conduit.network.sendPacket(player.connection, data) catch {};
         }
     }
@@ -447,7 +450,7 @@ pub const Dimension = struct {
         const snapshots = conduit.getPlayerSnapshots();
         for (snapshots) |player| {
             if (!player.spawned) continue;
-            if (player.entity.dimension != self) continue;
+            if (player.entity.dimension != self or player.entity.instance_id != self.instance_id) continue;
             if (!player.visible_entities.contains(entity.runtime_id)) continue;
             conduit.network.sendPacket(player.connection, data) catch {};
         }
@@ -475,7 +478,7 @@ pub const Dimension = struct {
         const block_cz = pos.z >> 4;
         for (snapshots) |player| {
             if (!player.spawned) continue;
-            if (player.entity.dimension != self) continue;
+            if (player.entity.dimension != self or player.entity.instance_id != self.instance_id) continue;
             if (except) |skip| {
                 if (player == skip) continue;
             }
@@ -492,7 +495,7 @@ pub const Dimension = struct {
         const snapshots = conduit.getPlayerSnapshots();
         for (snapshots) |player| {
             if (!player.spawned) continue;
-            if (player.entity.dimension != self) continue;
+            if (player.entity.dimension != self or player.entity.instance_id != self.instance_id) continue;
             const dx = player.entity.position.x - pos.x;
             const dy = player.entity.position.y - pos.y;
             const dz = player.entity.position.z - pos.z;
@@ -543,10 +546,10 @@ pub const Dimension = struct {
             .runtime_entity_id = @bitCast(entity.runtime_id),
             .entity_type = entity.entity_type.identifier,
             .position = entity.position,
-            .pitch = entity.rotation.y,
-            .yaw = entity.rotation.x,
+            .pitch = entity.rotation.x,
+            .yaw = entity.rotation.y,
             .head_yaw = entity.head_yaw,
-            .body_yaw = entity.rotation.x,
+            .body_yaw = entity.rotation.y,
             .entity_metadata = metadata.items,
             .entity_properties = Protocol.PropertySyncData.init(self.allocator),
         };
@@ -594,7 +597,7 @@ pub const Dimension = struct {
         const snapshots = conduit.getPlayerSnapshots();
         for (snapshots) |player| {
             if (!player.spawned) continue;
-            if (player.entity.dimension != self) continue;
+            if (player.entity.dimension != self or player.entity.instance_id != self.instance_id) continue;
             const dx = player.entity.position.x - entity.position.x;
             const dz = player.entity.position.z - entity.position.z;
             if (!withinViewDistance(dx, dz, player.view_distance)) continue;

@@ -216,17 +216,42 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
             .walk_speed = 0.0,
         }};
 
+        const metadata = [_]Protocol.DataItem{
+            Protocol.DataItem.init(Protocol.ActorDataId.Flags, .Long, .{ .Long = target.entity.flags.flags_one }),
+            Protocol.DataItem.init(Protocol.ActorDataId.FlagsTwo, .Long, .{ .Long = target.entity.flags.flags_two }),
+            Protocol.DataItem.initFloat(Protocol.ActorDataId.Scale, 1.0),
+            Protocol.DataItem.initFloat(Protocol.ActorDataId.Width, 0.6),
+            Protocol.DataItem.initFloat(Protocol.ActorDataId.Height, 1.8),
+        };
+
         const packet = Protocol.AddPlayerPacket{
             .uuid = target.uuid,
             .username = target.username,
             .entity_runtime_id = target.entity.runtime_id,
             .position = target.entity.position,
+            .rotation = Protocol.Rotation.init(
+                target.entity.rotation.x,
+                target.entity.rotation.y,
+                target.entity.head_yaw,
+            ),
+            .entity_metadata = &metadata,
             .entity_properties = Protocol.PropertySyncData.init(allocator),
             .ability_entity_unique_id = target.entity.runtime_id,
             .ability_layers = &layers,
             .build_platform = @intCast(target.login_data.client_data.device_os),
         };
         const serialized = packet.serialize(&stream) catch return;
+        viewer.network.sendPacket(viewer.connection, serialized) catch {};
+    }
+
+    {
+        var stream = BinaryStream.init(allocator, null, null);
+        defer stream.deinit();
+        const skin_packet = Protocol.PlayerSkinPacket{
+            .uuid = target.uuid,
+            .skin = &target.login_data.client_data,
+        };
+        const serialized = skin_packet.serialize(&stream, allocator) catch return;
         viewer.network.sendPacket(viewer.connection, serialized) catch {};
     }
 

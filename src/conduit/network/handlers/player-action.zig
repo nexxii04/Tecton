@@ -32,6 +32,8 @@ pub fn handlePlayerAction(
                 @as(f32, @floatFromInt(spawn.z)) + 0.5,
             );
             player.entity.dimension = dim;
+            player.entity.instance_id = dim.instance_id;
+            player.network.conduit.instances.assignDimension(player.entity.runtime_id, dim) catch {};
             player.pending_dimension = null;
             player.spawned = true;
             network.conduit.setPlayerLocation(player.uuid, dim.world.identifier, dim.identifier);

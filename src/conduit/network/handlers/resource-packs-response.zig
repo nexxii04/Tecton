@@ -120,6 +120,8 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
                 return true;
             };
             player.entity.dimension = dimension;
+        player.entity.instance_id = dimension.instance_id;
+        player.network.conduit.instances.assignDimension(player.entity.runtime_id, dimension) catch {};
 
             const loaded = player.loadPlayerData();
             state.spawn_pos = dimension.spawn_position;
@@ -211,8 +213,8 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .runtime_entity_id = runtime_entity_id,
         .player_gamemode = .Creative,
         .player_position = player.entity.position,
-        .pitch = player.entity.rotation.y,
-        .yaw = player.entity.rotation.x,
+        .pitch = player.entity.rotation.x,
+        .yaw = player.entity.rotation.y,
         .seed = 12345678,
         .biome_type = 0,
         .biome_name = "plains",

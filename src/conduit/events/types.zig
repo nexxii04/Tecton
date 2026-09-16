@@ -1,4 +1,3 @@
-const std = @import("std");
 const Protocol = @import("protocol");
 const Player = @import("../player/player.zig").Player;
 const BlockPermutation = @import("../world/block/block-permutation.zig").BlockPermutation;
@@ -11,11 +10,12 @@ pub const ItemDrop = struct {
 
 pub const ServerStartEvent = struct {};
 pub const ServerShutdownEvent = struct {};
+pub const ServerTickEvent = struct { tick: u64 };
 
 pub const PlayerJoinEvent = struct {
     player: *Player,
 };
-// TODO
+
 pub const PlayerDisconnectEvent = struct {
     player: *Player,
 };
@@ -23,6 +23,24 @@ pub const PlayerDisconnectEvent = struct {
 pub const PlayerChatEvent = struct {
     player: *Player,
     message: []const u8,
+};
+
+pub const ItemUseEvent = struct {
+    player: *Player,
+    identifier: []const u8,
+};
+
+pub const PlayerMoveEvent = struct {
+    player: *Player,
+    from: Protocol.Vector3f,
+    to: Protocol.Vector3f,
+};
+
+pub const DamageEvent = struct {
+    attacker: ?*Entity,
+    victim: *Entity,
+    amount: f32,
+    cause: u8,
 };
 
 pub const BlockPlaceEvent = struct {
@@ -36,7 +54,6 @@ pub const BlockBreakEvent = struct {
     position: Protocol.BlockPosition,
     permutation: *BlockPermutation,
     drops: ?[]const ItemDrop = null,
-    /// Item entities spawned after the block break
     entities: ?[]*Entity = null,
 
     pub fn getDrops(self: *const BlockBreakEvent) []const ItemDrop {
@@ -48,22 +65,64 @@ pub const BlockBreakEvent = struct {
     }
 };
 
+pub const InventoryOpenEvent = struct {
+    player: *Player,
+    container_id: u8,
+};
+
+pub const InventoryClickEvent = struct {
+    player: *Player,
+    slot: u16,
+    button: u8,
+};
+
+pub const InventoryCloseEvent = struct {
+    player: *Player,
+    container_id: u8,
+};
+
+pub const TransactionEvent = struct {
+    transaction_id: [16]u8,
+    player: *Player,
+    committed: bool = false,
+};
+
 pub const Event = enum {
     ServerStart,
     ServerShutdown,
+    ServerTick,
     PlayerJoin,
+    PlayerDisconnect,
     PlayerChat,
+    ItemUse,
+    PlayerMove,
+    Damage,
     BlockPlace,
     BlockBreak,
+    InventoryOpen,
+    InventoryClick,
+    InventoryClose,
+    TransactionPrepare,
+    TransactionCommit,
+    TransactionAbort,
 
     pub fn DataType(comptime event: Event) type {
         return switch (event) {
             .ServerStart => ServerStartEvent,
             .ServerShutdown => ServerShutdownEvent,
+            .ServerTick => ServerTickEvent,
             .PlayerJoin => PlayerJoinEvent,
+            .PlayerDisconnect => PlayerDisconnectEvent,
             .PlayerChat => PlayerChatEvent,
+            .ItemUse => ItemUseEvent,
+            .PlayerMove => PlayerMoveEvent,
+            .Damage => DamageEvent,
             .BlockPlace => BlockPlaceEvent,
             .BlockBreak => BlockBreakEvent,
+            .InventoryOpen => InventoryOpenEvent,
+            .InventoryClick => InventoryClickEvent,
+            .InventoryClose => InventoryCloseEvent,
+            .TransactionPrepare, .TransactionCommit, .TransactionAbort => TransactionEvent,
         };
     }
 };

@@ -4,4 +4,7 @@ pub const ServerProperties = @import("./config.zig").ServerProperties;
 pub const Events = @import("./events/root.zig");
 pub const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 pub const Task = @import("./tasks/tasks.zig").Task;
+pub const Plugins = @import("./plugins/root.zig");
+pub const GameInstance = @import("./world/game-instance.zig").GameInstance;
+pub const GameInstanceRegistry = @import("./world/game-instance.zig").GameInstanceRegistry;
 pub const version = @import("./version.zig").version;

@@ -35,6 +35,7 @@ const HandlerContext = struct {
 fn resolveContainer(ctx: *const HandlerContext, container_name: Protocol.ContainerName) ?*Container {
     return switch (container_name) {
         .Hotbar, .Inventory, .HotbarAndInventory => &ctx.inv.container.base,
+        .Armor => if (ctx.inv.armor) |*armor| armor else null,
         .Cursor => &ctx.cursor.container.base,
         .Container, .Barrel, .Shulker => ctx.player.opened_container,
         .Trade2Ingredient1, .Trade2Ingredient2, .TradeIngredient1, .TradeIngredient2 => blk: {

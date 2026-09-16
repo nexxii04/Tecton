@@ -10,6 +10,7 @@ const ItemStack = @import("../../items/item-stack.zig").ItemStack;
 
 pub const State = struct {
     container: EntityContainer,
+    armor: ?Container = null,
     selected_slot: u8,
     opened: bool,
 };
@@ -23,10 +24,12 @@ fn onAttach(state: *State, entity: *Entity) void {
     const player = getPlayer(entity) orelse return;
     state.container = EntityContainer.init(entity.allocator, player, .Inventory, 36) catch return;
     state.container.base.identifier = .Inventory;
+    state.armor = Container.init(entity.allocator, .Inventory, 4) catch null;
 }
 
 fn onDetach(state: *State, _: *Entity) void {
     state.container.deinit();
+    if (state.armor) |*armor| armor.deinit();
 }
 
 fn onSpawn(state: *State, entity: *Entity) void {

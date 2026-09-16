@@ -83,7 +83,14 @@ pub fn handleInventoryTransaction(
                     broadcastMotion(network, target);
                 }
 
-                target.fireEvent(.Damage, .{ target, @as(f32, 1.0) });
+                var damage_event = Events.DamageEvent{
+                    .attacker = &player.entity,
+                    .victim = target,
+                    .amount = 1.0,
+                    .cause = 0,
+                };
+                if (!network.conduit.events.emit(.Damage, &damage_event)) return;
+                target.fireEvent(.Damage, .{ target, damage_event.amount });
             }
         },
         else => {
@@ -136,6 +143,11 @@ fn handleUseItem(
     const held = InventoryTrait.getHeldItem(inv_state) orelse return;
 
     const identifier = held.item_type.identifier;
+    if (std.mem.eql(u8, identifier, "minecraft:firework_rocket")) {
+        var item_use_event = Events.ItemUseEvent{ .player = player, .identifier = identifier };
+        _ = network.conduit.events.emit(.ItemUse, &item_use_event);
+        return;
+    }
     const base_permutation = BlockPermutation.resolve(player.entity.allocator, identifier, null) catch return;
 
     if (std.mem.eql(u8, base_permutation.identifier, "minecraft:air")) return;

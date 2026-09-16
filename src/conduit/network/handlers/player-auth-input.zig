@@ -34,7 +34,14 @@ pub fn handlePlayerAuthInput(
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
     const packet = try Protocol.PlayerAuthInputPacket.deserialize(stream, network.allocator);
 
-    player.entity.position = packet.position;
+    const previous_position = player.entity.position;
+    var move_event = Events.PlayerMoveEvent{
+        .player = player,
+        .from = previous_position,
+        .to = packet.position,
+    };
+    if (!network.conduit.events.emit(.PlayerMove, &move_event)) return;
+    player.entity.position = move_event.to;
     player.entity.rotation.x = packet.rotation.x;
     player.entity.rotation.y = packet.rotation.y;
     player.entity.motion = .{ .x = packet.motion.x, .y = 0, .z = packet.motion.y };
@@ -107,6 +114,10 @@ fn handleItemUseTransaction(
     const held = InventoryTrait.getHeldItem(inv_state) orelse return;
 
     const identifier = held.item_type.identifier;
+    if (std.mem.eql(u8, identifier, "minecraft:firework_rocket")) {
+        var item_use_event = Events.ItemUseEvent{ .player = player, .identifier = identifier };
+        if (!network.conduit.events.emit(.ItemUse, &item_use_event)) return;
+    }
     const base_permutation = BlockPermutation.resolve(player.entity.allocator, identifier, null) catch return;
 
     if (std.mem.eql(u8, base_permutation.identifier, "minecraft:air")) return;

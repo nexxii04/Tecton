@@ -289,6 +289,8 @@ pub const Player = struct {
         const current_type = if (self.entity.dimension) |d| d.dimension_type else null;
         if (current_type != null and current_type.? == dimension.dimension_type) {
             self.entity.dimension = dimension;
+            self.entity.instance_id = dimension.instance_id;
+            self.network.conduit.instances.assignDimension(self.entity.runtime_id, dimension) catch {};
             self.entity.position = pos;
             self.network.conduit.setPlayerLocation(self.uuid, dimension.world.identifier, dimension.identifier);
 

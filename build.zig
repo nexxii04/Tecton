@@ -111,6 +111,63 @@ pub fn build(b: *std.Build) void {
     });
     const protocol_mod = protocol_dep.module("Protocol");
 
+    var plugin_names: std.ArrayList([]const u8) = .empty;
+    defer plugin_names.deinit(b.allocator);
+
+    if (std.Io.Dir.cwd().openDir(b.graph.io, "src/conduit/plugins", .{ .iterate = true })) |dir_value| {
+        var plugins_dir = dir_value;
+        defer plugins_dir.close(b.graph.io);
+        var iterator = plugins_dir.iterate();
+        while (iterator.next(b.graph.io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            if (std.mem.startsWith(u8, entry.name, ".")) continue;
+            if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+            if (std.mem.eql(u8, entry.name, "api.zig") or
+                std.mem.eql(u8, entry.name, "manager.zig") or
+                std.mem.eql(u8, entry.name, "handles.zig") or
+                std.mem.eql(u8, entry.name, "root.zig")) continue;
+            const copied_name = b.allocator.dupe(u8, entry.name) catch @panic("plugin scan allocation failed");
+            plugin_names.append(b.allocator, copied_name) catch @panic("plugin scan allocation failed");
+        }
+    } else |_| {}
+
+    var plugin_source: std.ArrayList(u8) = .empty;
+    defer plugin_source.deinit(b.allocator);
+    plugin_source.appendSlice(b.allocator, "const fallback = @import(\"empty.zig\");\n") catch @panic("plugin bridge generation failed");
+    for (plugin_names.items, 0..) |name, index| {
+        const line = std.fmt.allocPrint(b.allocator, "const p{d} = @import(\"../plugins/{s}\");\n", .{ index, name }) catch @panic("plugin bridge generation failed");
+        defer b.allocator.free(line);
+        plugin_source.appendSlice(b.allocator, line) catch @panic("plugin bridge generation failed");
+    }
+    plugin_source.appendSlice(b.allocator, "const plugins = .{") catch @panic("plugin bridge generation failed");
+    for (plugin_names.items, 0..) |_, index| {
+        const name = std.fmt.allocPrint(b.allocator, "p{d},", .{index}) catch @panic("plugin bridge generation failed");
+        defer b.allocator.free(name);
+        plugin_source.appendSlice(b.allocator, name) catch @panic("plugin bridge generation failed");
+    }
+    plugin_source.appendSlice(b.allocator,
+        "};\n\nfn selectedPluginState(comptime modules: anytype) type {\n    inline for (modules) |module| {\n        if (@hasDecl(module, \"PluginState\")) return module.PluginState;\n    }\n    return fallback.PluginState;\n}\n\npub const PluginState = selectedPluginState(plugins);\nfn selectedPluginStateChange(comptime modules: anytype) type {\n    inline for (modules) |module| {\n        if (@hasDecl(module, \"PluginState\") and @hasDecl(module, \"PluginStateChange\")) return module.PluginStateChange;\n    }\n    return fallback.PluginStateChange;\n}\npub const PluginStateChange = selectedPluginStateChange(plugins);\n\npub fn setActive(instance: *PluginState) void {\n    inline for (plugins) |module| {\n        if (@hasDecl(module, \"PluginState\") and @hasDecl(module, \"setActive\")) {\n            module.setActive(instance);\n            return;\n        }\n    }\n    fallback.setActive(instance);\n}\n\npub fn registerAll(manager: anytype) !void {\n    inline for (plugins) |module| {\n        if (@hasDecl(module, \"descriptor\")) _ = try manager.register(module.descriptor);\n    }\n    _ = pluginCount();\n}\n\nfn pluginCount() usize {\n    var count: usize = 0;\n    inline for (plugins) |module| {\n        if (@hasDecl(module, \"descriptor\")) count += 1;\n    }\n    return count;\n}\n"
+    ) catch @panic("plugin bridge generation failed");
+
+    var command_source: std.ArrayList(u8) = .empty;
+    defer command_source.deinit(b.allocator);
+    command_source.appendSlice(b.allocator, "const plugins = .{") catch @panic("command bridge generation failed");
+    for (plugin_names.items, 0..) |_, index| {
+        const name = std.fmt.allocPrint(b.allocator, "p{d},", .{index}) catch @panic("command bridge generation failed");
+        defer b.allocator.free(name);
+        command_source.appendSlice(b.allocator, name) catch @panic("command bridge generation failed");
+    }
+    command_source.appendSlice(b.allocator, "};\n") catch @panic("command bridge generation failed");
+    for (plugin_names.items, 0..) |name, index| {
+        const line = std.fmt.allocPrint(b.allocator, "const p{d} = @import(\"../plugins/{s}\");\n", .{ index, name }) catch @panic("command bridge generation failed");
+        defer b.allocator.free(line);
+        command_source.appendSlice(b.allocator, line) catch @panic("command bridge generation failed");
+    }
+    command_source.appendSlice(b.allocator, "\npub fn register(registry: anytype, conduit: anytype) !void {\n    inline for (plugins) |module| {\n        if (@hasDecl(module, \"register\")) try module.register(registry, conduit);\n    }\n}\n") catch @panic("command bridge generation failed");
+
+    std.Io.Dir.cwd().writeFile(b.graph.io, .{ .sub_path = "src/conduit/plugin_defaults/.build-plugin.zig", .data = plugin_source.items }) catch |err| @panic(@errorName(err));
+    std.Io.Dir.cwd().writeFile(b.graph.io, .{ .sub_path = "src/conduit/plugin_defaults/.build-commands.zig", .data = command_source.items }) catch |err| @panic(@errorName(err));
+
     const leveldb_mod = b.addModule("leveldb", .{
         .root_source_file = b.path("libs/leveldb/leveldb.zig"),
         .target = target,

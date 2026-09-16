@@ -44,6 +44,9 @@ const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDB
 const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
 const World = @import("./world/world.zig").World;
 const Events = @import("events/root.zig");
+const PluginManager = @import("plugins/manager.zig").PluginManager;
+const PluginRegistry = @import("plugin_defaults/.build-plugin.zig");
+const GameInstanceRegistry = @import("world/game-instance.zig").GameInstanceRegistry;
 
 pub const Conduit = struct {
     io: std.Io,
@@ -84,6 +87,8 @@ pub const Conduit = struct {
     ban_manager: BanManager,
     permission_manager: PermissionManager,
     player_locations: PlayerLocations,
+    plugins: PluginManager,
+    instances: GameInstanceRegistry,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !Conduit {
         Raknet.Logger.init(allocator);
@@ -134,6 +139,8 @@ pub const Conduit = struct {
             .ban_manager = BanManager.init(io, allocator, "banned-players.json"),
             .permission_manager = PermissionManager.init(io, allocator, "permissions.json", config.default_group),
             .player_locations = PlayerLocations.init(io, allocator, "player_locations.json"),
+            .plugins = PluginManager.init(allocator),
+            .instances = GameInstanceRegistry.init(allocator),
         };
     }
 
@@ -223,6 +230,18 @@ pub const Conduit = struct {
         }
 
         self.player_locations.load();
+        self.plugins.attach(self, &self.events, Protocol.PROTOCOL);
+        PluginRegistry.registerAll(&self.plugins) catch |err| {
+            Raknet.Logger.ERROR("Failed to register local plugins: {any}", .{err});
+        };
+        var world_instances = self.worlds.valueIterator();
+        while (world_instances.next()) |world| {
+            if (world.*.getDimension("overworld")) |dimension| {
+                _ = self.instances.create(world.*.identifier, world.*, dimension) catch |err| {
+                    Raknet.Logger.ERROR("Failed to create instance for world '{s}': {any}", .{ world.*.identifier, err });
+                };
+            }
+        }
         if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
             Raknet.Logger.INFO("Loaded {d} player locations", .{self.player_locations.count()});
         }
@@ -246,6 +265,7 @@ pub const Conduit = struct {
         }
         try @import("./command/list/worlds.zig").register(&self.command_registry, self);
         try @import("./command/list/world.zig").register(&self.command_registry, self);
+        try @import("plugin_defaults/.build-commands.zig").register(&self.command_registry, self);
 
         self.raknet.setTickCallback(onTick, self);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
@@ -260,6 +280,8 @@ pub const Conduit = struct {
                 },
             );
         }
+        self.plugins.startAll();
+
         Raknet.Logger.INFO("Loaded {d} threads, {d} worker threads available", .{
             totalServerThreadCount(self.threaded_tasks.workerCount()),
             self.threaded_tasks.workerCount(),
@@ -275,6 +297,7 @@ pub const Conduit = struct {
     pub fn stop(self: *Conduit) !void {
         var event = Events.types.ServerShutdownEvent{};
         _ = self.events.emit(.ServerShutdown, &event);
+        self.plugins.stopAll(.shutdown);
 
         var it = self.players.valueIterator();
         while (it.next()) |player_ptr| {
@@ -309,6 +332,7 @@ pub const Conduit = struct {
         defer self.players_mutex.unlock(self.io);
         try self.players.put(player.entity.runtime_id, player);
         try self.connection_map.put(@intFromPtr(player.connection), player);
+        self.plugins.registerPlayer(player);
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
 
@@ -318,6 +342,7 @@ pub const Conduit = struct {
             return;
         };
         defer self.players_mutex.unlock(self.io);
+        self.plugins.unregisterPlayer(player);
         _ = self.players.remove(player.entity.runtime_id);
         _ = self.connection_map.remove(@intFromPtr(player.connection));
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
@@ -353,6 +378,9 @@ pub const Conduit = struct {
 
         defer pending.deinit(self.allocator);
         for (pending.items) |player| {
+            var event = Events.types.PlayerDisconnectEvent{ .player = player };
+            _ = self.events.emit(.PlayerDisconnect, &event);
+            self.instances.leave(player.entity.runtime_id);
             player.finalizeRemoval();
         }
     }
@@ -400,6 +428,8 @@ pub const Conduit = struct {
         self.last_tick_started_at = work_start;
 
         self.tick_count += 1;
+        var tick_event = Events.types.ServerTickEvent{ .tick = self.tick_count };
+        _ = self.events.emit(.ServerTick, &tick_event);
 
         const raknet_ns: u64 = @intCast(@max(0, self.raknet.last_connection_tick_ns.nanoseconds));
         self.raknet_time_accumulator += raknet_ns;
@@ -676,6 +706,8 @@ pub const Conduit = struct {
         if (self.serialized_item_registry) |s| self.allocator.free(s);
         if (self.serialized_biome_definitions) |s| self.allocator.free(s);
         self.config.deinit();
+        self.plugins.deinit();
+        self.instances.deinit();
         self.events.deinit();
         self.network.deinit();
         self.console.deinit();
@@ -688,6 +720,7 @@ pub const Conduit = struct {
         self.player_locations.deinit();
     }
 };
+
 
 fn readLevelDatSpawn(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Protocol.BlockPosition {
     const file = try std.Io.Dir.cwd().openFile(io, path, .{});
