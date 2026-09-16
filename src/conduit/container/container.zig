@@ -14,6 +14,7 @@ pub const Container = struct {
     identifier: ?Protocol.ContainerId = null,
     storage: []?ItemStack,
     occupants: std.AutoHashMap(*Player, Protocol.ContainerId),
+    muted: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, container_type: Protocol.ContainerType, size: u32) !Container {
         const storage = try allocator.alloc(?ItemStack, size);
@@ -176,6 +177,8 @@ pub const Container = struct {
     }
 
     pub fn updateSlot(self: *Container, slot: u32) void {
+        if (self.muted) return;
+
         const item_stack = if (slot < self.storage.len) self.storage[slot] else null;
         const network_item = if (item_stack) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
             .network = 0,
@@ -207,6 +210,8 @@ pub const Container = struct {
     }
 
     pub fn update(self: *Container) void {
+        if (self.muted) return;
+
         const items = self.allocator.alloc(Protocol.NetworkItemStackDescriptor, self.storage.len) catch return;
         defer self.allocator.free(items);
 

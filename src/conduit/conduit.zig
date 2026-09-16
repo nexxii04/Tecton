@@ -16,6 +16,7 @@ const Entity = @import("./entity/entity.zig").Entity;
 const EntityTraits = @import("./entity/traits/root.zig");
 const GravityTrait = EntityTraits.GravityTrait;
 const HealthTrait = EntityTraits.HealthTrait;
+const VillagerTradeTrait = EntityTraits.VillagerTradeTrait;
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
 const ItemPalette = @import("./items/item-palette.zig");
 const BanManager = @import("./network/ban-manager.zig").BanManager;
@@ -147,6 +148,7 @@ pub const Conduit = struct {
         EntityTraits.initEntityTraitRegistry(self.allocator);
         try GravityTrait.register();
         try HealthTrait.register();
+        try VillagerTradeTrait.register();
 
         try ItemPalette.initRegistry(self.allocator);
         const item_count = try ItemPalette.loadItemTypes(self.allocator);

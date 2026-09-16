@@ -13,6 +13,8 @@ const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
 const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig");
 const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
+const TradeWindowTrait = @import("../entity/traits/trade-window.zig").TradeWindowTrait;
+const CreatedOutputTrait = @import("../entity/traits/created-output.zig").CreatedOutputTrait;
 
 pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
 pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;
@@ -116,6 +118,18 @@ pub const Player = struct {
             .container = undefined,
         });
         try self.entity.addTrait(cursor_trait);
+
+        const trade_window = try TradeWindowTrait.create(allocator, .{
+            .container = undefined,
+            .initialized = false,
+        });
+        try self.entity.addTrait(trade_window);
+
+        const created_output = try CreatedOutputTrait.create(allocator, .{
+            .container = undefined,
+            .initialized = false,
+        });
+        try self.entity.addTrait(created_output);
     }
 
     pub fn deinit(self: *Player) void {
