@@ -1,46 +1,102 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Container = @import("../../container/container.zig").Container;
-const InventoryTrait = @import("../../entity/traits/inventory.zig").InventoryTrait;
-const CursorTrait = @import("../../entity/traits/cursor.zig").CursorTrait;
-const ItemType = @import("../../items/item-type.zig").ItemType;
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const Display = @import("../../items/traits/display.zig");
-const PlayerMath = @import("../../player/player.zig");
 const ItemStackResponse = Protocol.ItemStackResponse;
 const StackResponseContainerInfo = Protocol.StackResponseContainerInfo;
 const StackResponseSlotInfo = Protocol.StackResponseSlotInfo;
 const FullContainerName = Protocol.FullContainerName;
 const StackRequestAction = Protocol.StackRequestAction;
 const StackRequestSlotInfo = Protocol.StackRequestSlotInfo;
+const Raknet = @import("Raknet");
 
-fn resolveContainer(
-    inv_state: *InventoryTrait.TraitState,
-    cursor_state: *CursorTrait.TraitState,
-    container_name: Protocol.ContainerName,
-    player: *@import("../../player/player.zig").Player,
-) ?*Container {
+const Container = @import("../../container/container.zig").Container;
+const CreatedOutputTrait = @import("../../entity/traits/created-output.zig").CreatedOutputTrait;
+const CursorTrait = @import("../../entity/traits/cursor.zig").CursorTrait;
+const InventoryTrait = @import("../../entity/traits/inventory.zig").InventoryTrait;
+const TradeWindowTrait = @import("../../entity/traits/trade-window.zig").TradeWindowTrait;
+const trade_window = @import("../../entity/traits/trade-window.zig");
+const villager_trade = @import("../../entity/traits/villager-trade.zig");
+const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemType = @import("../../items/item-type.zig").ItemType;
+const Display = @import("../../items/traits/display.zig");
+const Player = @import("../../player/player.zig").Player;
+const PlayerMath = @import("../../player/player.zig");
+const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+
+const HandlerContext = struct {
+    inv: *InventoryTrait.TraitState,
+    cursor: *CursorTrait.TraitState,
+    output: ?*CreatedOutputTrait.TraitState,
+    trade: ?*TradeWindowTrait.TraitState,
+    player: *Player,
+};
+
+fn resolveContainer(ctx: *const HandlerContext, container_name: Protocol.ContainerName) ?*Container {
     return switch (container_name) {
-        .Hotbar, .Inventory, .HotbarAndInventory => &inv_state.container.base,
-        .Cursor => &cursor_state.container.base,
-        .Container, .Barrel, .Shulker => player.opened_container,
+        .Hotbar, .Inventory, .HotbarAndInventory => &ctx.inv.container.base,
+        .Cursor => &ctx.cursor.container.base,
+        .Container, .Barrel, .Shulker => ctx.player.opened_container,
+        .Trade2Ingredient1, .Trade2Ingredient2, .TradeIngredient1, .TradeIngredient2 => blk: {
+            const trade = ctx.trade orelse break :blk null;
+            if (!trade.active) break :blk null;
+            break :blk &trade.container;
+        },
+        .CreativeOutput => if (ctx.output) |output| &output.container.base else null,
         else => null,
     };
 }
 
-fn resolveTransferContainer(
-    inv_state: *InventoryTrait.TraitState,
-    cursor_state: *CursorTrait.TraitState,
-    container_name: Protocol.ContainerName,
-    player: *@import("../../player/player.zig").Player,
-) ?*Container {
+fn resolveCoreSlot(container_name: Protocol.ContainerName, ui_slot: u8) u32 {
     return switch (container_name) {
-        .CreativeOutput => &cursor_state.container.base,
-        else => resolveContainer(inv_state, cursor_state, container_name, player),
+        .Trade2Ingredient1, .TradeIngredient1 => 0,
+        .Trade2Ingredient2, .TradeIngredient2 => 1,
+        .CreativeOutput => 0,
+        else => @as(u32, ui_slot),
     };
+}
+
+fn isTradeIngredient(container_name: Protocol.ContainerName) bool {
+    return switch (container_name) {
+        .Trade2Ingredient1, .Trade2Ingredient2, .TradeIngredient1, .TradeIngredient2 => true,
+        else => false,
+    };
+}
+
+fn isTradeContainer(ctx: *const HandlerContext, container: *Container) bool {
+    if (ctx.trade) |trade| {
+        if (trade.active and &trade.container == container) return true;
+    }
+    if (ctx.output) |output| {
+        if (&output.container.base == container) return true;
+    }
+    return false;
+}
+
+fn refreshTradePreview(ctx: *const HandlerContext) void {
+    const trade = ctx.trade orelse return;
+    if (!trade.active) return;
+    const output = ctx.output orelse return;
+
+    // A pending created output already occupies the slot.
+    if (output.container.base.getItem(0) != null) return;
+
+    const villager = trade.villager orelse return;
+    const villager_state = villager.getTraitState(villager_trade.VillagerTradeTrait) orelse return;
+
+    const offer = villager_trade.findSatisfiedOffer(villager_state, &trade.container) orelse {
+        trade_window.sendResultSlot(ctx.player, null);
+        return;
+    };
+    const sell_type = ItemType.get(offer.sell.identifier) orelse {
+        trade_window.sendResultSlot(ctx.player, null);
+        return;
+    };
+    const item = ItemStack.init(ctx.player.entity.allocator, sell_type, .{
+        .stack_size = offer.sell.count,
+        .metadata = @intCast(offer.sell.damage),
+    });
+    trade_window.sendResultSlot(ctx.player, item);
 }
 
 fn canMergeStacks(a: *const ItemStack, b: *const ItemStack) bool {
@@ -105,6 +161,7 @@ const ChangedSlot = struct {
     name: FullContainerName,
     backing: *Container,
     slot: u8,
+    ui_slot: u8,
 };
 
 fn sameContainer(a: FullContainerName, b: FullContainerName) bool {
@@ -117,40 +174,52 @@ fn recordChangedSlot(
     container_name: FullContainerName,
     backing: *Container,
     slot: u8,
+    ui_slot: u8,
 ) !void {
     for (changed.items) |cs| {
-        if (cs.slot == slot and sameContainer(cs.name, container_name)) return;
+        if (cs.slot == slot and cs.ui_slot == ui_slot and sameContainer(cs.name, container_name)) return;
     }
-    try changed.append(allocator, .{ .name = container_name, .backing = backing, .slot = slot });
+    try changed.append(allocator, .{
+        .name = container_name,
+        .backing = backing,
+        .slot = slot,
+        .ui_slot = ui_slot,
+    });
 }
 
 /// Record every slot the action touches so the response can report its state.
 fn recordActionSlots(
     allocator: std.mem.Allocator,
     changed: *std.ArrayList(ChangedSlot),
-    inv_state: *InventoryTrait.TraitState,
-    cursor_state: *CursorTrait.TraitState,
-    player: *@import("../../player/player.zig").Player,
+    ctx: *const HandlerContext,
     action: StackRequestAction,
 ) !void {
     switch (action) {
         .take, .place => |t| {
-            try recordSlotInfo(allocator, changed, inv_state, cursor_state, player, t.source);
-            try recordSlotInfo(allocator, changed, inv_state, cursor_state, player, t.destination);
+            try recordSlotInfo(allocator, changed, ctx, t.source);
+            try recordSlotInfo(allocator, changed, ctx, t.destination);
         },
         .swap => |s| {
-            try recordSlotInfo(allocator, changed, inv_state, cursor_state, player, s.source);
-            try recordSlotInfo(allocator, changed, inv_state, cursor_state, player, s.destination);
+            try recordSlotInfo(allocator, changed, ctx, s.source);
+            try recordSlotInfo(allocator, changed, ctx, s.destination);
         },
         .drop => |d| {
-            try recordSlotInfo(allocator, changed, inv_state, cursor_state, player, d.source);
+            try recordSlotInfo(allocator, changed, ctx, d.source);
         },
         .destroy, .consume => |d| {
-            try recordSlotInfo(allocator, changed, inv_state, cursor_state, player, d.source);
+            try recordSlotInfo(allocator, changed, ctx, d.source);
         },
         .mine_block => |m| {
-            if (m.hotbar_slot >= 0 and m.hotbar_slot < inv_state.container.base.getSize()) {
-                try recordChangedSlot(allocator, changed, FullContainerName.init(.Hotbar, null), &inv_state.container.base, @intCast(m.hotbar_slot));
+            if (m.hotbar_slot >= 0 and m.hotbar_slot < ctx.inv.container.base.getSize()) {
+                const slot: u8 = @intCast(m.hotbar_slot);
+                try recordChangedSlot(
+                    allocator,
+                    changed,
+                    FullContainerName.init(.Hotbar, null),
+                    &ctx.inv.container.base,
+                    slot,
+                    slot,
+                );
             }
         },
         else => {},
@@ -160,13 +229,12 @@ fn recordActionSlots(
 fn recordSlotInfo(
     allocator: std.mem.Allocator,
     changed: *std.ArrayList(ChangedSlot),
-    inv_state: *InventoryTrait.TraitState,
-    cursor_state: *CursorTrait.TraitState,
-    player: *@import("../../player/player.zig").Player,
+    ctx: *const HandlerContext,
     info: StackRequestSlotInfo,
 ) !void {
-    const backing = resolveContainer(inv_state, cursor_state, info.container.identifier, player) orelse return;
-    try recordChangedSlot(allocator, changed, info.container, backing, info.slot);
+    const backing = resolveContainer(ctx, info.container.identifier) orelse return;
+    const core_slot = resolveCoreSlot(info.container.identifier, info.slot);
+    try recordChangedSlot(allocator, changed, info.container, backing, @intCast(core_slot), info.slot);
 }
 
 fn buildResponse(
@@ -179,6 +247,9 @@ fn buildResponse(
     errdefer infos.deinit(allocator);
 
     for (changed.items, 0..) |cs, i| {
+        // The client does not need source info for the created output slot.
+        if (cs.name.identifier == .CreativeOutput) continue;
+
         const already = for (0..i) |j| {
             if (sameContainer(changed.items[j].name, cs.name)) break true;
         } else false;
@@ -192,8 +263,8 @@ fn buildResponse(
             const item = c2.backing.getItem(c2.slot);
             const name = if (item) |it| Display.getDisplayName(it) orelse &[_]u8{} else &[_]u8{};
             try slots.append(allocator, .{
-                .slot = c2.slot,
-                .hotbar_slot = c2.slot,
+                .slot = c2.ui_slot,
+                .hotbar_slot = c2.ui_slot,
                 .count = if (item) |it| @intCast(@min(@as(u16, 255), it.stack_size)) else 0,
                 .stack_network_id = if (item) |it| it.network_stack_id else 0,
                 .custom_name = name,
@@ -232,63 +303,138 @@ pub fn processItemStackRequest(
     const inv_state = player.entity.getTraitState(InventoryTrait) orelse return;
     const cursor_state = player.entity.getTraitState(CursorTrait) orelse return;
 
+    var ctx = HandlerContext{
+        .inv = inv_state,
+        .cursor = cursor_state,
+        .output = player.entity.getTraitState(CreatedOutputTrait),
+        .trade = player.entity.getTraitState(TradeWindowTrait),
+        .player = player,
+    };
+
     var changed = std.ArrayList(ChangedSlot).empty;
     defer changed.deinit(allocator);
 
     var ok = true;
+    var touched_trade = false;
     for (request.actions) |action| {
-        recordActionSlots(allocator, &changed, inv_state, cursor_state, player, action) catch {
+        recordActionSlots(allocator, &changed, &ctx, action) catch {
             ok = false;
             break;
         };
         switch (action) {
             .take, .place => |t| {
-                const src = resolveTransferContainer(inv_state, cursor_state, t.source.container.identifier, player) orelse {
+                const src = resolveContainer(&ctx, t.source.container.identifier) orelse {
                     ok = false;
                     continue;
                 };
-                const dst = resolveTransferContainer(inv_state, cursor_state, t.destination.container.identifier, player) orelse {
+                const dst = resolveContainer(&ctx, t.destination.container.identifier) orelse {
                     ok = false;
                     continue;
                 };
 
-                // Clients address the creative output with catalog slot
-                // numbers instead of 0; the cursor backing store it
-                // resolves to only has one slot.
-                const source_slot: u32 = if (t.source.container.identifier == .CreativeOutput) 0 else t.source.slot;
-                applyTransferAction(src, source_slot, dst, t.destination.slot, t.count) catch {
+                if (isTradeContainer(&ctx, src) or isTradeContainer(&ctx, dst)) touched_trade = true;
+
+                applyTransferAction(
+                    src,
+                    resolveCoreSlot(t.source.container.identifier, t.source.slot),
+                    dst,
+                    resolveCoreSlot(t.destination.container.identifier, t.destination.slot),
+                    t.count,
+                ) catch {
                     ok = false;
                     continue;
                 };
             },
             .swap => |s| {
-                const src = resolveContainer(inv_state, cursor_state, s.source.container.identifier, player) orelse {
+                const src = resolveContainer(&ctx, s.source.container.identifier) orelse {
                     ok = false;
                     continue;
                 };
-                const dst = resolveContainer(inv_state, cursor_state, s.destination.container.identifier, player) orelse {
+                const dst = resolveContainer(&ctx, s.destination.container.identifier) orelse {
                     ok = false;
                     continue;
                 };
-                src.swapItems(s.source.slot, s.destination.slot, dst);
+                if (isTradeContainer(&ctx, src) or isTradeContainer(&ctx, dst)) touched_trade = true;
+                src.swapItems(
+                    resolveCoreSlot(s.source.container.identifier, s.source.slot),
+                    resolveCoreSlot(s.destination.container.identifier, s.destination.slot),
+                    dst,
+                );
             },
             .drop => |d| {
-                const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier, player) orelse {
+                const src = resolveContainer(&ctx, d.source.container.identifier) orelse {
                     ok = false;
                     continue;
                 };
-                const dropped = applyDropAction(src, d.source.slot, d.count) catch {
+                if (isTradeContainer(&ctx, src)) touched_trade = true;
+                const dropped = applyDropAction(
+                    src,
+                    resolveCoreSlot(d.source.container.identifier, d.source.slot),
+                    d.count,
+                ) catch {
                     ok = false;
                     continue;
                 };
                 spawnDroppedItem(player, dropped);
             },
-            .destroy, .consume => |d| {
-                const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier, player) orelse {
+            .destroy => |d| {
+                const src = resolveContainer(&ctx, d.source.container.identifier) orelse {
                     ok = false;
                     continue;
                 };
-                src.clearSlot(d.source.slot);
+                if (isTradeContainer(&ctx, src)) touched_trade = true;
+                src.clearSlot(resolveCoreSlot(d.source.container.identifier, d.source.slot));
+            },
+            .consume => |d| {
+                const src = resolveContainer(&ctx, d.source.container.identifier) orelse {
+                    ok = false;
+                    continue;
+                };
+                // Trade inputs were already removed by executeTrade; consuming
+                // them again would double-remove.
+                if (isTradeIngredient(d.source.container.identifier)) continue;
+                src.removeItem(
+                    resolveCoreSlot(d.source.container.identifier, d.source.slot),
+                    if (d.count == 0) 1 else d.count,
+                );
+            },
+            .craft_recipe => |c| {
+                if (c.recipe_network_id < villager_trade.TRADE_RECIPE_BASE) {
+                    Raknet.Logger.WARN("Unhandeled action {any}", .{action});
+                    continue;
+                }
+
+                touched_trade = true;
+                const trade = ctx.trade orelse {
+                    ok = false;
+                    continue;
+                };
+                const output = ctx.output orelse {
+                    ok = false;
+                    continue;
+                };
+                if (!trade.active) {
+                    ok = false;
+                    continue;
+                }
+                const villager = trade.villager orelse {
+                    ok = false;
+                    continue;
+                };
+                const villager_state = villager.getTraitState(villager_trade.VillagerTradeTrait) orelse {
+                    ok = false;
+                    continue;
+                };
+
+                const crafted = villager_trade.executeTrade(
+                    allocator,
+                    villager_state,
+                    &trade.container,
+                    &output.container.base,
+                    c.recipe_network_id,
+                    c.number_of_crafts,
+                );
+                if (!crafted) ok = false;
             },
             .craft_creative => |c| {
                 if (player.gamemode != .Creative) {
@@ -308,10 +454,14 @@ pub fn processItemStackRequest(
                     ok = false;
                     continue;
                 };
+                const output = ctx.output orelse {
+                    ok = false;
+                    continue;
+                };
                 const item = ItemStack.init(player.entity.allocator, item_type, .{
                     .stack_size = item_type.max_stack_size,
                 });
-                cursor_state.container.base.setItem(0, item);
+                output.container.base.setItem(0, item);
             },
             .craft_results_deprecated => {},
             .mine_block => |m| {
@@ -332,7 +482,10 @@ pub fn processItemStackRequest(
 
     inv_state.container.sendContentUpdate();
     cursor_state.container.sendContentUpdate();
-    if (player.opened_container) |opened| opened.update();
+    if (player.opened_container) |opened| {
+        // A plain InventoryContent for the trading window would desync the UI.
+        if (opened.container_type != .Trading) opened.update();
+    }
 
     const status = if (ok) Protocol.ItemStackResponseStatus.Success else Protocol.ItemStackResponseStatus.Error;
     const response = buildResponse(allocator, request.request_id, status, &changed) catch return;
@@ -341,6 +494,8 @@ pub fn processItemStackRequest(
         allocator.free(response.container_info);
     }
     sendItemStackResponse(network, connection, &[_]ItemStackResponse{response});
+
+    if (touched_trade) refreshTradePreview(&ctx);
 }
 
 pub fn handleItemStackRequest(
@@ -359,35 +514,10 @@ pub fn handleItemStackRequest(
     }
 }
 
-test "creative output resolves to cursor for transfer handling" {
-    const allocator = std.testing.allocator;
-
-    var inv_base = try Container.init(allocator, .Inventory, 36);
-    defer inv_base.deinit();
-    var cursor_base = try Container.init(allocator, .Inventory, 1);
-    defer cursor_base.deinit();
-
-    var inv_state = InventoryTrait.TraitState{
-        .container = .{
-            .base = inv_base,
-            .owner = undefined,
-        },
-        .selected_slot = 0,
-        .opened = false,
-    };
-    var cursor_state = CursorTrait.TraitState{
-        .container = .{
-            .base = cursor_base,
-            .owner = undefined,
-        },
-    };
-    var player: @import("../../player/player.zig").Player = undefined;
-
-    const resolved = resolveTransferContainer(&inv_state, &cursor_state, .CreativeOutput, &player) orelse {
-        return error.TestUnexpectedResult;
-    };
-
-    try std.testing.expect(resolved == &cursor_state.container.base);
+test "core slot mapping translates trade and creative ui slots" {
+    try std.testing.expectEqual(@as(u32, 0), resolveCoreSlot(.CreativeOutput, 50));
+    try std.testing.expectEqual(@as(u32, 1), resolveCoreSlot(.Trade2Ingredient2, 5));
+    try std.testing.expectEqual(@as(u32, 7), resolveCoreSlot(.Inventory, 7));
 }
 
 test "transfer action merges matching stacks into occupied destination" {

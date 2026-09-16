@@ -1,10 +1,13 @@
-const Raknet = @import("Raknet");
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
+const Raknet = @import("Raknet");
+
 const BlockContainer = @import("../../container/block-container.zig").BlockContainer;
-const ChestTrait = @import("../../world/block/traits/chest.zig").ChestTrait;
+const TradeWindowTrait = @import("../../entity/traits/trade-window.zig").TradeWindowTrait;
+const trade_window = @import("../../entity/traits/trade-window.zig");
 const BarrelTrait = @import("../../world/block/traits/barrel.zig").BarrelTrait;
+const ChestTrait = @import("../../world/block/traits/chest.zig").ChestTrait;
+const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 
 pub fn handleContainerClose(
     network: *NetworkHandler,
@@ -15,11 +18,23 @@ pub fn handleContainerClose(
     const packet = try Protocol.ContainerClosePacket.deserialize(stream);
 
     if (player.opened_container) |container| {
-        if (container.occupants.get(player)) |_| {
+        if (container.occupants.get(player)) |window_id| {
+            if (packet.identifier != window_id and packet.identifier != .None) {
+                return;
+            }
+
+            if (container.container_type == .Trading) {
+                if (player.entity.getTraitState(TradeWindowTrait)) |trade_state| {
+                    trade_window.onWindowClosed(trade_state, player);
+                }
+            }
+
             container.close(player, false);
 
-            if (container.occupants.count() == 0) {
-                trySendBlockClose(player, network, container);
+            if (container.container_type != .Trading) {
+                if (container.occupants.count() == 0) {
+                    trySendBlockClose(player, network, container);
+                }
             }
         } else {
             player.opened_container = null;

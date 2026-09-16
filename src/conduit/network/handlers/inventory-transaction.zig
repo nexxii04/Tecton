@@ -1,17 +1,19 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Player = @import("../../player/player.zig").Player;
+const Raknet = @import("Raknet");
+
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
+const Events = @import("../../events/types.zig");
+const Player = @import("../../player/player.zig").Player;
+const PlayerMath = @import("../../player/player.zig");
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
-const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
-const applyTraitsFromRegistry = @import("../../world/block/traits/trait.zig").applyTraitsFromRegistry;
 const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").resolveWithPlacement;
 const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
-const Events = @import("../../events/types.zig");
-const PlayerMath = @import("../../player/player.zig");
+const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
+const applyTraitsFromRegistry = @import("../../world/block/traits/trait.zig").applyTraitsFromRegistry;
+const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 
 pub fn handleInventoryTransaction(
     network: *NetworkHandler,
@@ -59,6 +61,11 @@ pub fn handleInventoryTransaction(
         },
         .UseItemOnEntity => {
             const data = packet.transaction_data.use_item_on_entity;
+            if (data.action_type == 0) {
+                const target = network.conduit.getEntityByRuntimeId(@bitCast(data.target_entity_runtime_id)) orelse return;
+                _ = target.fireEvent(.Interact, .{ target, player });
+                return;
+            }
             if (data.action_type == 1) {
                 const target = network.conduit.getEntityByRuntimeId(@bitCast(data.target_entity_runtime_id)) orelse return;
 
