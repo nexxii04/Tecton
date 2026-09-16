@@ -32,7 +32,7 @@ For a Bedrock server, performance is everything: dozens of players, thousands of
 - [ ] Entity system & entity drops _(in progress)_
 - [x] Multi-world system
 - [ ] Plugin API
-- [ ] Resource pack loading
+- [ x] Resource pack loading
 
 ## Getting started
 
