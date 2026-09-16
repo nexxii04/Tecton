@@ -12,6 +12,7 @@ const shouldEmitVerboseStartupLogs = @import("./config.zig").shouldEmitVerboseSt
 const Console = @import("./console/console.zig").Console;
 const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
 const EntityType = @import("./entity/entity-type.zig").EntityType;
+const Entity = @import("./entity/entity.zig").Entity;
 const EntityTraits = @import("./entity/traits/root.zig");
 const GravityTrait = EntityTraits.GravityTrait;
 const HealthTrait = EntityTraits.HealthTrait;
@@ -46,6 +47,8 @@ const World = @import("./world/world.zig").World;
 const Events = @import("events/root.zig");
 const PluginManager = @import("plugins/manager.zig").PluginManager;
 const PluginRegistry = @import("plugin_defaults/.build-plugin.zig");
+const EcsWorld = @import("entity/ecs.zig").EcsWorld;
+const EcsEntityId = @import("entity/ecs.zig").EntityId;
 const GameInstanceRegistry = @import("world/game-instance.zig").GameInstanceRegistry;
 
 pub const Conduit = struct {
@@ -89,11 +92,15 @@ pub const Conduit = struct {
     player_locations: PlayerLocations,
     plugins: PluginManager,
     instances: GameInstanceRegistry,
+    ecs: EcsWorld,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !Conduit {
         Raknet.Logger.init(allocator);
         var config = try ServerProperties.load(io, allocator, "server.properties");
         errdefer config.deinit();
+        const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(config.max_players)) * 8);
+        var ecs = try EcsWorld.init(allocator, ecs_capacity);
+        errdefer ecs.deinit();
         return Conduit{
             .io = io,
             .allocator = allocator,
@@ -142,6 +149,7 @@ pub const Conduit = struct {
             .player_locations = PlayerLocations.init(io, allocator, "player_locations.json"),
             .plugins = PluginManager.init(allocator),
             .instances = GameInstanceRegistry.init(allocator),
+            .ecs = ecs,
         };
     }
 
@@ -231,6 +239,7 @@ pub const Conduit = struct {
         }
 
         self.player_locations.load();
+        self.ecs.setDropCallback(@ptrCast(self), ecsDrop);
         self.plugins.attach(self, &self.events, Protocol.PROTOCOL);
         PluginRegistry.registerAll(&self.plugins) catch |err| {
             Raknet.Logger.ERROR("Failed to register local plugins: {any}", .{err});
@@ -408,6 +417,30 @@ pub const Conduit = struct {
         return self.players.count();
     }
 
+    pub fn registerEcsEntity(self: *Conduit, entity: *Entity) void {
+        if (entity.ecs_id != 0) return;
+        const id = self.ecs.registerLegacy(
+            entity.position,
+            entity.rotation,
+            entity.motion,
+            @bitCast(entity.flags.flags_one),
+            1.0,
+            0,
+        ) catch return;
+        entity.ecs_id = @bitCast(id);
+    }
+
+    pub fn unregisterEcsEntity(self: *Conduit, entity: *Entity) void {
+        if (entity.ecs_id == 0) return;
+        _ = self.ecs.destroy(@bitCast(entity.ecs_id));
+        entity.ecs_id = 0;
+    }
+
+    pub fn syncEcsEntity(self: *Conduit, entity: *Entity) void {
+        if (entity.ecs_id == 0) return;
+        self.ecs.updateTransform(@bitCast(entity.ecs_id), entity.position, entity.rotation, entity.motion);
+    }
+
     pub fn targetTps(self: *const Conduit) f64 {
         return @as(f64, @floatFromInt(@max(@as(u32, 1), self.config.max_tps)));
     }
@@ -431,6 +464,7 @@ pub const Conduit = struct {
         self.tick_count += 1;
         var tick_event = Events.types.ServerTickEvent{ .tick = self.tick_count };
         _ = self.events.emit(.ServerTick, &tick_event);
+        self.ecs.tick();
 
         const raknet_ns: u64 = @intCast(@max(0, self.raknet.last_connection_tick_ns.nanoseconds));
         self.raknet_time_accumulator += raknet_ns;
@@ -709,6 +743,7 @@ pub const Conduit = struct {
         self.config.deinit();
         self.plugins.deinit();
         self.instances.deinit();
+        self.ecs.deinit();
         self.events.deinit();
         self.network.deinit();
         self.console.deinit();
@@ -722,6 +757,14 @@ pub const Conduit = struct {
     }
 };
 
+
+fn ecsDrop(context: *anyopaque, _: EcsEntityId, position: Protocol.Vector3f, item: @import("entity/ecs.zig").ItemDrop) void {
+    const conduit: *Conduit = @ptrCast(@alignCast(context));
+    const dimension = conduit.getWorld("world") orelse return;
+    const overworld = dimension.getDimension("overworld") orelse return;
+    const item_type = @import("items/item-type.zig").ItemType.get(item.identifier) orelse return;
+    _ = overworld.spawnItemEntity(item_type, item.count, position, item.pickup_delay, Protocol.Vector3f.init(0, 0.1, 0)) catch {};
+}
 
 fn readLevelDatSpawn(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Protocol.BlockPosition {
     const file = try std.Io.Dir.cwd().openFile(io, path, .{});

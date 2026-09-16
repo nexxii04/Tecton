@@ -364,6 +364,7 @@ pub const Dimension = struct {
         entity.position = position;
         entity.name_tag = name_tag;
         entity.nametag_always_visible = nametag_always_visible;
+        self.world.conduit.registerEcsEntity(entity);
         try applyGlobalTraits(self.allocator, entity);
         try self.entities.put(entity.runtime_id, entity);
         self.entity_index.add(entity);
@@ -375,6 +376,7 @@ pub const Dimension = struct {
         try self.broadcastRemoveEntity(entity);
         self.entity_index.remove(entity.runtime_id);
         _ = self.entities.remove(entity.runtime_id);
+        self.world.conduit.unregisterEcsEntity(entity);
         entity.deinit();
         self.allocator.destroy(entity);
     }
@@ -385,6 +387,7 @@ pub const Dimension = struct {
                 var entity = entry.value;
                 self.entity_index.remove(rid);
                 self.broadcastRemoveEntity(entity) catch {};
+                self.world.conduit.unregisterEcsEntity(entity);
                 entity.deinit();
                 self.allocator.destroy(entity);
             }
@@ -401,6 +404,7 @@ pub const Dimension = struct {
         const entity = try self.allocator.create(Entity);
         entity.* = Entity.init(self.allocator, &item_entity_type, self);
         entity.position = position;
+        self.world.conduit.registerEcsEntity(entity);
 
         const gravity = try GravityTrait.create(self.allocator, .{
             .force = -0.04,

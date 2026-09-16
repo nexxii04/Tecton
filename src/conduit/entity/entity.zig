@@ -26,6 +26,7 @@ pub const Entity = struct {
     attributes: Attributes,
     traits: std.ArrayList(EntityTraitInstance),
     dimension: ?*Dimension,
+    ecs_id: u64 = 0,
     instance_id: u32 = 0,
     name_tag: []const u8 = "",
     nametag_always_visible: bool = false,

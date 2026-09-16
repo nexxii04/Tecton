@@ -7,4 +7,5 @@ pub const Task = @import("./tasks/tasks.zig").Task;
 pub const Plugins = @import("./plugins/root.zig");
 pub const GameInstance = @import("./world/game-instance.zig").GameInstance;
 pub const GameInstanceRegistry = @import("./world/game-instance.zig").GameInstanceRegistry;
+pub const ECS = @import("./entity/ecs.zig");
 pub const version = @import("./version.zig").version;

@@ -69,6 +69,9 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
 
         dimension.broadcastToEntityViewers(entity, serialized);
 
+        if (entity.ecs_id != 0) {
+            _ = conduit.ecs.queueEntityDrop(@bitCast(entity.ecs_id), entity.position);
+        }
         dimension.removeEntity(entity) catch {};
     }
 }

@@ -245,6 +245,7 @@ pub const Player = struct {
         }
 
         self.network.conduit.removePlayer(self);
+        self.network.conduit.unregisterEcsEntity(&self.entity);
         self.deinit();
         self.entity.allocator.destroy(self);
     }

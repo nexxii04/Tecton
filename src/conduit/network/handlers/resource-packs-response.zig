@@ -120,8 +120,8 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
                 return true;
             };
             player.entity.dimension = dimension;
-        player.entity.instance_id = dimension.instance_id;
-        player.network.conduit.instances.assignDimension(player.entity.runtime_id, dimension) catch {};
+        player.entity.instance_id = dimension.instance_id;            player.network.conduit.instances.assignDimension(player.entity.runtime_id, dimension) catch {};
+            player.network.conduit.registerEcsEntity(&player.entity);
 
             const loaded = player.loadPlayerData();
             state.spawn_pos = dimension.spawn_position;

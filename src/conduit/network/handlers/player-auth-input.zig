@@ -46,6 +46,7 @@ pub fn handlePlayerAuthInput(
     player.entity.rotation.y = packet.rotation.y;
     player.entity.motion = .{ .x = packet.motion.x, .y = 0, .z = packet.motion.y };
     player.entity.head_yaw = packet.rotation.z;
+    network.conduit.syncEcsEntity(&player.entity);
 
     {
         var flags_changed = false;
