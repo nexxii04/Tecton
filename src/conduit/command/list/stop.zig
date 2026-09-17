@@ -25,5 +25,5 @@ fn handle(raw: *anyopaque) void {
     }
     const conduit = ctx.network.conduit;
     conduit.stop() catch {};
-    conduit.raknet.running = false;
+    conduit.raknet.running.store(false, .release);
 }

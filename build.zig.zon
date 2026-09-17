@@ -17,8 +17,8 @@
             .hash = "nbt-0.0.0-lsUufBrRAADisGBZm4XFayu1qBm1yBV_OQA7ffTtUwod",
         },
         .ZigNet = .{
-            .url = "git+https://github.com/VantStudios/ZigNet.git#5e142cf8763d079738b5a3b06c55e4b5efa17036",
-            .hash = "ZigNet-0.0.0-C9ZCIpotAwAPdN44nMhHIWD6gR4NKESyWUsf5pjPlX1X",
+            .url = "git+https://github.com/VantStudios/ZigNet.git?ref=master",
+            .hash = "ZigNet-0.0.0-C9ZCIu-AAwB3SpWXcg9kZ-IM4Ob7htncaOXNsz8UsRmX",
         },
         .protocol = .{
             .url = "git+https://github.com/VantStudios/Protocol?ref=master#5b310684eb8ebdfb9285939eb8307f1f946fa81a",
