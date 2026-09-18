@@ -62,7 +62,7 @@ pub const NativePlugin = struct {
     allocator: std.mem.Allocator,
     library: SharedLibrary,
     descriptor: *const abi.Descriptor,
-    context: abi.Context,
+    context: *abi.Context,
     loaded: bool = false,
     started: bool = false,
 
@@ -71,14 +71,17 @@ pub const NativePlugin = struct {
         errdefer library.close();
 
         const get_descriptor = library.symbol(abi.GetDescriptorFn, allocator, "conduit_plugin_get_descriptor") catch return error.InvalidPlugin;
-        const descriptor = get_descriptor(abi.abi_major, abi.abi_minor) orelse return error.InvalidPlugin;
+        const descriptor = get_descriptor(abi.abi_major, abi.descriptor_query_minor) orelse return error.InvalidPlugin;
         abi.validateDescriptor(descriptor, protocol) catch return error.InvalidPlugin;
 
+        const context = try allocator.create(abi.Context);
+        errdefer allocator.destroy(context);
+        context.* = .{ .struct_size = @sizeOf(abi.Context), .plugin_id = plugin_id, .host = host };
         return .{
             .allocator = allocator,
             .library = library,
             .descriptor = descriptor,
-            .context = .{ .struct_size = @sizeOf(abi.Context), .plugin_id = plugin_id, .host = host },
+            .context = context,
         };
     }
 
@@ -86,10 +89,10 @@ pub const NativePlugin = struct {
         if (self.loaded) return;
 
         const on_load = self.descriptor.on_load.?;
-        if (on_load(&self.context) != 0) return error.CallbackFailed;
+        if (on_load(self.context) != 0) return error.CallbackFailed;
         self.loaded = true;
         const on_start = self.descriptor.on_start.?;
-        if (on_start(&self.context) != 0) {
+        if (on_start(self.context) != 0) {
             self.shutdown(.fault);
             return error.CallbackFailed;
         }
@@ -99,17 +102,18 @@ pub const NativePlugin = struct {
 
     pub fn shutdown(self: *NativePlugin, reason: abi.ShutdownReason) void {
         if (self.started) {
-            self.descriptor.on_shutdown.?(&self.context, @intFromEnum(reason));
+            self.descriptor.on_shutdown.?(self.context, @intFromEnum(reason));
             self.started = false;
         }
         if (self.loaded) {
-            self.descriptor.on_unload.?(&self.context);
+            self.descriptor.on_unload.?(self.context);
             self.loaded = false;
         }
     }
 
     pub fn deinit(self: *NativePlugin) void {
         self.shutdown(.shutdown);
+        self.allocator.destroy(self.context);
         self.library.close();
     }
 };

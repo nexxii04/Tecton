@@ -68,7 +68,7 @@ static const conduit_plugin_descriptor descriptor = {
      {name, sizeof(name) - 1},
      {version, sizeof(version) - 1},
      {description, sizeof(description) - 1},
-     {CONDUIT_PLUGIN_ABI_MAJOR, CONDUIT_PLUGIN_ABI_MINOR, 2169},
+     {CONDUIT_PLUGIN_ABI_MAJOR, CONDUIT_PLUGIN_DESCRIPTOR_QUERY_MINOR, 2169},
      0},
     on_load,
     on_start,

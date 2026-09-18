@@ -16,6 +16,7 @@ pub const EventContext = struct {
     phase: EventPhase,
     tick: u64 = 0,
     cancelled: bool = false,
+    listener_userdata: ?*anyopaque = null,
 };
 
 pub fn Listener(comptime event: Event) type {
@@ -25,6 +26,7 @@ pub fn Listener(comptime event: Event) type {
         priority: i16,
         order: u64,
         owner_id: u32,
+        userdata: ?*anyopaque,
     };
 }
 
@@ -79,12 +81,25 @@ pub fn Emitter() type {
             owner_id: u32,
             callback: *const fn (*EventContext, *Event.DataType(event)) EventResult,
         ) !Subscription {
+            return self.subscribeWithContext(event, phase, priority, owner_id, callback, null);
+        }
+
+        pub fn subscribeWithContext(
+            self: *Self,
+            comptime event: Event,
+            phase: EventPhase,
+            priority: i16,
+            owner_id: u32,
+            callback: *const fn (*EventContext, *Event.DataType(event)) EventResult,
+            userdata: ?*anyopaque,
+        ) !Subscription {
             const list = self.listenerList(event, phase);
             const listener = Listener(event){
                 .callback = callback,
                 .priority = priority,
                 .order = self.next_order,
                 .owner_id = owner_id,
+                .userdata = userdata,
             };
             self.next_order += 1;
 
@@ -130,6 +145,7 @@ pub fn Emitter() type {
             context.phase = .pre;
             const pre = self.listenerList(event, .pre);
             for (pre.items) |listener| {
+                context.listener_userdata = listener.userdata;
                 switch (listener.callback(context, data)) {
                     .cancel => {
                         context.cancelled = true;
@@ -147,6 +163,7 @@ pub fn Emitter() type {
                 context.phase = .commit;
                 const commit = self.listenerList(event, .commit);
                 for (commit.items) |listener| {
+                    context.listener_userdata = listener.userdata;
                     if (listener.callback(context, data) != .continue_) {
                         context.cancelled = true;
                         break;
@@ -157,8 +174,10 @@ pub fn Emitter() type {
             context.phase = .post;
             const post = self.listenerList(event, .post);
             for (post.items) |listener| {
+                context.listener_userdata = listener.userdata;
                 _ = listener.callback(context, data);
             }
+            context.listener_userdata = null;
             return !context.cancelled;
         }
 

@@ -10,6 +10,10 @@ fn allocate(_: ?*anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
 fn release(_: ?*anyopaque, _: ?*anyopaque, _: usize, _: usize) callconv(.c) void {}
 fn log(_: ?*anyopaque, _: u32, _: abi.StringView) callconv(.c) void {}
 fn pluginLog(_: ?*anyopaque, _: u32, _: abi.StringView) callconv(.c) void {}
+fn getInterface(_: ?*anyopaque, _: u32, _: u16, _: u16, interface: ?*?abi.InterfacePtr) callconv(.c) i32 {
+    if (interface) |value| value.* = null;
+    return abi.result_unsupported;
+}
 fn worldFind(_: ?*anyopaque, _: abi.StringView, _: *u64) callconv(.c) i32 {
     return -1;
 }
@@ -23,12 +27,12 @@ var eventCallback: ?abi.EventCallbackFn = null;
 var eventUserdata: ?*anyopaque = null;
 var eventSubscription: u64 = 0;
 
-fn eventSubscribe(_: ?*anyopaque, event_id: u32, phase: u32, _: i16, callback: abi.EventCallbackFn, userdata: ?*anyopaque, subscription: *u64) callconv(.c) i32 {
+fn eventSubscribe(_: ?*anyopaque, event_id: u32, phase: u32, _: i16, callback: ?abi.EventCallbackFn, userdata: ?*anyopaque, subscription: ?*u64) callconv(.c) i32 {
     if (event_id != @intFromEnum(abi.EventId.server_tick) or phase != @intFromEnum(abi.EventPhase.pre)) return -1;
     eventCallback = callback;
     eventUserdata = userdata;
     eventSubscription = 42;
-    subscription.* = eventSubscription;
+    subscription.?.* = eventSubscription;
     return 0;
 }
 
@@ -43,7 +47,7 @@ test "example native plugin completes lifecycle" {
     const path = options.path;
     var host = abi.HostApi{
         .struct_size = @sizeOf(abi.HostApi),
-        .api = .{ .major = abi.abi_major, .minor = abi.abi_minor, .protocol = 2169 },
+        .api = .{ .major = abi.abi_major, .minor = 0, .protocol = 2169 },
         .userdata = null,
         .allocator = .{ .userdata = null, .alloc = allocate, .free = release },
         .log = log,
@@ -57,6 +61,7 @@ test "example native plugin completes lifecycle" {
         .log_info = pluginLog,
         .log_warn = pluginLog,
         .log_error = pluginLog,
+        .get_interface = getInterface,
     };
     var plugin = try loader.NativePlugin.open(std.testing.allocator, path, &host, 1, 2169);
     defer plugin.deinit();
@@ -64,7 +69,7 @@ test "example native plugin completes lifecycle" {
     try std.testing.expect(eventCallback != null);
     var tick = abi.ServerTickEvent{ .tick = 1 };
     var result: u32 = @intFromEnum(abi.EventResult.continue_);
-    const event = abi.EventView{ .event_id = @intFromEnum(abi.EventId.server_tick), .phase = @intFromEnum(abi.EventPhase.pre), .data = @ptrCast(&tick), .data_size = @sizeOf(abi.ServerTickEvent), .result = &result, .payload_version = 1 };
+    const event = abi.EventView{ .event_id = @intFromEnum(abi.EventId.server_tick), .phase = @intFromEnum(abi.EventPhase.pre), .data = @ptrCast(&tick), .data_size = @sizeOf(abi.ServerTickEvent), .result = &result, .payload_version = 1, .struct_size = @sizeOf(abi.EventView), .flags = abi.event_flag_cancelable | abi.event_flag_callback_only, .payload_schema = 0x10001 };
     eventCallback.?(eventUserdata, &event);
     try std.testing.expect(plugin.loaded);
     try std.testing.expect(plugin.started);

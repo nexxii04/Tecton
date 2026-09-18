@@ -294,11 +294,13 @@ pub const Conduit = struct {
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
         try self.raknet.start();
+        self.plugin_runtime.setServerState(1);
 
         try self.console.start(self);
     }
 
     pub fn stop(self: *Conduit) !void {
+        self.plugin_runtime.setServerState(2);
         var event = Events.types.ServerShutdownEvent{};
         _ = self.events.emit(.ServerShutdown, &event);
 

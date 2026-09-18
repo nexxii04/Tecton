@@ -2,24 +2,19 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Conduit = @import("../conduit.zig").Conduit;
+const Raknet = @import("Raknet");
 const Events = @import("../events/root.zig");
 const World = @import("../world/world.zig").World;
 const abi = @import("abi.zig");
 const NativePlugin = @import("dynamic_loader.zig").NativePlugin;
-
-const native_io = if (builtin.os.tag == .windows) struct {
-    extern "kernel32" fn OutputDebugStringA(message: [*:0]const u8) callconv(.winapi) void;
-} else struct {
-    extern "c" fn write(fd: c_int, buffer: [*]const u8, length: usize) isize;
-};
-
-var active_runtime: ?*PluginRuntime = null;
+const Handles = @import("handles.zig");
 
 pub const PluginRuntime = struct {
     allocator: std.mem.Allocator,
     conduit: ?*Conduit = null,
     events: ?*Events.Events = null,
     host: abi.HostApi,
+    handles: Handles.Table,
     plugins: std.ArrayList(NativePlugin),
     plugin_labels: std.ArrayList(PluginLabel),
     subscriptions: std.ArrayList(Subscription),
@@ -28,12 +23,29 @@ pub const PluginRuntime = struct {
     next_subscription: u64 = 1,
     discovery_error_count: usize = 0,
     dispatching: bool = false,
+    server_state: u32 = 0,
+    next_task: u64 = 1,
+    scheduled_tasks: std.ArrayList(*ScheduledTask),
+    core_api: abi.CoreApi,
+    scheduler_api: abi.SchedulerApi,
+    world_api: abi.WorldApi,
+    players_api: abi.PlayersApi,
+    entities_api: abi.EntitiesApi,
 
     pub const NATIVE_BRIDGE_OWNER_ID: u16 = 0xC001;
 
     const PluginLabel = struct {
         id: u32,
         name: []u8,
+    };
+
+    const ScheduledTask = struct {
+        runtime: *PluginRuntime,
+        owner_id: u32,
+        handle: u64,
+        callback: abi.SchedulerCallbackFn,
+        userdata: ?*anyopaque,
+        cancelled: bool = false,
     };
 
     const Subscription = struct {
@@ -50,10 +62,43 @@ pub const PluginRuntime = struct {
         var runtime = PluginRuntime{
             .allocator = allocator,
             .host = undefined,
+            .handles = Handles.Table.init(allocator),
             .plugins = .empty,
             .plugin_labels = .empty,
             .subscriptions = .empty,
             .bridges = std.mem.zeroes([17][3]bool),
+            .scheduled_tasks = .empty,
+            .core_api = undefined,
+            .scheduler_api = undefined,
+            .world_api = undefined,
+            .players_api = undefined,
+            .entities_api = undefined,
+        };
+        runtime.core_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.CoreApi), .major = 1, .minor = 0, .interface_id = abi.interface_core, .features = 0 },
+            .get_tick = coreGetTick,
+            .get_state = coreGetState,
+        };
+        runtime.world_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.WorldApi), .major = 1, .minor = 0, .interface_id = abi.interface_world, .features = 0 },
+            .find = worldFindInterface,
+            .get_snapshot = worldGetSnapshot,
+        };
+        runtime.players_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.PlayersApi), .major = 1, .minor = 0, .interface_id = abi.interface_players, .features = 0 },
+            .count = playersCount,
+            .get_snapshot = playersGetSnapshot,
+        };
+        runtime.entities_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.EntitiesApi), .major = 1, .minor = 0, .interface_id = abi.interface_entities, .features = 0 },
+            .count = entitiesCount,
+            .get_snapshot = entitiesGetSnapshot,
+        };
+        runtime.scheduler_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .features = 0 },
+            .schedule = schedulerSchedule,
+            .cancel = schedulerCancel,
+            .cancel_owner = schedulerCancelOwner,
         };
         runtime.host = .{
             .struct_size = @sizeOf(abi.HostApi),
@@ -66,11 +111,12 @@ pub const PluginRuntime = struct {
             .world_set_block = worldSetBlock,
             .event_subscribe = eventSubscribe,
             .event_unsubscribe = eventUnsubscribe,
-            .features = abi.feature_events | abi.feature_world | abi.feature_logging | abi.feature_allocator,
+            .features = abi.feature_events | abi.feature_world | abi.feature_logging | abi.feature_allocator | abi.feature_interfaces | abi.feature_core | abi.feature_scheduler | abi.feature_players | abi.feature_entities,
             .log_debug = logDebug,
             .log_info = logInfo,
             .log_warn = logWarn,
             .log_error = logError,
+            .get_interface = getInterface,
         };
         return runtime;
     }
@@ -81,13 +127,14 @@ pub const PluginRuntime = struct {
         self.host.userdata = @ptrCast(self);
         self.host.allocator.userdata = @ptrCast(self);
         self.host.api.protocol = protocol;
-        active_runtime = self;
+        self.host.api.minor = abi.abi_minor;
+        self.server_state = 0;
     }
 
     pub fn discover(self: *PluginRuntime, io: std.Io, protocol: u32) void {
         const directory = std.Io.Dir.cwd().openDir(io, "plugins", .{ .iterate = true }) catch |err| {
             std.Io.Dir.cwd().createDir(io, "plugins", .default_dir) catch {};
-            if (err != error.FileNotFound) std.log.warn("Unable to open plugins directory: {s}", .{@errorName(err)});
+            if (err != error.FileNotFound) Raknet.Logger.WARN("Unable to open plugins directory: {s}", .{@errorName(err)});
             return;
         };
         var plugins_dir = directory;
@@ -103,12 +150,12 @@ pub const PluginRuntime = struct {
         while (iterator.next(io) catch null) |entry| {
             if (entry.kind != .file or !isPluginFile(entry.name)) continue;
             const name = self.allocator.dupe(u8, entry.name) catch {
-                std.log.err("Unable to allocate plugin name for {s}", .{entry.name});
+                Raknet.Logger.ERROR("Unable to allocate plugin name for {s}", .{entry.name});
                 continue;
             };
             names.append(self.allocator, name) catch {
                 self.allocator.free(name);
-                std.log.err("Unable to register plugin name for {s}", .{entry.name});
+                Raknet.Logger.ERROR("Unable to register plugin name for {s}", .{entry.name});
             };
         }
 
@@ -120,7 +167,7 @@ pub const PluginRuntime = struct {
 
         for (names.items) |name| {
             const path = std.fmt.allocPrint(self.allocator, "plugins/{s}", .{name}) catch {
-                std.log.err("Unable to allocate plugin path for {s}", .{name});
+                Raknet.Logger.ERROR("Unable to allocate plugin path for {s}", .{name});
                 continue;
             };
             defer self.allocator.free(path);
@@ -129,30 +176,41 @@ pub const PluginRuntime = struct {
     }
 
     pub fn deinit(self: *PluginRuntime) void {
+        self.cancelAllScheduled();
         if (self.events) |events| events.removeOwner(NATIVE_BRIDGE_OWNER_ID);
         var index = self.plugins.items.len;
         while (index > 0) {
             index -= 1;
             self.plugins.items[index].deinit();
         }
+        if (self.conduit) |conduit| {
+            for (self.plugin_labels.items) |label| {
+                conduit.tasks.cancelByOwner("plugin", @intCast(label.id), null);
+            }
+        }
         self.plugins.deinit(self.allocator);
+        self.handles.deinit();
         for (self.plugin_labels.items) |label| self.allocator.free(label.name);
         self.plugin_labels.deinit(self.allocator);
         self.subscriptions.deinit(self.allocator);
+        self.scheduled_tasks.deinit(self.allocator);
         self.events = null;
         self.conduit = null;
-        if (active_runtime == self) active_runtime = null;
     }
 
     pub fn count(self: *const PluginRuntime) usize {
         return self.plugins.items.len;
     }
 
+    pub fn setServerState(self: *PluginRuntime, state: u32) void {
+        self.server_state = state;
+    }
+
     fn load(self: *PluginRuntime, path: []const u8, protocol: u32) void {
         const plugin_id = self.next_id;
         var plugin = NativePlugin.open(self.allocator, path, &self.host, plugin_id, protocol) catch |err| {
             self.discovery_error_count += 1;
-            std.log.err("Unable to load plugin {s}: {s}", .{ path, @errorName(err) });
+            Raknet.Logger.ERROR("Unable to load plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
 
@@ -160,7 +218,7 @@ pub const PluginRuntime = struct {
         const label = self.allocator.dupe(u8, abi.metadataName(plugin.descriptor)) catch {
             self.discovery_error_count += 1;
             plugin.deinit();
-            std.log.err("Unable to allocate plugin label for {s}", .{path});
+            Raknet.Logger.ERROR("Unable to allocate plugin label for {s}", .{path});
             return;
         };
 
@@ -168,28 +226,30 @@ pub const PluginRuntime = struct {
             self.allocator.free(label);
             self.discovery_error_count += 1;
             plugin.deinit();
-            std.log.err("Unable to register plugin label for {s}", .{path});
+            Raknet.Logger.ERROR("Unable to register plugin label for {s}", .{path});
             return;
         };
 
-        std.log.info("Loading native plugin: {s}", .{path});
+        Raknet.Logger.INFO("Loading native plugin: {s}", .{path});
         plugin.start() catch |err| {
             plugin.deinit();
-            std.log.err("Unable to start plugin {s}: {s}", .{ path, @errorName(err) });
+            Raknet.Logger.ERROR("Unable to start plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
 
         self.plugins.append(self.allocator, plugin) catch |err| {
             plugin.deinit();
-            std.log.err("Unable to register plugin {s}: {s}", .{ path, @errorName(err) });
+            Raknet.Logger.ERROR("Unable to register plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
     }
 
-    fn eventSubscribe(context: ?*anyopaque, event_id: u32, phase: u32, priority: i16, callback: abi.EventCallbackFn, userdata: ?*anyopaque, subscription: *u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
-        if (event_id >= 17 or phase >= 3 or self.dispatching) return -1;
-        self.ensureBridge(event_id, phase) catch return -2;
+    fn eventSubscribe(context: ?*anyopaque, event_id: u32, phase: u32, priority: i16, callback: ?abi.EventCallbackFn, userdata: ?*anyopaque, subscription: ?*u64) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return -1));
+        if (phase >= 3 or self.dispatching) return -1;
+        if (callback == null or subscription == null) return abi.result_invalid_argument;
+        const internal_event = internalEvent(event_id) orelse return abi.result_not_found;
+        self.ensureBridge(@intFromEnum(internal_event), phase) catch return abi.result_unsupported;
 
         const id = self.next_subscription;
         self.next_subscription += 1;
@@ -198,26 +258,27 @@ pub const PluginRuntime = struct {
             .event_id = event_id,
             .phase = phase,
             .priority = priority,
-            .callback = callback,
+            .callback = callback.?,
             .userdata = userdata,
         };
 
         var index: usize = 0;
         while (index < self.subscriptions.items.len and self.subscriptions.items[index].priority >= priority) : (index += 1) {}
-        self.subscriptions.insert(self.allocator, index, item) catch return -3;
-        subscription.* = id;
+        self.subscriptions.insert(self.allocator, index, item) catch return abi.result_out_of_memory;
+        subscription.?.* = id;
         return 0;
     }
 
     fn eventUnsubscribe(context: ?*anyopaque, subscription: u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        if (subscription == 0) return abi.result_invalid_argument;
         for (self.subscriptions.items) |*item| {
             if (item.id == subscription and item.active) {
                 item.active = false;
                 return 0;
             }
         }
-        return -1;
+        return abi.result_not_found;
     }
 
     fn ensureBridge(self: *PluginRuntime, event_id: u32, phase: u32) !void {
@@ -228,9 +289,9 @@ pub const PluginRuntime = struct {
         switch (event) {
             inline else => |tag| {
                 switch (event_phase) {
-                    .pre => _ = try events.subscribe(tag, .pre, -32768, NATIVE_BRIDGE_OWNER_ID, bridgeCallback(tag)),
-                    .commit => _ = try events.subscribe(tag, .commit, -32768, NATIVE_BRIDGE_OWNER_ID, bridgeCallback(tag)),
-                    .post => _ = try events.subscribe(tag, .post, -32768, NATIVE_BRIDGE_OWNER_ID, bridgeCallback(tag)),
+                    .pre => _ = try events.subscribeWithContext(tag, .pre, -32768, NATIVE_BRIDGE_OWNER_ID, bridgeCallback(tag), self),
+                    .commit => _ = try events.subscribeWithContext(tag, .commit, -32768, NATIVE_BRIDGE_OWNER_ID, bridgeCallback(tag), self),
+                    .post => _ = try events.subscribeWithContext(tag, .post, -32768, NATIVE_BRIDGE_OWNER_ID, bridgeCallback(tag), self),
                 }
             },
         }
@@ -240,14 +301,15 @@ pub const PluginRuntime = struct {
     fn bridgeCallback(comptime event: Events.Event) *const fn (*Events.EventContext, *Events.Event.DataType(event)) Events.EventResult {
         return struct {
             fn callback(context: *Events.EventContext, data: *Events.Event.DataType(event)) Events.EventResult {
-                const runtime = active_runtime orelse return .continue_;
+                const runtime_pointer = context.listener_userdata orelse return .continue_;
+                const runtime: *PluginRuntime = @ptrCast(@alignCast(runtime_pointer));
                 return runtime.dispatch(event, context, data);
             }
         }.callback;
     }
 
     fn dispatch(self: *PluginRuntime, comptime event: Events.Event, context: *Events.EventContext, data: *Events.Event.DataType(event)) Events.EventResult {
-        const event_id = @intFromEnum(event);
+        const external_event_id = @intFromEnum(externalEventId(event));
         const phase = @intFromEnum(context.phase);
         self.dispatching = true;
         defer self.dispatching = false;
@@ -262,19 +324,191 @@ pub const PluginRuntime = struct {
             payload_ptr = @ptrCast(&payload);
             payload_size = @sizeOf(abi.ServerTickEvent);
         } else if (event == .PlayerJoin or event == .PlayerDisconnect) {
-            player_payload.handle = @intFromPtr(data.player);
-            payload_ptr = @ptrCast(&player_payload);
-            payload_size = @sizeOf(abi.PlayerEvent);
+            player_payload.handle = self.handles.put(.player, @intFromPtr(data.player)) catch 0;
+            if (player_payload.handle != 0) {
+                payload_ptr = @ptrCast(&player_payload);
+                payload_size = @sizeOf(abi.PlayerEvent);
+            }
         }
 
         const payload_version: u32 = if (event == .ServerTick or event == .PlayerJoin or event == .PlayerDisconnect) 1 else 0;
-        const view = abi.EventView{ .event_id = event_id, .phase = phase, .data = payload_ptr, .data_size = payload_size, .result = &result, .payload_version = payload_version };
+        const view = abi.EventView{
+            .event_id = @intFromEnum(externalEventId(event)),
+            .phase = phase,
+            .data = payload_ptr,
+            .data_size = payload_size,
+            .result = &result,
+            .payload_version = payload_version,
+            .struct_size = @sizeOf(abi.EventView),
+            .flags = if (event == .ServerTick or event == .PlayerJoin or event == .PlayerDisconnect) abi.event_flag_cancelable | abi.event_flag_callback_only else abi.event_flag_callback_only,
+            .payload_schema = if (event == .ServerTick) 0x10001 else if (event == .PlayerJoin or event == .PlayerDisconnect) 0x10002 else 0,
+        };
         for (self.subscriptions.items) |subscription| {
-            if (!subscription.active or subscription.event_id != event_id or subscription.phase != phase) continue;
+            if (!subscription.active or subscription.event_id != external_event_id or subscription.phase != phase) continue;
             subscription.callback(subscription.userdata, &view);
-            if (result != @intFromEnum(abi.EventResult.continue_)) return .cancel;
+            if (result != @intFromEnum(abi.EventResult.continue_)) {
+                if (event == .PlayerDisconnect) _ = self.handles.removePointer(.player, @intFromPtr(data.player));
+                return .cancel;
+            }
         }
+        if (event == .PlayerDisconnect) _ = self.handles.removePointer(.player, @intFromPtr(data.player));
         return .continue_;
+    }
+
+    fn getInterface(context: ?*anyopaque, interface_id: u32, major: u16, minor: u16, interface: ?*?abi.InterfacePtr) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = interface orelse return abi.result_invalid_argument;
+        output.* = null;
+        if (major != 1 or minor > 0) return abi.result_unsupported;
+        switch (interface_id) {
+            abi.interface_core => {
+                output.* = @ptrCast(&self.core_api);
+                return abi.result_ok;
+            },
+            abi.interface_scheduler => {
+                output.* = @ptrCast(&self.scheduler_api);
+                return abi.result_ok;
+            },
+            abi.interface_world => {
+                output.* = @ptrCast(&self.world_api);
+                return abi.result_ok;
+            },
+            abi.interface_players => {
+                output.* = @ptrCast(&self.players_api);
+                return abi.result_ok;
+            },
+            abi.interface_entities => {
+                output.* = @ptrCast(&self.entities_api);
+                return abi.result_ok;
+            },
+            else => return abi.result_unsupported,
+        }
+    }
+
+    fn coreGetTick(context: ?*anyopaque, tick: ?*u64) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = tick orelse return abi.result_invalid_argument;
+        output.* = (self.conduit orelse return abi.result_not_found).tick_count;
+        return abi.result_ok;
+    }
+
+    fn coreGetState(context: ?*anyopaque, state: ?*u32) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = state orelse return abi.result_invalid_argument;
+        output.* = self.server_state;
+        return abi.result_ok;
+    }
+
+    fn schedulerSchedule(context: ?*anyopaque, owner_id: u32, callback: ?abi.SchedulerCallbackFn, callback_userdata: ?*anyopaque, task: ?*u64) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const callback_value = callback orelse return abi.result_invalid_argument;
+        const output = task orelse return abi.result_invalid_argument;
+        if (output.* != 0) return abi.result_invalid_argument;
+        if (self.conduit == null) return abi.result_not_found;
+        const scheduled = self.allocator.create(ScheduledTask) catch return abi.result_out_of_memory;
+        scheduled.* = .{ .runtime = self, .owner_id = owner_id, .handle = self.next_task, .callback = callback_value, .userdata = callback_userdata };
+        self.next_task += 1;
+        self.scheduled_tasks.append(self.allocator, scheduled) catch {
+            self.allocator.destroy(scheduled);
+            return abi.result_out_of_memory;
+        };
+        self.conduit.?.tasks.enqueue(.{ .func = runScheduledTask, .ctx = @ptrCast(scheduled), .name = "plugin", .owner_id = @intCast(owner_id), .cleanup = cleanupScheduledTask }) catch {
+            _ = self.scheduled_tasks.pop();
+            self.allocator.destroy(scheduled);
+            return abi.result_busy;
+        };
+        output.* = scheduled.handle;
+        return abi.result_ok;
+    }
+
+    fn schedulerCancel(context: ?*anyopaque, handle: u64) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        for (self.scheduled_tasks.items) |scheduled| {
+            if (scheduled.handle == handle and !scheduled.cancelled) {
+                scheduled.cancelled = true;
+                return abi.result_ok;
+            }
+        }
+        return abi.result_not_found;
+    }
+
+    fn schedulerCancelOwner(context: ?*anyopaque, owner_id: u32) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        var found = false;
+        for (self.scheduled_tasks.items) |scheduled| {
+            if (scheduled.owner_id == owner_id and !scheduled.cancelled) {
+                scheduled.cancelled = true;
+                found = true;
+            }
+        }
+        return if (found) abi.result_ok else abi.result_not_found;
+    }
+
+    fn runScheduledTask(context: *anyopaque) bool {
+        const scheduled: *ScheduledTask = @ptrCast(@alignCast(context));
+        if (!scheduled.cancelled) _ = scheduled.callback(scheduled.userdata);
+        return true;
+    }
+
+    fn cleanupScheduledTask(context: *anyopaque) void {
+        const scheduled: *ScheduledTask = @ptrCast(@alignCast(context));
+        const runtime = scheduled.runtime;
+        for (runtime.scheduled_tasks.items, 0..) |candidate, index| {
+            if (candidate == scheduled) {
+                _ = runtime.scheduled_tasks.swapRemove(index);
+                break;
+            }
+        }
+        runtime.allocator.destroy(scheduled);
+    }
+
+    fn cancelAllScheduled(self: *PluginRuntime) void {
+        for (self.scheduled_tasks.items) |scheduled| scheduled.cancelled = true;
+    }
+
+    fn internalEvent(event_id: u32) ?Events.Event {
+        return switch (event_id) {
+            @intFromEnum(abi.EventId.server_start) => .ServerStart,
+            @intFromEnum(abi.EventId.server_shutdown) => .ServerShutdown,
+            @intFromEnum(abi.EventId.server_tick) => .ServerTick,
+            @intFromEnum(abi.EventId.player_join) => .PlayerJoin,
+            @intFromEnum(abi.EventId.player_disconnect) => .PlayerDisconnect,
+            @intFromEnum(abi.EventId.player_chat) => .PlayerChat,
+            @intFromEnum(abi.EventId.item_use) => .ItemUse,
+            @intFromEnum(abi.EventId.player_move) => .PlayerMove,
+            @intFromEnum(abi.EventId.damage) => .Damage,
+            @intFromEnum(abi.EventId.block_place) => .BlockPlace,
+            @intFromEnum(abi.EventId.block_break) => .BlockBreak,
+            @intFromEnum(abi.EventId.inventory_open) => .InventoryOpen,
+            @intFromEnum(abi.EventId.inventory_click) => .InventoryClick,
+            @intFromEnum(abi.EventId.inventory_close) => .InventoryClose,
+            @intFromEnum(abi.EventId.transaction_prepare) => .TransactionPrepare,
+            @intFromEnum(abi.EventId.transaction_commit) => .TransactionCommit,
+            @intFromEnum(abi.EventId.transaction_abort) => .TransactionAbort,
+            else => null,
+        };
+    }
+
+    fn externalEventId(event: Events.Event) abi.EventId {
+        return switch (event) {
+            .ServerStart => .server_start,
+            .ServerShutdown => .server_shutdown,
+            .ServerTick => .server_tick,
+            .PlayerJoin => .player_join,
+            .PlayerDisconnect => .player_disconnect,
+            .PlayerChat => .player_chat,
+            .ItemUse => .item_use,
+            .PlayerMove => .player_move,
+            .Damage => .damage,
+            .BlockPlace => .block_place,
+            .BlockBreak => .block_break,
+            .InventoryOpen => .inventory_open,
+            .InventoryClick => .inventory_click,
+            .InventoryClose => .inventory_close,
+            .TransactionPrepare => .transaction_prepare,
+            .TransactionCommit => .transaction_commit,
+            .TransactionAbort => .transaction_abort,
+        };
     }
 
     fn isPluginFile(name: []const u8) bool {
@@ -284,12 +518,14 @@ pub const PluginRuntime = struct {
     }
 
     fn allocate(context: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return null));
+        if (size == 0) return null;
         return self.allocator.rawAlloc(size, .fromByteUnits(@max(alignment, 1)), @returnAddress());
     }
 
     fn free(context: ?*anyopaque, memory: ?*anyopaque, size: usize, alignment: usize) callconv(.c) void {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return));
+        if (size == 0) return;
         const ptr = memory orelse return;
         self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..size], .fromByteUnits(@max(alignment, 1)), @returnAddress());
     }
@@ -326,21 +562,92 @@ pub const PluginRuntime = struct {
         const name = for (self.plugin_labels.items) |label| {
             if (label.id == plugin_id) break label.name;
         } else "unknown";
-        var buffer: [4096]u8 = undefined;
-        const formatted = std.fmt.bufPrint(&buffer, "[plugin:{s}] [{s}] {s}\n", .{ name, level, text[0..message.length] }) catch return;
-        if (builtin.os.tag == .windows) {
-            buffer[formatted.len] = 0;
-            native_io.OutputDebugStringA(buffer[0..formatted.len :0].ptr);
+        const value = text[0..message.length];
+        if (std.mem.eql(u8, level, "DEBUG")) {
+            Raknet.Logger.DEBUG("[plugin:{s}] {s}", .{ name, value });
+        } else if (std.mem.eql(u8, level, "INFO")) {
+            Raknet.Logger.INFO("[plugin:{s}] {s}", .{ name, value });
+        } else if (std.mem.eql(u8, level, "WARN")) {
+            Raknet.Logger.WARN("[plugin:{s}] {s}", .{ name, value });
         } else {
-            _ = native_io.write(2, formatted.ptr, formatted.len);
+            Raknet.Logger.ERROR("[plugin:{s}] {s}", .{ name, value });
         }
+    }
+
+    fn worldFindInterface(context: ?*anyopaque, name: abi.StringView, handle: *u64) callconv(.c) i32 {
+        return worldFind(context, name, handle);
+    }
+
+    fn worldGetSnapshot(context: ?*anyopaque, handle: u64, snapshot: ?*abi.WorldSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.WorldSnapshot)) return abi.result_invalid_argument;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        const world = self.findWorldByHandle(conduit, handle) orelse return abi.result_invalid_handle;
+        output.* = .{ .header = .{ .struct_size = @sizeOf(abi.WorldSnapshot), .version = 1, .reserved = 0 }, .handle = handle, .name = .{ .data = world.identifier.ptr, .length = world.identifier.len } };
+        return abi.result_ok;
+    }
+
+    fn playersCount(context: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = count_output;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        output.* = conduit.getPlayerCount() catch return abi.result_busy;
+        return abi.result_ok;
+    }
+
+    fn playersGetSnapshot(context: ?*anyopaque, index: usize, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) return abi.result_invalid_argument;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        const players = conduit.getPlayerSnapshots();
+        if (index >= players.len) return abi.result_not_found;
+        const player = players[index];
+        const world_handle = if (player.entity.dimension) |dimension| self.handles.put(.world, @intFromPtr(dimension.world)) catch return abi.result_out_of_memory else 0;
+        const dimension_name = if (player.entity.dimension) |dimension| dimension.identifier else "";
+        const handle = self.handles.put(.player, @intFromPtr(player)) catch return abi.result_out_of_memory;
+        output.* = .{ .header = .{ .struct_size = @sizeOf(abi.PlayerSnapshot), .version = 1, .reserved = 0 }, .handle = handle, .runtime_id = player.entity.runtime_id, .name = .{ .data = player.username.ptr, .length = player.username.len }, .uuid = .{ .data = player.uuid.ptr, .length = player.uuid.len }, .world = world_handle, .dimension = .{ .data = dimension_name.ptr, .length = dimension_name.len }, .x = player.entity.position.x, .y = player.entity.position.y, .z = player.entity.position.z };
+        return abi.result_ok;
+    }
+
+    fn entitiesCount(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, count_output: *usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = count_output;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        const world = self.findWorldByHandle(conduit, world_handle) orelse return abi.result_invalid_handle;
+        const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
+        output.* = dimension.entities.count();
+        return abi.result_ok;
+    }
+
+    fn entitiesGetSnapshot(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, index: usize, snapshot: ?*abi.EntitySnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.EntitySnapshot)) return abi.result_invalid_argument;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        const world = self.findWorldByHandle(conduit, world_handle) orelse return abi.result_invalid_handle;
+        const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
+        var iterator = dimension.entities.valueIterator();
+        var current: usize = 0;
+        while (iterator.next()) |entity_ptr| {
+            if (current != index) {
+                current += 1;
+                continue;
+            }
+            const entity = entity_ptr.*;
+            const handle = self.handles.put(.entity, @intFromPtr(entity)) catch return abi.result_out_of_memory;
+            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.EntitySnapshot), .version = 1, .reserved = 0 }, .handle = handle, .runtime_id = entity.runtime_id, .type = .{ .data = entity.entity_type.identifier.ptr, .length = entity.entity_type.identifier.len }, .world = world_handle, .dimension = .{ .data = dimension.identifier.ptr, .length = dimension.identifier.len }, .x = entity.position.x, .y = entity.position.y, .z = entity.position.z };
+            return abi.result_ok;
+        }
+        return abi.result_not_found;
     }
 
     fn worldFind(context: ?*anyopaque, name: abi.StringView, handle: *u64) callconv(.c) i32 {
         const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
         const conduit = self.conduit orelse return -1;
         const world = conduit.getWorld(name.slice()) orelse return -1;
-        handle.* = @intFromPtr(world);
+        handle.* = self.handles.put(.world, @intFromPtr(world)) catch return -8;
         return 0;
     }
 
@@ -351,18 +658,52 @@ pub const PluginRuntime = struct {
     fn worldSetBlock(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, x: i32, y: i32, z: i32, block: abi.StringView) callconv(.c) i32 {
         const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
         const conduit = self.conduit orelse return -1;
-        const world = findWorldByHandle(conduit, world_handle) orelse return -1;
+        const world = self.findWorldByHandle(conduit, world_handle) orelse return -1;
         const dimension_value = world.getDimension(dimension.slice()) orelse return -2;
         const permutation = @import("../world/block/block-permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return -3;
         dimension_value.setPermutation(.{ .x = x, .y = y, .z = z }, permutation, 0) catch return -3;
         return 0;
     }
 
-    fn findWorldByHandle(conduit: *Conduit, handle: u64) ?*World {
+    fn findWorldByHandle(self: *PluginRuntime, conduit: *Conduit, handle: u64) ?*World {
+        const pointer = self.handles.get(.world, handle) orelse return null;
         var worlds = conduit.worlds.valueIterator();
         while (worlds.next()) |world| {
-            if (@intFromPtr(world.*) == handle) return world.*;
+            if (@intFromPtr(world.*) == pointer) return world.*;
         }
         return null;
     }
 };
+
+test "core and scheduler interfaces are independently discoverable" {
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+
+    var core: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_core, 1, 0, &core));
+    try std.testing.expect(core != null);
+    try std.testing.expectEqual(abi.interface_core, core.?.interface_id);
+    try std.testing.expectEqual(@as(u32, @sizeOf(abi.CoreApi)), core.?.struct_size);
+
+    var scheduler: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_scheduler, 1, 0, &scheduler));
+    try std.testing.expect(scheduler != null);
+    try std.testing.expectEqual(abi.interface_scheduler, scheduler.?.interface_id);
+
+    var world: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_world, 1, 0, &world));
+    try std.testing.expect(world != null);
+    try std.testing.expectEqual(abi.interface_world, world.?.interface_id);
+
+    var players: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_players, 1, 0, &players));
+    try std.testing.expect(players != null);
+
+    var entities: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_entities, 1, 0, &entities));
+    try std.testing.expect(entities != null);
+
+    var unavailable: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_unsupported, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_items, 1, 0, &unavailable));
+    try std.testing.expect(unavailable == null);
+}
