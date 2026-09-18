@@ -302,14 +302,6 @@ pub const Conduit = struct {
         if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
             Raknet.Logger.INFO("Loaded {d} player locations", .{self.player_locations.count()});
         }
-        self.prepared = true;
-    }
-
-    pub fn start(self: *Conduit) !void {
-        if (self.started) return;
-        try self.prepare();
-        self.network = try NetworkHandler.init(self);
-        self.network_initialized = true;
 
         const commands = .{
             @import("./command/list/summon.zig"),
@@ -328,6 +320,18 @@ pub const Conduit = struct {
         }
         try @import("./command/list/worlds.zig").register(&self.command_registry, self);
         try @import("./command/list/world.zig").register(&self.command_registry, self);
+        self.prepared = true;
+    }
+
+    pub fn registerCommand(self: *Conduit, command: *@import("./command/command.zig").Command) !void {
+        try self.command_registry.registerCommand(command);
+    }
+
+    pub fn start(self: *Conduit) !void {
+        if (self.started) return;
+        try self.prepare();
+        self.network = try NetworkHandler.init(self);
+        self.network_initialized = true;
 
         self.raknet.setTickCallback(onTick, self);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
