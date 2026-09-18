@@ -58,11 +58,19 @@ pub const ServerPaths = struct {
     player_locations: []const u8 = "player_locations.json",
 };
 
+pub const ServerOptions = struct {
+    paths: ServerPaths = .{},
+    enable_console: bool = true,
+    discover_native_plugins: bool = true,
+};
+
 pub const Conduit = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     config: ServerProperties,
     paths: ServerPaths,
+    enable_console: bool,
+    discover_native_plugins: bool,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -95,6 +103,7 @@ pub const Conduit = struct {
     profiler: TickProfiler,
     command_registry: CommandRegistry,
     console: Console,
+    console_started: bool = false,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
     player_locations: PlayerLocations,
@@ -113,6 +122,10 @@ pub const Conduit = struct {
     }
 
     pub fn initWithConfigAndPaths(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, paths: ServerPaths) !Conduit {
+        return initWithOptions(io, allocator, config, .{ .paths = paths });
+    }
+
+    pub fn initWithOptions(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, options: ServerOptions) !Conduit {
         Raknet.Logger.init(allocator);
         var owned_config = config;
         errdefer owned_config.deinit();
@@ -123,7 +136,9 @@ pub const Conduit = struct {
             .io = io,
             .allocator = allocator,
             .config = owned_config,
-            .paths = paths,
+            .paths = options.paths,
+            .enable_console = options.enable_console,
+            .discover_native_plugins = options.discover_native_plugins,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
                 .address = owned_config.address,
@@ -163,9 +178,9 @@ pub const Conduit = struct {
             .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
             .console = undefined,
-            .ban_manager = BanManager.init(io, allocator, paths.banned_players),
-            .permission_manager = PermissionManager.init(io, allocator, paths.permissions, owned_config.default_group),
-            .player_locations = PlayerLocations.init(io, allocator, paths.player_locations),
+            .ban_manager = BanManager.init(io, allocator, options.paths.banned_players),
+            .permission_manager = PermissionManager.init(io, allocator, options.paths.permissions, owned_config.default_group),
+            .player_locations = PlayerLocations.init(io, allocator, options.paths.player_locations),
             .plugin_runtime = PluginRuntime.init(allocator),
             .instances = GameInstanceRegistry.init(allocator),
             .ecs = ecs,
@@ -260,7 +275,9 @@ pub const Conduit = struct {
         self.player_locations.load();
         self.ecs.setDropCallback(@ptrCast(self), ecsDrop);
         self.plugin_runtime.attach(self, &self.events, Protocol.PROTOCOL);
-        self.plugin_runtime.discover(self.io, Protocol.PROTOCOL, self.paths.plugins);
+        if (self.discover_native_plugins) {
+            self.plugin_runtime.discover(self.io, Protocol.PROTOCOL, self.paths.plugins);
+        }
         var world_instances = self.worlds.valueIterator();
         while (world_instances.next()) |world| {
             if (world.*.getDimension("overworld")) |dimension| {
@@ -316,7 +333,10 @@ pub const Conduit = struct {
         try self.raknet.start();
         self.plugin_runtime.setServerState(1);
 
-        try self.console.start(self);
+        if (self.enable_console) {
+            try self.console.start(self);
+            self.console_started = true;
+        }
     }
 
     /// Runs the vanilla server loop after `start` has completed.
@@ -552,7 +572,7 @@ pub const Conduit = struct {
         phase_end = phase_start.durationTo(.now(self.io, .awake));
         self.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end.nanoseconds)));
 
-        self.console.drainCommands();
+        if (self.console_started) self.console.drainCommands();
 
         const work_end = work_start.durationTo(.now(self.io, .awake));
         const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
@@ -769,7 +789,7 @@ pub const Conduit = struct {
         self.ecs.deinit();
         self.events.deinit();
         self.network.deinit();
-        self.console.deinit();
+        if (self.console_started) self.console.deinit();
         self.tasks.deinit();
         self.world_ops.deinit();
         self.command_registry.deinit();

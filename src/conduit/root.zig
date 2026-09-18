@@ -1,6 +1,7 @@
 pub const Command = @import("./command/root.zig");
 pub const Conduit = @import("./conduit.zig").Conduit;
 pub const ServerPaths = @import("./conduit.zig").ServerPaths;
+pub const ServerOptions = @import("./conduit.zig").ServerOptions;
 /// Public vanilla server entry point for applications embedding Conduit.
 pub const Server = Conduit;
 pub const ServerProperties = @import("./config.zig").ServerProperties;
