@@ -94,31 +94,37 @@ pub const Conduit = struct {
     ecs: EcsWorld,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !Conduit {
+        const config = try ServerProperties.load(io, allocator, "server.properties");
+        return initWithConfig(io, allocator, config);
+    }
+
+    /// Initializes the vanilla server with configuration owned by the server.
+    pub fn initWithConfig(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties) !Conduit {
         Raknet.Logger.init(allocator);
-        var config = try ServerProperties.load(io, allocator, "server.properties");
-        errdefer config.deinit();
-        const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(config.max_players)) * 8);
+        var owned_config = config;
+        errdefer owned_config.deinit();
+        const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(owned_config.max_players)) * 8);
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();
         return Conduit{
             .io = io,
             .allocator = allocator,
-            .config = config,
+            .config = owned_config,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
-                .address = config.address,
-                .port = config.port,
-                .tick_rate = @intCast(config.max_tps),
+                .address = owned_config.address,
+                .port = owned_config.port,
+                .tick_rate = @intCast(owned_config.max_tps),
                 .allocator = allocator,
                 .advertisement = .{
                     .game_type = .MCPE,
-                    .level_name = config.motd,
+                    .level_name = owned_config.motd,
                     .protocol = Protocol.PROTOCOL,
                     .version = Protocol.MINECRAFT_VERSION,
                     .player_count = 0,
-                    .max_players = @intCast(config.max_players),
+                    .max_players = @intCast(owned_config.max_players),
                     .guid = 0,
-                    .name = config.motd,
+                    .name = owned_config.motd,
                     .gamemode = "Creative",
                 },
                 .max_mtu = 1028,
@@ -134,17 +140,17 @@ pub const Conduit = struct {
             .serialized_item_registry = null,
             .serialized_biome_definitions = null,
             .network = undefined,
-            .current_tps = @as(f64, @floatFromInt(@max(@as(u32, 1), config.max_tps))),
-            .current_mspt = 1000.0 / @as(f64, @floatFromInt(@max(@as(u32, 1), config.max_tps))),
+            .current_tps = @as(f64, @floatFromInt(@max(@as(u32, 1), owned_config.max_tps))),
+            .current_mspt = 1000.0 / @as(f64, @floatFromInt(@max(@as(u32, 1), owned_config.max_tps))),
             .current_raknet_mspt = 0.0,
             .current_game_mspt = 0.0,
             .tasks = TaskQueue.init(allocator),
-            .threaded_tasks = ThreadedTaskQueue.init(io, allocator, config.worker_threads),
+            .threaded_tasks = ThreadedTaskQueue.init(io, allocator, owned_config.worker_threads),
             .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
             .console = undefined,
             .ban_manager = BanManager.init(io, allocator, "banned-players.json"),
-            .permission_manager = PermissionManager.init(io, allocator, "permissions.json", config.default_group),
+            .permission_manager = PermissionManager.init(io, allocator, "permissions.json", owned_config.default_group),
             .player_locations = PlayerLocations.init(io, allocator, "player_locations.json"),
             .plugin_runtime = PluginRuntime.init(allocator),
             .instances = GameInstanceRegistry.init(allocator),
@@ -759,7 +765,6 @@ pub const Conduit = struct {
         self.player_locations.deinit();
     }
 };
-
 
 fn ecsDrop(context: *anyopaque, _: EcsEntityId, position: Protocol.Vector3f, item: @import("entity/ecs.zig").ItemDrop) void {
     const conduit: *Conduit = @ptrCast(@alignCast(context));
