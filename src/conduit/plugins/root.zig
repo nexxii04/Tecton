@@ -1,3 +1,3 @@
-pub const api = @import("api.zig");
-pub const PluginManager = @import("manager.zig").PluginManager;
-pub const HandleRegistry = @import("handles.zig").HandleRegistry;
+pub const abi = @import("abi.zig");
+pub const DynamicLoader = @import("dynamic_loader.zig");
+pub const PluginRuntime = @import("runtime.zig").PluginRuntime;

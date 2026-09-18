@@ -1,7 +1,6 @@
 const std = @import("std");
 const World = @import("world.zig").World;
 const Dimension = @import("dimension/dimension.zig").Dimension;
-const api = @import("../plugins/api.zig");
 
 pub const InstanceId = u32;
 
@@ -35,10 +34,6 @@ pub const GameInstance = struct {
     pub fn deinit(self: *GameInstance) void {
         self.members.deinit();
         self.allocator.free(self.name);
-    }
-
-    pub fn handle(self: *const GameInstance) api.Handle {
-        return .{ .index = self.id, .generation = @intCast(self.generation), .kind = .instance };
     }
 
     pub fn addPlayer(self: *GameInstance, runtime_id: i64) !void {
@@ -90,7 +85,7 @@ pub const GameInstanceRegistry = struct {
         return instance;
     }
 
-    pub fn destroy(self: *GameInstanceRegistry, id: InstanceId) error{InstanceBusy, InstanceNotFound}!void {
+    pub fn destroy(self: *GameInstanceRegistry, id: InstanceId) error{ InstanceBusy, InstanceNotFound }!void {
         const instance = self.instances.get(id) orelse return error.InstanceNotFound;
         if (instance.members.count() != 0) return error.InstanceBusy;
         _ = self.instances.remove(id);
