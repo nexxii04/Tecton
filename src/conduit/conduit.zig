@@ -64,6 +64,8 @@ pub const ServerOptions = struct {
     discover_native_plugins: bool = true,
     auto_load_worlds: bool = true,
     create_default_world: bool = true,
+    tick_callback: ?*const fn (?*anyopaque) void = null,
+    tick_userdata: ?*anyopaque = null,
 };
 
 pub const Conduit = struct {
@@ -75,6 +77,8 @@ pub const Conduit = struct {
     discover_native_plugins: bool,
     auto_load_worlds: bool,
     create_default_world: bool,
+    tick_callback: ?*const fn (?*anyopaque) void,
+    tick_userdata: ?*anyopaque,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -150,6 +154,8 @@ pub const Conduit = struct {
             .discover_native_plugins = options.discover_native_plugins,
             .auto_load_worlds = options.auto_load_worlds,
             .create_default_world = options.create_default_world,
+            .tick_callback = options.tick_callback,
+            .tick_userdata = options.tick_userdata,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
                 .address = owned_config.address,
@@ -350,6 +356,11 @@ pub const Conduit = struct {
 
     pub fn isStarted(self: *const Conduit) bool {
         return self.started;
+    }
+
+    pub fn setTickCallback(self: *Conduit, callback: ?*const fn (?*anyopaque) void, userdata: ?*anyopaque) void {
+        self.tick_callback = callback;
+        self.tick_userdata = userdata;
     }
 
     pub fn start(self: *Conduit) !void {
@@ -633,6 +644,7 @@ pub const Conduit = struct {
         self.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end.nanoseconds)));
 
         if (self.console_started) self.console.drainCommands();
+        if (self.tick_callback) |callback| callback(self.tick_userdata);
 
         const work_end = work_start.durationTo(.now(self.io, .awake));
         const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
