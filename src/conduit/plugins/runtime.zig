@@ -151,9 +151,9 @@ pub const PluginRuntime = struct {
         self.server_state = 0;
     }
 
-    pub fn discover(self: *PluginRuntime, io: std.Io, protocol: u32) void {
-        const directory = std.Io.Dir.cwd().openDir(io, "plugins", .{ .iterate = true }) catch |err| {
-            std.Io.Dir.cwd().createDir(io, "plugins", .default_dir) catch {};
+    pub fn discover(self: *PluginRuntime, io: std.Io, protocol: u32, directory_path: []const u8) void {
+        const directory = std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true }) catch |err| {
+            std.Io.Dir.cwd().createDir(io, directory_path, .default_dir) catch {};
             if (err != error.FileNotFound) Raknet.Logger.WARN("Unable to open plugins directory: {s}", .{@errorName(err)});
             return;
         };
@@ -186,7 +186,7 @@ pub const PluginRuntime = struct {
         }.lessThan);
 
         for (names.items) |name| {
-            const path = std.fmt.allocPrint(self.allocator, "plugins/{s}", .{name}) catch {
+            const path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ directory_path, name }) catch {
                 Raknet.Logger.ERROR("Unable to allocate plugin path for {s}", .{name});
                 continue;
             };

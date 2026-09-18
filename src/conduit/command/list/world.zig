@@ -263,7 +263,7 @@ fn handleLoad(raw: *anyopaque) void {
 
 fn worldDirectoryExists(conduit: *Conduit, name: []const u8) bool {
     var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "worlds/{s}", .{name}) catch return false;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ conduit.paths.worlds, name }) catch return false;
     if (std.Io.Dir.cwd().openDir(conduit.io, path, .{})) |dir_val| {
         var dir = dir_val;
         dir.close(conduit.io);

@@ -50,10 +50,19 @@ const EcsWorld = @import("entity/ecs.zig").EcsWorld;
 const EcsEntityId = @import("entity/ecs.zig").EntityId;
 const GameInstanceRegistry = @import("world/game-instance.zig").GameInstanceRegistry;
 
+pub const ServerPaths = struct {
+    worlds: []const u8 = "worlds",
+    plugins: []const u8 = "plugins",
+    banned_players: []const u8 = "banned-players.json",
+    permissions: []const u8 = "permissions.json",
+    player_locations: []const u8 = "player_locations.json",
+};
+
 pub const Conduit = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     config: ServerProperties,
+    paths: ServerPaths,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -100,6 +109,10 @@ pub const Conduit = struct {
 
     /// Initializes the vanilla server with configuration owned by the server.
     pub fn initWithConfig(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties) !Conduit {
+        return initWithConfigAndPaths(io, allocator, config, .{});
+    }
+
+    pub fn initWithConfigAndPaths(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, paths: ServerPaths) !Conduit {
         Raknet.Logger.init(allocator);
         var owned_config = config;
         errdefer owned_config.deinit();
@@ -110,6 +123,7 @@ pub const Conduit = struct {
             .io = io,
             .allocator = allocator,
             .config = owned_config,
+            .paths = paths,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
                 .address = owned_config.address,
@@ -149,9 +163,9 @@ pub const Conduit = struct {
             .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
             .console = undefined,
-            .ban_manager = BanManager.init(io, allocator, "banned-players.json"),
-            .permission_manager = PermissionManager.init(io, allocator, "permissions.json", owned_config.default_group),
-            .player_locations = PlayerLocations.init(io, allocator, "player_locations.json"),
+            .ban_manager = BanManager.init(io, allocator, paths.banned_players),
+            .permission_manager = PermissionManager.init(io, allocator, paths.permissions, owned_config.default_group),
+            .player_locations = PlayerLocations.init(io, allocator, paths.player_locations),
             .plugin_runtime = PluginRuntime.init(allocator),
             .instances = GameInstanceRegistry.init(allocator),
             .ecs = ecs,
@@ -222,7 +236,7 @@ pub const Conduit = struct {
             }
         }
 
-        if (std.Io.Dir.cwd().openDir(self.io, "worlds", .{ .iterate = true })) |worlds_dir_val| {
+        if (std.Io.Dir.cwd().openDir(self.io, self.paths.worlds, .{ .iterate = true })) |worlds_dir_val| {
             var worlds_dir = worlds_dir_val;
             defer worlds_dir.close(self.io);
             var dir_it = worlds_dir.iterate();
@@ -235,7 +249,7 @@ pub const Conduit = struct {
                 Raknet.Logger.INFO("Loaded world: {s}", .{entry.name});
             }
         } else |_| {
-            std.Io.Dir.cwd().createDir(self.io, "worlds", .default_dir) catch {};
+            std.Io.Dir.cwd().createDir(self.io, self.paths.worlds, .default_dir) catch {};
         }
 
         if (self.worlds.count() == 0) {
@@ -246,7 +260,7 @@ pub const Conduit = struct {
         self.player_locations.load();
         self.ecs.setDropCallback(@ptrCast(self), ecsDrop);
         self.plugin_runtime.attach(self, &self.events, Protocol.PROTOCOL);
-        self.plugin_runtime.discover(self.io, Protocol.PROTOCOL);
+        self.plugin_runtime.discover(self.io, Protocol.PROTOCOL, self.paths.plugins);
         var world_instances = self.worlds.valueIterator();
         while (world_instances.next()) |world| {
             if (world.*.getDimension("overworld")) |dimension| {
@@ -582,7 +596,7 @@ pub const Conduit = struct {
 
     pub fn buildWorld(self: *Conduit, name: []const u8) !*World {
         var path_buf: [512]u8 = undefined;
-        const db_path = try std.fmt.bufPrintZ(&path_buf, "worlds/{s}/db", .{name});
+        const db_path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}/db", .{ self.paths.worlds, name });
         std.Io.Dir.cwd().createDirPath(self.io, db_path) catch {};
 
         const provider = try LevelDBProvider.init(self.allocator, db_path);
@@ -620,7 +634,7 @@ pub const Conduit = struct {
         try self.createWorldDimension(world, "end", .End, false);
 
         var level_dat_buf: [512]u8 = undefined;
-        const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "worlds/{s}/level.dat", .{world.identifier}) catch return;
+        const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "{s}/{s}/level.dat", .{ self.paths.worlds, world.identifier }) catch return;
         if (readLevelDatSpawn(self.io, self.allocator, level_dat_path)) |spawn| {
             if (world.getDimension("overworld")) |dim| {
                 dim.spawn_position = spawn;
