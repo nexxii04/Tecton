@@ -25,14 +25,17 @@ libs/leveldb/lib/
 permissions.json
 banned-players.json
 player_locations.json
+plugins/*.so
+plugins/*.dll
+plugins/*.dylib
+plugins/*.h
 
 # Local native plugin implementations stay outside version control.
 src/conduit/plugins/
 !src/conduit/plugins/
 src/conduit/plugins/*
-!src/conduit/plugins/api.zig
-!src/conduit/plugins/manager.zig
-!src/conduit/plugins/handles.zig
 !src/conduit/plugins/root.zig
-src/conduit/plugin_defaults/.build-*.zig
+!src/conduit/plugins/abi.zig
+!src/conduit/plugins/dynamic_loader.zig
+!src/conduit/plugins/runtime.zig
 
