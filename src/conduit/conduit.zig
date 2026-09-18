@@ -62,6 +62,8 @@ pub const ServerOptions = struct {
     paths: ServerPaths = .{},
     enable_console: bool = true,
     discover_native_plugins: bool = true,
+    auto_load_worlds: bool = true,
+    create_default_world: bool = true,
 };
 
 pub const Conduit = struct {
@@ -71,6 +73,8 @@ pub const Conduit = struct {
     paths: ServerPaths,
     enable_console: bool,
     discover_native_plugins: bool,
+    auto_load_worlds: bool,
+    create_default_world: bool,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -112,6 +116,7 @@ pub const Conduit = struct {
     ecs: EcsWorld,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !Conduit {
+        Raknet.Logger.init(allocator);
         const config = try ServerProperties.load(io, allocator, "server.properties");
         return initWithConfig(io, allocator, config);
     }
@@ -139,6 +144,8 @@ pub const Conduit = struct {
             .paths = options.paths,
             .enable_console = options.enable_console,
             .discover_native_plugins = options.discover_native_plugins,
+            .auto_load_worlds = options.auto_load_worlds,
+            .create_default_world = options.create_default_world,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
                 .address = owned_config.address,
@@ -251,25 +258,27 @@ pub const Conduit = struct {
             }
         }
 
-        if (std.Io.Dir.cwd().openDir(self.io, self.paths.worlds, .{ .iterate = true })) |worlds_dir_val| {
-            var worlds_dir = worlds_dir_val;
-            defer worlds_dir.close(self.io);
-            var dir_it = worlds_dir.iterate();
-            while (dir_it.next(self.io) catch null) |entry| {
-                if (entry.kind != .directory) continue;
-                _ = self.loadWorld(entry.name) catch |err| {
-                    Raknet.Logger.ERROR("Failed to load world '{s}': {any}", .{ entry.name, err });
-                    continue;
-                };
-                Raknet.Logger.INFO("Loaded world: {s}", .{entry.name});
+        if (self.auto_load_worlds) {
+            if (std.Io.Dir.cwd().openDir(self.io, self.paths.worlds, .{ .iterate = true })) |worlds_dir_val| {
+                var worlds_dir = worlds_dir_val;
+                defer worlds_dir.close(self.io);
+                var dir_it = worlds_dir.iterate();
+                while (dir_it.next(self.io) catch null) |entry| {
+                    if (entry.kind != .directory) continue;
+                    _ = self.loadWorld(entry.name) catch |err| {
+                        Raknet.Logger.ERROR("Failed to load world '{s}': {any}", .{ entry.name, err });
+                        continue;
+                    };
+                    Raknet.Logger.INFO("Loaded world: {s}", .{entry.name});
+                }
+            } else |_| {
+                std.Io.Dir.cwd().createDir(self.io, self.paths.worlds, .default_dir) catch {};
             }
-        } else |_| {
-            std.Io.Dir.cwd().createDir(self.io, self.paths.worlds, .default_dir) catch {};
-        }
 
-        if (self.worlds.count() == 0) {
-            Raknet.Logger.INFO("No worlds found, creating default world", .{});
-            _ = try self.loadWorld("world");
+            if (self.worlds.count() == 0 and self.create_default_world) {
+                Raknet.Logger.INFO("No worlds found, creating default world", .{});
+                _ = try self.loadWorld("world");
+            }
         }
 
         self.player_locations.load();
