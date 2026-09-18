@@ -299,6 +299,16 @@ pub const Conduit = struct {
         try self.console.start(self);
     }
 
+    /// Runs the vanilla server loop after `start` has completed.
+    ///
+    /// The embedding application owns initialization and teardown; this method
+    /// only waits while the network server is running.
+    pub fn run(self: *Conduit) !void {
+        while (self.raknet.running.load(.acquire)) {
+            try self.io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
+        }
+    }
+
     pub fn stop(self: *Conduit) !void {
         self.plugin_runtime.setServerState(2);
         var event = Events.types.ServerShutdownEvent{};

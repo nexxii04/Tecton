@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Conduit = @import("conduit").Conduit;
+const Server = @import("conduit").Server;
 
 const winmm = if (builtin.os.tag == .windows) struct {
     extern "winmm" fn timeBeginPeriod(uPeriod: c_uint) callconv(.winapi) c_uint;
@@ -26,24 +26,18 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        var conduit = try Conduit.init(io, allocator);
-        defer conduit.deinit();
+        var server = try Server.init(io, allocator);
+        defer server.deinit();
 
-        try conduit.start();
-
-        while (conduit.raknet.running.load(.acquire)) {
-            try io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
-        }
+        try server.start();
+        try server.run();
     } else {
         const allocator = std.heap.smp_allocator;
 
-        var conduit = try Conduit.init(io, allocator);
-        defer conduit.deinit();
+        var server = try Server.init(io, allocator);
+        defer server.deinit();
 
-        try conduit.start();
-
-        while (conduit.raknet.running.load(.acquire)) {
-            try io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
-        }
+        try server.start();
+        try server.run();
     }
 }
