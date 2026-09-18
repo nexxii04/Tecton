@@ -78,6 +78,7 @@ pub const Conduit = struct {
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
+    network_initialized: bool = false,
     players: std.AutoHashMap(i64, *Player),
     connection_map: std.AutoHashMap(usize, *Player),
     players_mutex: std.Io.Mutex = .init,
@@ -108,6 +109,8 @@ pub const Conduit = struct {
     command_registry: CommandRegistry,
     console: Console,
     console_started: bool = false,
+    prepared: bool = false,
+    started: bool = false,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
     player_locations: PlayerLocations,
@@ -194,7 +197,8 @@ pub const Conduit = struct {
         };
     }
 
-    pub fn start(self: *Conduit) !void {
+    pub fn prepare(self: *Conduit) !void {
+        if (self.prepared) return;
         try initRegistries(self.allocator);
         // TODO: Implement registerTrait instead of trait.register()
         try ChestTrait.register();
@@ -298,8 +302,14 @@ pub const Conduit = struct {
         if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
             Raknet.Logger.INFO("Loaded {d} player locations", .{self.player_locations.count()});
         }
+        self.prepared = true;
+    }
 
+    pub fn start(self: *Conduit) !void {
+        if (self.started) return;
+        try self.prepare();
         self.network = try NetworkHandler.init(self);
+        self.network_initialized = true;
 
         const commands = .{
             @import("./command/list/summon.zig"),
@@ -346,6 +356,7 @@ pub const Conduit = struct {
             try self.console.start(self);
             self.console_started = true;
         }
+        self.started = true;
     }
 
     /// Runs the vanilla server loop after `start` has completed.
@@ -797,7 +808,7 @@ pub const Conduit = struct {
         self.instances.deinit();
         self.ecs.deinit();
         self.events.deinit();
-        self.network.deinit();
+        if (self.network_initialized) self.network.deinit();
         if (self.console_started) self.console.deinit();
         self.tasks.deinit();
         self.world_ops.deinit();
