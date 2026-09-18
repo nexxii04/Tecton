@@ -13,7 +13,7 @@
 #endif
 
 #define CONDUIT_PLUGIN_ABI_MAJOR 1u
-#define CONDUIT_PLUGIN_ABI_MINOR 1u
+#define CONDUIT_PLUGIN_ABI_MINOR 3u
 #define CONDUIT_PLUGIN_DESCRIPTOR_QUERY_MINOR 0u
 #define CONDUIT_PLUGIN_DESCRIPTOR_VERSION 1u
 #define CONDUIT_PLUGIN_FEATURE_EVENTS (1ull << 0)
@@ -25,6 +25,9 @@
 #define CONDUIT_PLUGIN_FEATURE_SCHEDULER (1ull << 6)
 #define CONDUIT_PLUGIN_FEATURE_PLAYERS (1ull << 7)
 #define CONDUIT_PLUGIN_FEATURE_ENTITIES (1ull << 8)
+#define CONDUIT_PLUGIN_FEATURE_ITEMS (1ull << 9)
+#define CONDUIT_PLUGIN_FEATURE_BLOCKS (1ull << 10)
+#define CONDUIT_PLUGIN_FEATURE_INVENTORIES (1ull << 11)
 #define CONDUIT_INTERFACE_CORE 1u
 #define CONDUIT_INTERFACE_LOGGING 2u
 #define CONDUIT_INTERFACE_EVENTS 3u
@@ -255,6 +258,61 @@ typedef struct conduit_entities_api {
   conduit_entities_count_fn count;
   conduit_entities_get_snapshot_fn get_snapshot;
 } conduit_entities_api;
+
+typedef struct conduit_item_snapshot {
+  conduit_snapshot_header header;
+  uint64_t handle;
+  int32_t network_id;
+  uint16_t max_stack_size;
+  uint8_t stackable;
+  uint8_t reserved[5];
+  conduit_string_view identifier;
+} conduit_item_snapshot;
+
+typedef struct conduit_block_snapshot {
+  conduit_snapshot_header header;
+  uint64_t world;
+  conduit_string_view dimension;
+  int32_t x;
+  int32_t y;
+  int32_t z;
+  int32_t network_id;
+  conduit_string_view identifier;
+} conduit_block_snapshot;
+
+typedef struct conduit_inventory_item_snapshot {
+  conduit_snapshot_header header;
+  uint8_t present;
+  uint8_t reserved[3];
+  uint16_t count;
+  uint16_t reserved_count;
+  int32_t network_id;
+  uint32_t metadata;
+  conduit_string_view identifier;
+} conduit_inventory_item_snapshot;
+
+typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_items_count_fn)(void *userdata, size_t *count);
+typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_items_get_snapshot_fn)(void *userdata, size_t index, conduit_item_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_blocks_get_snapshot_fn)(void *userdata, uint64_t world, conduit_string_view dimension, int32_t x, int32_t y, int32_t z, conduit_block_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_inventory_get_size_fn)(void *userdata, uint64_t player, uint32_t *size);
+typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_inventory_get_item_fn)(void *userdata, uint64_t player, uint32_t slot, conduit_inventory_item_snapshot *snapshot, size_t snapshot_size);
+
+typedef struct conduit_items_api {
+  conduit_interface_header header;
+  conduit_items_count_fn count;
+  conduit_items_get_snapshot_fn get_snapshot;
+} conduit_items_api;
+
+typedef struct conduit_blocks_api {
+  conduit_interface_header header;
+  conduit_blocks_get_snapshot_fn get_snapshot;
+} conduit_blocks_api;
+
+typedef struct conduit_inventories_api {
+  conduit_interface_header header;
+  conduit_inventory_get_size_fn get_size;
+  conduit_inventory_get_item_fn get_item;
+} conduit_inventories_api;
 
 typedef struct conduit_core_api {
   conduit_interface_header header;

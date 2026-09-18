@@ -31,6 +31,9 @@ pub const PluginRuntime = struct {
     world_api: abi.WorldApi,
     players_api: abi.PlayersApi,
     entities_api: abi.EntitiesApi,
+    items_api: abi.ItemsApi,
+    blocks_api: abi.BlocksApi,
+    inventories_api: abi.InventoriesApi,
 
     pub const NATIVE_BRIDGE_OWNER_ID: u16 = 0xC001;
 
@@ -73,6 +76,9 @@ pub const PluginRuntime = struct {
             .world_api = undefined,
             .players_api = undefined,
             .entities_api = undefined,
+            .items_api = undefined,
+            .blocks_api = undefined,
+            .inventories_api = undefined,
         };
         runtime.core_api = .{
             .header = .{ .struct_size = @sizeOf(abi.CoreApi), .major = 1, .minor = 0, .interface_id = abi.interface_core, .features = 0 },
@@ -94,6 +100,20 @@ pub const PluginRuntime = struct {
             .count = entitiesCount,
             .get_snapshot = entitiesGetSnapshot,
         };
+        runtime.items_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.ItemsApi), .major = 1, .minor = 0, .interface_id = abi.interface_items, .features = 0 },
+            .count = itemsCount,
+            .get_snapshot = itemsGetSnapshot,
+        };
+        runtime.blocks_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.BlocksApi), .major = 1, .minor = 0, .interface_id = abi.interface_blocks, .features = 0 },
+            .get_snapshot = blocksGetSnapshot,
+        };
+        runtime.inventories_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.InventoriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_inventories, .features = 0 },
+            .get_size = inventoryGetSize,
+            .get_item = inventoryGetItem,
+        };
         runtime.scheduler_api = .{
             .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .features = 0 },
             .schedule = schedulerSchedule,
@@ -111,7 +131,7 @@ pub const PluginRuntime = struct {
             .world_set_block = worldSetBlock,
             .event_subscribe = eventSubscribe,
             .event_unsubscribe = eventUnsubscribe,
-            .features = abi.feature_events | abi.feature_world | abi.feature_logging | abi.feature_allocator | abi.feature_interfaces | abi.feature_core | abi.feature_scheduler | abi.feature_players | abi.feature_entities,
+            .features = abi.feature_events | abi.feature_world | abi.feature_logging | abi.feature_allocator | abi.feature_interfaces | abi.feature_core | abi.feature_scheduler | abi.feature_players | abi.feature_entities | abi.feature_items | abi.feature_blocks | abi.feature_inventories,
             .log_debug = logDebug,
             .log_info = logInfo,
             .log_warn = logWarn,
@@ -381,6 +401,18 @@ pub const PluginRuntime = struct {
                 output.* = @ptrCast(&self.entities_api);
                 return abi.result_ok;
             },
+            abi.interface_items => {
+                output.* = @ptrCast(&self.items_api);
+                return abi.result_ok;
+            },
+            abi.interface_blocks => {
+                output.* = @ptrCast(&self.blocks_api);
+                return abi.result_ok;
+            },
+            abi.interface_inventories => {
+                output.* = @ptrCast(&self.inventories_api);
+                return abi.result_ok;
+            },
             else => return abi.result_unsupported,
         }
     }
@@ -574,6 +606,76 @@ pub const PluginRuntime = struct {
         }
     }
 
+    fn itemsCount(_: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
+        const ItemType = @import("../items/item-type.zig").ItemType;
+        count_output.* = ItemType.getAll().count();
+        return abi.result_ok;
+    }
+
+    fn itemsGetSnapshot(context: ?*anyopaque, index: usize, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
+        const ItemType = @import("../items/item-type.zig").ItemType;
+        var iterator = ItemType.getAll().valueIterator();
+        var current: usize = 0;
+        while (iterator.next()) |item_ptr| {
+            if (current != index) {
+                current += 1;
+                continue;
+            }
+            const item = item_ptr.*;
+            const handle = self.handles.put(.item, @intFromPtr(item)) catch return abi.result_out_of_memory;
+            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.ItemSnapshot), .version = 1, .reserved = 0 }, .handle = handle, .network_id = item.network_id, .max_stack_size = item.max_stack_size, .stackable = if (item.stackable) 1 else 0, .reserved = .{0} ** 5, .identifier = .{ .data = item.identifier.ptr, .length = item.identifier.len } };
+            return abi.result_ok;
+        }
+        return abi.result_not_found;
+    }
+
+    fn blocksGetSnapshot(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, x: i32, y: i32, z: i32, snapshot: ?*abi.BlockSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.BlockSnapshot)) return abi.result_invalid_argument;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        const world = self.findWorldByHandle(conduit, world_handle) orelse return abi.result_invalid_handle;
+        const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
+        const permutation = dimension.getPermutation(.{ .x = x, .y = y, .z = z }, 0) catch return abi.result_not_found;
+        output.* = .{ .header = .{ .struct_size = @sizeOf(abi.BlockSnapshot), .version = 1, .reserved = 0 }, .world = world_handle, .dimension = .{ .data = dimension.identifier.ptr, .length = dimension.identifier.len }, .x = x, .y = y, .z = z, .network_id = permutation.network_id, .identifier = .{ .data = permutation.identifier.ptr, .length = permutation.identifier.len } };
+        return abi.result_ok;
+    }
+
+    fn playerFromHandle(self: *PluginRuntime, handle: u64) ?*@import("../player/player.zig").Player {
+        const pointer = self.handles.get(.player, handle) orelse return null;
+        return @ptrFromInt(pointer);
+    }
+
+    fn inventoryState(self: *PluginRuntime, handle: u64) ?*@import("../entity/traits/inventory.zig").State {
+        const player = self.playerFromHandle(handle) orelse return null;
+        return player.entity.getTraitState(@import("../entity/traits/inventory.zig").InventoryTrait);
+    }
+
+    fn inventoryGetSize(context: ?*anyopaque, player_handle: u64, size_output: *u32) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const state = self.inventoryState(player_handle) orelse return abi.result_invalid_handle;
+        size_output.* = state.container.base.getSize();
+        return abi.result_ok;
+    }
+
+    fn inventoryGetItem(context: ?*anyopaque, player_handle: u64, slot: u32, snapshot: ?*abi.InventoryItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.InventoryItemSnapshot)) return abi.result_invalid_argument;
+        const state = self.inventoryState(player_handle) orelse return abi.result_invalid_handle;
+        if (slot >= state.container.base.getSize()) return abi.result_not_found;
+        const item = state.container.base.getItem(slot);
+        if (item) |value| {
+            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.InventoryItemSnapshot), .version = 1, .reserved = 0 }, .present = 1, .reserved = .{0} ** 3, .count = value.stack_size, .reserved_count = 0, .network_id = value.item_type.network_id, .metadata = value.metadata, .identifier = .{ .data = value.item_type.identifier.ptr, .length = value.item_type.identifier.len } };
+        } else {
+            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.InventoryItemSnapshot), .version = 1, .reserved = 0 }, .present = 0, .reserved = .{0} ** 3, .count = 0, .reserved_count = 0, .network_id = 0, .metadata = 0, .identifier = .{} };
+        }
+        return abi.result_ok;
+    }
+
     fn worldFindInterface(context: ?*anyopaque, name: abi.StringView, handle: *u64) callconv(.c) i32 {
         return worldFind(context, name, handle);
     }
@@ -703,7 +805,15 @@ test "core and scheduler interfaces are independently discoverable" {
     try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_entities, 1, 0, &entities));
     try std.testing.expect(entities != null);
 
-    var unavailable: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_unsupported, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_items, 1, 0, &unavailable));
-    try std.testing.expect(unavailable == null);
+    var items: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_items, 1, 0, &items));
+    try std.testing.expect(items != null);
+
+    var blocks: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_blocks, 1, 0, &blocks));
+    try std.testing.expect(blocks != null);
+
+    var inventories: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_inventories, 1, 0, &inventories));
+    try std.testing.expect(inventories != null);
 }
