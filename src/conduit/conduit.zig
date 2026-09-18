@@ -327,6 +327,30 @@ pub const Conduit = struct {
         try self.command_registry.registerCommand(command);
     }
 
+    pub fn eventBus(self: *Conduit) *Events.Events {
+        return &self.events;
+    }
+
+    pub fn commandRegistry(self: *Conduit) *CommandRegistry {
+        return &self.command_registry;
+    }
+
+    pub fn scheduler(self: *Conduit) *TaskQueue {
+        return &self.tasks;
+    }
+
+    pub fn serverConfig(self: *const Conduit) *const ServerProperties {
+        return &self.config;
+    }
+
+    pub fn isPrepared(self: *const Conduit) bool {
+        return self.prepared;
+    }
+
+    pub fn isStarted(self: *const Conduit) bool {
+        return self.started;
+    }
+
     pub fn start(self: *Conduit) !void {
         if (self.started) return;
         try self.prepare();
