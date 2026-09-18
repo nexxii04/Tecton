@@ -66,6 +66,10 @@ pub const ServerOptions = struct {
     create_default_world: bool = true,
     tick_callback: ?*const fn (?*anyopaque) void = null,
     tick_userdata: ?*anyopaque = null,
+    prepare_callback: ?*const fn (?*anyopaque) void = null,
+    start_callback: ?*const fn (?*anyopaque) void = null,
+    shutdown_callback: ?*const fn (?*anyopaque) void = null,
+    lifecycle_userdata: ?*anyopaque = null,
 };
 
 pub const Conduit = struct {
@@ -79,6 +83,10 @@ pub const Conduit = struct {
     create_default_world: bool,
     tick_callback: ?*const fn (?*anyopaque) void,
     tick_userdata: ?*anyopaque,
+    prepare_callback: ?*const fn (?*anyopaque) void,
+    start_callback: ?*const fn (?*anyopaque) void,
+    shutdown_callback: ?*const fn (?*anyopaque) void,
+    lifecycle_userdata: ?*anyopaque,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -156,6 +164,10 @@ pub const Conduit = struct {
             .create_default_world = options.create_default_world,
             .tick_callback = options.tick_callback,
             .tick_userdata = options.tick_userdata,
+            .prepare_callback = options.prepare_callback,
+            .start_callback = options.start_callback,
+            .shutdown_callback = options.shutdown_callback,
+            .lifecycle_userdata = options.lifecycle_userdata,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
                 .address = owned_config.address,
@@ -328,6 +340,7 @@ pub const Conduit = struct {
         try @import("./command/list/worlds.zig").register(&self.command_registry, self);
         try @import("./command/list/world.zig").register(&self.command_registry, self);
         self.prepared = true;
+        if (self.prepare_callback) |callback| callback(self.lifecycle_userdata);
     }
 
     pub fn registerCommand(self: *Conduit, command: *@import("./command/command.zig").Command) !void {
@@ -361,6 +374,19 @@ pub const Conduit = struct {
     pub fn setTickCallback(self: *Conduit, callback: ?*const fn (?*anyopaque) void, userdata: ?*anyopaque) void {
         self.tick_callback = callback;
         self.tick_userdata = userdata;
+    }
+
+    pub fn setLifecycleCallbacks(
+        self: *Conduit,
+        prepare_callback: ?*const fn (?*anyopaque) void,
+        start_callback: ?*const fn (?*anyopaque) void,
+        shutdown_callback: ?*const fn (?*anyopaque) void,
+        userdata: ?*anyopaque,
+    ) void {
+        self.prepare_callback = prepare_callback;
+        self.start_callback = start_callback;
+        self.shutdown_callback = shutdown_callback;
+        self.lifecycle_userdata = userdata;
     }
 
     pub fn start(self: *Conduit) !void {
@@ -397,6 +423,7 @@ pub const Conduit = struct {
             self.console_started = true;
         }
         self.started = true;
+        if (self.start_callback) |callback| callback(self.lifecycle_userdata);
     }
 
     /// Runs the vanilla server loop after `start` has completed.
@@ -415,6 +442,7 @@ pub const Conduit = struct {
             self.stopped = true;
             self.started = false;
             self.raknet.running.store(false, .release);
+            if (self.shutdown_callback) |callback| callback(self.lifecycle_userdata);
         }
         self.plugin_runtime.setServerState(2);
         var event = Events.types.ServerShutdownEvent{};
