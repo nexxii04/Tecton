@@ -111,6 +111,7 @@ pub const Conduit = struct {
     console_started: bool = false,
     prepared: bool = false,
     started: bool = false,
+    stopped: bool = false,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
     player_locations: PlayerLocations,
@@ -398,6 +399,12 @@ pub const Conduit = struct {
     }
 
     pub fn stop(self: *Conduit) !void {
+        if (self.stopped) return;
+        defer {
+            self.stopped = true;
+            self.started = false;
+            self.raknet.running.store(false, .release);
+        }
         self.plugin_runtime.setServerState(2);
         var event = Events.types.ServerShutdownEvent{};
         _ = self.events.emit(.ServerShutdown, &event);
@@ -405,6 +412,7 @@ pub const Conduit = struct {
         var it = self.players.valueIterator();
         while (it.next()) |player_ptr| {
             const player = player_ptr.*;
+            if (!self.network_initialized) break;
             var str = BinaryStream.init(self.allocator, null, null);
             defer str.deinit();
             var disconnect = Protocol.DisconnectPacket{
@@ -418,6 +426,10 @@ pub const Conduit = struct {
             try self.network.sendImmediate(player.connection, serialized);
             player.connection.active = false;
         }
+    }
+
+    pub fn shutdown(self: *Conduit) !void {
+        try self.stop();
     }
 
     pub fn getPlayerByConnection(self: *Conduit, connection: *Raknet.Connection) ?*Player {

@@ -24,6 +24,5 @@ fn handle(raw: *anyopaque) void {
         Raknet.Logger.INFO("Server stop requested by Console", .{});
     }
     const conduit = ctx.network.conduit;
-    conduit.stop() catch {};
-    conduit.raknet.running.store(false, .release);
+    conduit.shutdown() catch {};
 }
