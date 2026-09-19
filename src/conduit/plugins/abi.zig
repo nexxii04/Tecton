@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const abi_major: u32 = 1;
-pub const abi_minor: u32 = 2;
+pub const abi_minor: u32 = 3;
 pub const descriptor_query_minor: u32 = 0;
 pub const descriptor_version: u32 = 1;
 pub const feature_events: u64 = 1 << 0;
