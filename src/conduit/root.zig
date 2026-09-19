@@ -20,6 +20,8 @@ pub const ItemType = @import("./items/item-type.zig").ItemType;
 pub const ItemStack = @import("./items/item-stack.zig").ItemStack;
 pub const Block = @import("./world/block/block.zig").Block;
 pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
+pub const BlockType = @import("./world/block/block-type.zig").BlockType;
+pub const EntityType = @import("./entity/entity-type.zig").EntityType;
 pub const Worlds = struct {
     pub const World = @import("./world/world.zig").World;
     pub const Dimension = @import("./world/dimension/dimension.zig").Dimension;
@@ -37,6 +39,14 @@ pub const Items = struct {
 };
 pub const Blocks = struct {
     pub const Block = @import("./world/block/block.zig").Block;
+    pub const BlockType = @import("./world/block/block-type.zig").BlockType;
     pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
+};
+pub const Registries = struct {
+    pub const ItemType = @import("./items/item-type.zig").ItemType;
+    pub const BlockType = @import("./world/block/block-type.zig").BlockType;
+    pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
+    pub const EntityType = @import("./entity/entity-type.zig").EntityType;
+    pub const EntityTypeRegistry = @import("./entity/entity-type-registry.zig").EntityTypeRegistry;
 };
 pub const version = @import("./version.zig").version;
