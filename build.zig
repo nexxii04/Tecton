@@ -147,6 +147,17 @@ pub fn build(b: *std.Build) void {
     chest_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
     const run_chest_tests = b.addRunArtifact(chest_tests);
 
+    const library_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/library/embedded_api_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "conduit", .module = conduit_mod } },
+    });
+    const library_tests = b.addTest(.{ .root_module = library_test_mod });
+    library_tests.root_module.linkLibrary(leveldb_lib);
+    library_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
+    const run_library_tests = b.addRunArtifact(library_tests);
+
     const plugin_options = b.addOptions();
     const plugin_library_path = if (is_windows) b.pathFromRoot("zig-out/bin/conduit-c-example.dll") else if (is_macos) b.pathFromRoot("zig-out/lib/libconduit-c-example.dylib") else b.pathFromRoot("zig-out/lib/libconduit-c-example.so");
     plugin_options.addOption([]const u8, "path", plugin_library_path);
@@ -162,6 +173,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_chest_tests.step);
+    test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_plugin_tests.step);
     const chest_test_step = b.step("test-chest", "Run chest regression tests");
     chest_test_step.dependOn(&run_chest_tests.step);
