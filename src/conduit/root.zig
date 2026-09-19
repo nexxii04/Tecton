@@ -20,4 +20,23 @@ pub const ItemType = @import("./items/item-type.zig").ItemType;
 pub const ItemStack = @import("./items/item-stack.zig").ItemStack;
 pub const Block = @import("./world/block/block.zig").Block;
 pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
+pub const Worlds = struct {
+    pub const World = @import("./world/world.zig").World;
+    pub const Dimension = @import("./world/dimension/dimension.zig").Dimension;
+};
+pub const Entities = struct {
+    pub const Entity = @import("./entity/entity.zig").Entity;
+    pub const ECS = @import("./entity/ecs.zig");
+};
+pub const Players = struct {
+    pub const Player = @import("./player/player.zig").Player;
+};
+pub const Items = struct {
+    pub const ItemType = @import("./items/item-type.zig").ItemType;
+    pub const ItemStack = @import("./items/item-stack.zig").ItemStack;
+};
+pub const Blocks = struct {
+    pub const Block = @import("./world/block/block.zig").Block;
+    pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
+};
 pub const version = @import("./version.zig").version;
