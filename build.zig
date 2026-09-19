@@ -112,6 +112,27 @@ pub fn build(b: *std.Build) void {
     if (is_windows) exe.root_module.linkSystemLibrary("winmm", .{});
     b.installArtifact(exe);
 
+    const embedded_example = b.addExecutable(.{
+        .name = "ConduitEmbeddedExample",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/embedded_server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libcpp = true,
+            .imports = &.{
+                .{ .name = "conduit", .module = conduit_mod },
+                .{ .name = "protocol", .module = protocol_mod },
+                .{ .name = "nbt", .module = nbt_mod },
+                .{ .name = "leveldb", .module = leveldb_mod },
+            },
+        }),
+    });
+    embedded_example.root_module.linkLibrary(zlib_dep.artifact("z"));
+    embedded_example.root_module.linkLibrary(leveldb_lib);
+    if (is_windows) embedded_example.root_module.linkSystemLibrary("winmm", .{});
+    const embedded_example_step = b.step("embedded-example", "Build the embedded vanilla server example");
+    embedded_example_step.dependOn(&embedded_example.step);
+
     const native_plugin_target = target;
     const native_example = b.addLibrary(.{
         .name = "conduit-c-example",

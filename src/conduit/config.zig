@@ -35,6 +35,7 @@ pub const ServerProperties = struct {
     };
 
     pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !ServerProperties {
+        Raknet.Logger.init(allocator);
         var self = ServerProperties{ .allocator = allocator };
         errdefer self.deinit();
 
