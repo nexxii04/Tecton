@@ -12,6 +12,7 @@ const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
 
 const JoinStartupStage = enum(u8) {
     prepare_player,
+    send_pre_spawn_data,
     send_start_game,
     send_registry_batch,
     send_commands,
@@ -134,6 +135,11 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
                 );
             }
 
+            state.stage = .send_pre_spawn_data;
+            return false;
+        },
+        .send_pre_spawn_data => {
+            try sendPreSpawnDataBatch(state);
             state.stage = .send_start_game;
             return false;
         },
@@ -189,6 +195,37 @@ fn resolveJoinDimension(world: *World, location: ?*const PlayerLocation) ?*Dimen
     return entry.*;
 }
 
+fn sendPreSpawnDataBatch(state: *JoinStartupTask) !void {
+    const psd = state.network.conduit.pre_spawn_data orelse return;
+
+    var batched_packets = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    defer batched_packets.deinit(state.network.allocator);
+    var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
+    defer freeOwnedPackets(state.network.allocator, &owned_packets);
+
+    {
+        var str = BinaryStream.init(state.network.allocator, null, null);
+        defer str.deinit();
+        var packet = Protocol.JigsawStructureDataPacket.init(psd.jigsaw_nbt);
+        try appendOwnedPacket(state.network, &batched_packets, &owned_packets, try packet.serialize(&str));
+    }
+
+    {
+        var str = BinaryStream.init(state.network.allocator, null, null);
+        defer str.deinit();
+        var packet = Protocol.VoxelShapesPacket{
+            .shapes = psd.voxel_shapes,
+            .name_map = psd.voxel_name_map,
+            .custom_shape_count = 0,
+        };
+        try appendOwnedPacket(state.network, &batched_packets, &owned_packets, try packet.serialize(&str));
+    }
+
+    if (batched_packets.items.len > 0) {
+        try state.network.sendPackets(state.player.connection, batched_packets.items);
+    }
+}
+
 fn sendStartGameBatch(state: *JoinStartupTask) !void {
     var batched_packets = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
     defer batched_packets.deinit(state.network.allocator);
@@ -207,6 +244,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
     };
     const empty_experiments = [_]Protocol.Experiments{};
     const empty_block_definitions = [_]Protocol.NetworkBlockTypeDefinition{};
+    const block_definitions: []const Protocol.NetworkBlockTypeDefinition = if (state.network.conduit.pre_spawn_data) |psd| psd.block_palette else &empty_block_definitions;
 
     var packet = Protocol.StartGamePacket{
         .entity_id = entity_id,
@@ -277,7 +315,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .server_authoritative_block_breaking = true,
         .current_tick = 0,
         .enchantment_seed = 0,
-        .block_type_definitions = &empty_block_definitions,
+        .block_type_definitions = block_definitions,
         .multiplayer_correlation_id = "<raknet>",
         .server_authoritative_inventory = true,
         .engine = "Conduit",
@@ -319,14 +357,6 @@ fn sendRegistryBatch(state: *JoinStartupTask) !void {
     if (state.network.conduit.creative_content) |cc| {
         try batched_packets.append(state.network.allocator, cc.serialized);
     }
-
-    var str = BinaryStream.init(state.network.allocator, null, null);
-    defer str.deinit();
-    const empty_shapes = [_]Protocol.SerializableVoxelShape{};
-    var packet = Protocol.VoxelShapesPacket{
-        .shapes = &empty_shapes,
-    };
-    try appendOwnedPacket(state.network, &batched_packets, &owned_packets, try packet.serialize(&str));
 
     if (batched_packets.items.len > 0) {
         try state.network.sendPackets(state.player.connection, batched_packets.items);
