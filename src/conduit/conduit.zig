@@ -102,6 +102,7 @@ pub const Conduit = struct {
     world_ops: std.StringHashMap(void),
     player_entity_type: EntityType,
     creative_content: ?CreativeContentLoader.CreativeContentData,
+    pre_spawn_data: ?Protocol.PreSpawnData.PreSpawnData = null,
     serialized_item_registry: ?[]const u8,
     serialized_biome_definitions: ?[]const u8,
     tick_count: u64 = 0,
@@ -195,6 +196,7 @@ pub const Conduit = struct {
             .world_ops = std.StringHashMap(void).init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
             .creative_content = null,
+            .pre_spawn_data = null,
             .serialized_item_registry = null,
             .serialized_biome_definitions = null,
             .network = undefined,
@@ -278,6 +280,18 @@ pub const Conduit = struct {
         if (self.creative_content) |cc| {
             if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
                 Raknet.Logger.INFO("Loaded {d} creative groups and {d} creative items", .{ cc.group_count, cc.item_count });
+            }
+        }
+
+        {
+            self.pre_spawn_data = Protocol.PreSpawnData.load(self.allocator) catch |err| blk: {
+                Raknet.Logger.ERROR("Failed to load pre-spawn data: {any}", .{err});
+                break :blk null;
+            };
+            if (self.pre_spawn_data) |psd| {
+                if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+                    Raknet.Logger.INFO("Loaded pre-spawn data ({d} block palette entries, {d} voxel shapes)", .{ psd.block_palette.len, psd.voxel_shapes.len });
+                }
             }
         }
 
@@ -882,6 +896,7 @@ pub const Conduit = struct {
         ItemPalette.deinitRegistry();
         EntityTypeRegistry.EntityTypeRegistry.deinit();
         if (self.creative_content) |*cc| cc.deinit();
+        if (self.pre_spawn_data) |*psd| psd.deinit();
         if (self.serialized_item_registry) |s| self.allocator.free(s);
         if (self.serialized_biome_definitions) |s| self.allocator.free(s);
         self.config.deinit();
