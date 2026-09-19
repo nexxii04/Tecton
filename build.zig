@@ -67,6 +67,7 @@ pub fn build(b: *std.Build) void {
     for (leveldb_sources) |src| leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{src})), .flags = platform_flags });
     const env_file: []const u8 = if (is_windows) "util/env_windows.cc" else "util/env_posix.cc";
     leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{env_file})), .flags = platform_flags });
+    b.installArtifact(leveldb_lib);
 
     const binarystream_dep = b.dependency("BinaryStream", .{ .target = target, .optimize = optimize });
     const binarystream_mod = binarystream_dep.module("BinaryStream");

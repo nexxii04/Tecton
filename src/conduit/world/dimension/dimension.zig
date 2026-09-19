@@ -586,6 +586,25 @@ pub const Dimension = struct {
         return true;
     }
 
+    pub fn updateEntityNameTag(self: *Dimension, entity: *Entity) void {
+        var metadata = [_]Protocol.DataItem{
+            Protocol.DataItem.init(Protocol.ActorDataId.Name, .String, .{ .String = entity.name_tag }),
+            Protocol.DataItem.initByte(Protocol.ActorDataId.AlwaysShowNameTag, if (entity.nametag_always_visible) 1 else 0),
+        };
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+        var packet = Protocol.SetActorDataPacket.init(self.allocator, entity.runtime_id, 0, &metadata);
+        defer packet.deinit();
+        const serialized = packet.serialize(&stream) catch return;
+        const snapshots = self.world.conduit.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            if (player.entity.dimension != self) continue;
+            if (!player.visible_entities.contains(entity.runtime_id)) continue;
+            self.world.conduit.network.sendPacket(player.connection, serialized) catch {};
+        }
+    }
+
     pub fn sendRemoveEntityToPlayer(self: *Dimension, player: *Player, entity: *Entity) void {
         var stream = BinaryStream.init(self.allocator, null, null);
         defer stream.deinit();
