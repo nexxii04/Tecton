@@ -64,18 +64,19 @@ fn handle(raw: *anyopaque) void {
     for (targets) |target| {
         target.gamemode = gamemode;
 
-        var abilities = buildAbilities(ctx.allocator, target.entity.runtime_id, gamemode) catch continue;
-        defer abilities.deinit();
-        var abilities_stream = BinaryStream.init(ctx.allocator, null, null);
-        defer abilities_stream.deinit();
-        const abilities_serialized = abilities.serialize(&abilities_stream) catch continue;
-        target.network.sendPacket(target.connection, abilities_serialized) catch {};
-
         var stream = BinaryStream.init(ctx.allocator, null, null);
         defer stream.deinit();
         const packet = Protocol.SetPlayerGameTypePacket{ .gamemode = @intFromEnum(gamemode) };
         const serialized = packet.serialize(&stream) catch continue;
         target.network.sendPacket(target.connection, serialized) catch {};
+
+        const is_operator = std.mem.eql(u8, target.network.conduit.permission_manager.getPlayerGroup(target.username), "operator");
+        var abilities = buildAbilities(ctx.allocator, target.entity.runtime_id, gamemode, is_operator) catch continue;
+        defer abilities.deinit();
+        var abilities_stream = BinaryStream.init(ctx.allocator, null, null);
+        defer abilities_stream.deinit();
+        const abilities_serialized = abilities.serialize(&abilities_stream) catch continue;
+        target.network.sendPacket(target.connection, abilities_serialized) catch {};
     }
 
     var buf: [64]u8 = undefined;

@@ -5,6 +5,7 @@ pub fn buildAbilities(
     allocator: std.mem.Allocator,
     runtime_id: i64,
     gamemode: Protocol.GameMode,
+    is_operator: bool,
 ) !Protocol.UpdateAbilitiesPacket {
     const creative = gamemode == .Creative;
     const spectator = gamemode == .Spectator;
@@ -16,8 +17,8 @@ pub fn buildAbilities(
     abilities[3] = .{ .ability = .OpenContainers, .value = !spectator };
     abilities[4] = .{ .ability = .AttackPlayers, .value = !spectator };
     abilities[5] = .{ .ability = .AttackMobs, .value = !spectator };
-    abilities[6] = .{ .ability = .OperatorCommands, .value = true };
-    abilities[7] = .{ .ability = .Teleport, .value = true };
+    abilities[6] = .{ .ability = .OperatorCommands, .value = is_operator };
+    abilities[7] = .{ .ability = .Teleport, .value = is_operator };
     abilities[8] = .{ .ability = .Invulnerable, .value = creative };
     abilities[9] = .{ .ability = .Flying, .value = false };
     abilities[10] = .{ .ability = .MayFly, .value = creative };
@@ -42,8 +43,8 @@ pub fn buildAbilities(
     return Protocol.UpdateAbilitiesPacket.init(
         allocator,
         runtime_id,
-        @intFromEnum(Protocol.PermissionLevel.Operator),
-        1,
+        if (is_operator) @intFromEnum(Protocol.PermissionLevel.Operator) else @intFromEnum(Protocol.PermissionLevel.Member),
+        if (is_operator) 1 else 0,
         layers,
     );
 }

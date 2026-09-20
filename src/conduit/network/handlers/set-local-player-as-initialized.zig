@@ -6,6 +6,7 @@ const Protocol = @import("protocol");
 const Compression = @import("../compression/compression.zig").Compression;
 
 const Player = @import("../../player/player.zig").Player;
+const buildAbilities = @import("./abilities.zig").buildAbilities;
 
 const PlayerInitStage = enum(u8) {
     on_spawn,
@@ -70,6 +71,15 @@ fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
     switch (state.stage) {
         .on_spawn => {
             try player.onSpawn();
+
+            const is_operator = std.mem.eql(u8, state.network.conduit.permission_manager.getPlayerGroup(player.username), "operator");
+            var abilities = try buildAbilities(state.network.allocator, player.entity.runtime_id, player.gamemode, is_operator);
+            defer abilities.deinit();
+            var stream = BinaryStream.init(state.network.allocator, null, null);
+            defer stream.deinit();
+            const serialized = try abilities.serialize(&stream);
+            try state.network.sendPacket(player.connection, serialized);
+
             state.stage = .send_existing_players;
             return false;
         },

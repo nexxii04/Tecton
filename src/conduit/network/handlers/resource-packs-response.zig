@@ -24,8 +24,11 @@ const JoinStartupTask = struct {
     network: *NetworkHandler,
     player: *Player,
     stage: JoinStartupStage = .prepare_player,
+    wait_ticks: u8 = 0,
     spawn_pos: Protocol.BlockPosition = Protocol.BlockPosition.init(0, 100, 0),
 };
+
+const JOIN_STAGE_DELAY_TICKS: u8 = 20;
 
 pub fn handleResourcePack(
     network: *NetworkHandler,
@@ -34,7 +37,6 @@ pub fn handleResourcePack(
 ) !void {
     const response = try Protocol.ResourcePackResponsePacket.deserialize(stream, network.allocator);
     defer response.deinit(network.allocator);
-
     switch (response.response) {
         .HaveAllPacks => {
             var str = BinaryStream.init(network.allocator, null, null);
@@ -106,6 +108,11 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
         return true;
     }
 
+    if (state.wait_ticks > 0) {
+        state.wait_ticks -= 1;
+        return false;
+    }
+
     switch (state.stage) {
         .prepare_player => {
             const location = state.network.conduit.resolvePlayerLocation(player.uuid);
@@ -140,26 +147,31 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
         },
         .send_pre_spawn_data => {
             try sendPreSpawnDataBatch(state);
+            state.wait_ticks = JOIN_STAGE_DELAY_TICKS;
             state.stage = .send_start_game;
             return false;
         },
         .send_start_game => {
             try sendStartGameBatch(state);
+            state.wait_ticks = JOIN_STAGE_DELAY_TICKS;
             state.stage = .send_registry_batch;
             return false;
         },
         .send_registry_batch => {
             try sendRegistryBatch(state);
+            state.wait_ticks = JOIN_STAGE_DELAY_TICKS;
             state.stage = .send_commands;
             return false;
         },
         .send_commands => {
             try sendCommandsPacket(state);
+            state.wait_ticks = JOIN_STAGE_DELAY_TICKS;
             state.stage = .send_entity_batch;
             return false;
         },
         .send_entity_batch => {
             try sendEntityDataBatch(state);
+            state.wait_ticks = JOIN_STAGE_DELAY_TICKS;
             state.stage = .send_abilities_spawn;
             return false;
         },
@@ -412,7 +424,8 @@ fn sendAbilitiesAndSpawnBatch(state: *JoinStartupTask) !void {
     var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
     defer freeOwnedPackets(state.network.allocator, &owned_packets);
 
-    {
+    const send_update_abilities = false;
+    if (send_update_abilities) {
         var str = BinaryStream.init(state.network.allocator, null, null);
         defer str.deinit();
 

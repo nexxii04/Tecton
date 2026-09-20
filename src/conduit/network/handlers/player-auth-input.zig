@@ -26,6 +26,14 @@ fn rotationToByte(degrees: f32) i8 {
     return @bitCast(@as(u8, @truncate(steps)));
 }
 
+pub fn handlePlayerBlockAction(
+    network: *NetworkHandler,
+    player: *Player,
+    action: Protocol.PlayerBlockAction,
+) !void {
+    try handleBlockAction(network, player, action);
+}
+
 pub fn handlePlayerAuthInput(
     network: *NetworkHandler,
     connection: *Raknet.Connection,
@@ -254,7 +262,6 @@ fn handleBlockAction(
                 }
             }
 
-            //std.debug.print("[breakdbg] auth destroy: burst 2001 for ({d},{d},{d}) gamemode={any}\n", .{ pos.x, pos.y, pos.z, player.gamemode });
             broadcastLevelEvent(dimension, network, .ParticlesDestroyBlock, centered(pos), @bitCast(perm.network_id));
 
             {

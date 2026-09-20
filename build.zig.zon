@@ -21,8 +21,8 @@
             .hash = "ZigNet-0.0.0-C9ZCIu-AAwB3SpWXcg9kZ-IM4Ob7htncaOXNsz8UsRmX",
         },
         .protocol = .{
-            .url = "git+https://github.com/VantStudios/Protocol.git#39cc9b4a94d4ba8ceaf4f6e096d7ab32377655a3",
-            .hash = "protocol-0.0.0-129wXtiqcwBI4QL_ePkTvvUJFkn5zb1tdsVGJBiUsFar",
+            .url = "git+https://github.com/VantStudios/Protocol.git#5ac12b0f5f0d6a48836eefd6d48cebeefd9f72ec",
+            .hash = "protocol-0.0.0-129wXluycwCWtLlTKoSAdeBdMBoAHXr8OlPAQCvKxU6x",
         },
     },
     .paths = .{

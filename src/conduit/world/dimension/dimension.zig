@@ -593,7 +593,7 @@ pub const Dimension = struct {
         };
         var stream = BinaryStream.init(self.allocator, null, null);
         defer stream.deinit();
-        var packet = Protocol.SetActorDataPacket.init(self.allocator, entity.runtime_id, 0, &metadata);
+        var packet = Protocol.SetActorDataPacket.initBorrowed(self.allocator, entity.runtime_id, 0, &metadata);
         defer packet.deinit();
         const serialized = packet.serialize(&stream) catch return;
         const snapshots = self.world.conduit.getPlayerSnapshots();

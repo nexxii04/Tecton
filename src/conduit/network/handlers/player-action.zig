@@ -6,6 +6,7 @@ const Protocol = @import("protocol");
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
 const Events = @import("../../events/types.zig");
 const ItemType = @import("../../items/item-type.zig").ItemType;
+const handlePlayerBlockAction = @import("./player-auth-input.zig").handlePlayerBlockAction;
 
 pub fn handlePlayerAction(
     network: *NetworkHandler,
@@ -46,7 +47,13 @@ pub fn handlePlayerAction(
         },
         .StartItemUseOn => {},
         .StopItemUseOn => {},
-        .CreativePlayerDestroyBlock => {},
+        .CreativePlayerDestroyBlock, .PredictDestroyBlock => {
+            try handlePlayerBlockAction(network, player, .{
+                .action = packet.action,
+                .block_pos = packet.block_position,
+                .face = packet.face,
+            });
+        },
         else => {
             Raknet.Logger.DEBUG("Unhandled PlayerAction: {any}", .{packet.action});
         },
