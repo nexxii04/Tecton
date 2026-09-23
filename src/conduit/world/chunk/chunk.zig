@@ -67,6 +67,15 @@ pub const Chunk = struct {
         return BlockPermutation.getByNetworkId(state) orelse return error.UnknownPermutation;
     }
 
+    /// Reads a block without allocating a missing subchunk
+    pub fn getPermutationReadOnly(self: *const Chunk, x: i32, y: i32, z: i32, layer: usize) !*BlockPermutation {
+        const idx = self.resolveIndex(y) orelse return error.OutOfBounds;
+        const sc = self.subchunks[idx] orelse return BlockPermutation.getByNetworkId(0) orelse error.UnknownPermutation;
+        if (layer >= sc.layers.items.len) return BlockPermutation.getByNetworkId(0) orelse error.UnknownPermutation;
+        const state = sc.layers.items[layer].getState(@intCast(x & 0xf), @intCast(@as(u32, @bitCast(y)) & 0xf), @intCast(z & 0xf));
+        return BlockPermutation.getByNetworkId(state) orelse return error.UnknownPermutation;
+    }
+
     pub fn setPermutation(self: *Chunk, x: i32, y: i32, z: i32, permutation: *BlockPermutation, layer: usize) !void {
         const idx = self.resolveIndex(y) orelse return error.OutOfBounds;
         const sc = try self.getOrCreateSubChunk(idx);
