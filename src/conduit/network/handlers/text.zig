@@ -1,9 +1,11 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
+const Raknet = @import("Raknet");
+
 const Events = @import("../../events/root.zig");
+const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const PlayerLog = @import("../player-log.zig");
 
 pub fn handleTextPacket(
@@ -20,7 +22,9 @@ pub fn handleTextPacket(
             .player = sender,
             .message = text.message,
         };
-        if (!network.conduit.events.emit(.PlayerChat, &event)) return;
+        const accepted = network.conduit.events.emit(.PlayerChat, &event);
+        defer if (event.owned_message) |message| network.allocator.free(message);
+        if (!accepted) return;
         PlayerLog.logChat(sender.username, event.message);
 
         var str = BinaryStream.init(network.allocator, null, null);

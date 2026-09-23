@@ -1,7 +1,8 @@
 const Protocol = @import("protocol");
+
+const Entity = @import("../entity/entity.zig").Entity;
 const Player = @import("../player/player.zig").Player;
 const BlockPermutation = @import("../world/block/block-permutation.zig").BlockPermutation;
-const Entity = @import("../entity/entity.zig").Entity;
 
 pub const ItemDrop = struct {
     identifier: []const u8,
@@ -23,6 +24,8 @@ pub const PlayerDisconnectEvent = struct {
 pub const PlayerChatEvent = struct {
     player: *Player,
     message: []const u8,
+    /// Optional buffer owned by a listener and released by the network handler after broadcast.
+    owned_message: ?[]const u8 = null,
 };
 
 pub const ItemUseEvent = struct {
