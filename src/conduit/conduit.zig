@@ -44,10 +44,10 @@ const Generator = @import("./world/generator/root.zig");
 const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
 const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
 const World = @import("./world/world.zig").World;
-const Events = @import("events/root.zig");
-const PluginRuntime = @import("plugins/runtime.zig").PluginRuntime;
 const EcsWorld = @import("entity/ecs.zig").EcsWorld;
 const EcsEntityId = @import("entity/ecs.zig").EntityId;
+const Events = @import("events/root.zig");
+const PluginRuntime = @import("plugins/runtime.zig").PluginRuntime;
 const GameInstanceRegistry = @import("world/game-instance.zig").GameInstanceRegistry;
 
 pub const ServerPaths = struct {
@@ -57,6 +57,8 @@ pub const ServerPaths = struct {
     permissions: []const u8 = "permissions.json",
     player_locations: []const u8 = "player_locations.json",
 };
+
+pub const CommandPermissionChecker = *const fn (?*anyopaque, []const u8, []const u8) bool;
 
 pub const ServerOptions = struct {
     paths: ServerPaths = .{},
@@ -70,6 +72,8 @@ pub const ServerOptions = struct {
     start_callback: ?*const fn (?*anyopaque) void = null,
     shutdown_callback: ?*const fn (?*anyopaque) void = null,
     lifecycle_userdata: ?*anyopaque = null,
+    command_permission_checker: ?CommandPermissionChecker = null,
+    command_permission_userdata: ?*anyopaque = null,
 };
 
 pub const Conduit = struct {
@@ -87,6 +91,8 @@ pub const Conduit = struct {
     start_callback: ?*const fn (?*anyopaque) void,
     shutdown_callback: ?*const fn (?*anyopaque) void,
     lifecycle_userdata: ?*anyopaque,
+    command_permission_checker: ?CommandPermissionChecker,
+    command_permission_userdata: ?*anyopaque,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -169,6 +175,8 @@ pub const Conduit = struct {
             .start_callback = options.start_callback,
             .shutdown_callback = options.shutdown_callback,
             .lifecycle_userdata = options.lifecycle_userdata,
+            .command_permission_checker = options.command_permission_checker,
+            .command_permission_userdata = options.command_permission_userdata,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
                 .address = owned_config.address,
@@ -383,6 +391,11 @@ pub const Conduit = struct {
 
     pub fn isStarted(self: *const Conduit) bool {
         return self.started;
+    }
+
+    pub fn setCommandPermissionChecker(self: *Conduit, checker: ?CommandPermissionChecker, userdata: ?*anyopaque) void {
+        self.command_permission_checker = checker;
+        self.command_permission_userdata = userdata;
     }
 
     pub fn setTickCallback(self: *Conduit, callback: ?*const fn (?*anyopaque) void, userdata: ?*anyopaque) void {
