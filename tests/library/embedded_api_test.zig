@@ -22,19 +22,48 @@ test "external consumers can use the public vanilla API" {
 
     _ = options;
     _ = conduit.Server;
-    _ = conduit.Worlds.World;
-    _ = conduit.Worlds.Dimension;
-    _ = conduit.Players.Player;
-    _ = conduit.Entities.Entity;
-    _ = conduit.Items.ItemType;
-    _ = conduit.Items.ItemStack;
-    _ = conduit.Blocks.Block;
-    _ = conduit.Blocks.BlockPermutation;
-    _ = conduit.Registries.BlockType;
-    _ = conduit.Registries.EntityType;
-    _ = conduit.Command.CommandRegistry;
+    _ = conduit.ServerPaths;
+    _ = conduit.ServerProperties;
+    _ = conduit.CommandPermissionChecker;
 
     try std.testing.expect(@hasDecl(conduit.Server, "initWithOptions"));
     try std.testing.expect(@hasDecl(conduit.Server, "prepare"));
     try std.testing.expect(@hasDecl(conduit.Server, "shutdown"));
+}
+
+test "the public API is organized as module namespaces" {
+    _ = conduit.world.World;
+    _ = conduit.world.Dimension;
+    _ = conduit.world.Chunk;
+    _ = conduit.world.GameInstance;
+    _ = conduit.world.block.Block;
+    _ = conduit.world.block.BlockPermutation;
+    _ = conduit.world.block.BlockType;
+    _ = conduit.world.generator.TerrainGenerator;
+    _ = conduit.world.provider.LevelDBProvider;
+    _ = conduit.block.Block;
+    _ = conduit.block.BlockPermutation;
+    _ = conduit.entity.Entity;
+    _ = conduit.entity.EntityType;
+    _ = conduit.entity.EntityTypeRegistry;
+    _ = conduit.entity.ECS;
+    _ = conduit.entity.traits.EntityTrait;
+    _ = conduit.player.Player;
+    _ = conduit.player.PermissionManager;
+    _ = conduit.items.ItemType;
+    _ = conduit.items.ItemStack;
+    _ = conduit.container.Container;
+    _ = conduit.container.BlockContainer;
+    _ = conduit.container.EntityContainer;
+    _ = conduit.command.CommandRegistry;
+    _ = conduit.command.CommandContext;
+    _ = conduit.network.NetworkHandler;
+    _ = conduit.tasks.TaskQueue;
+    _ = conduit.tasks.ThreadedTaskQueue;
+    _ = conduit.events.Events;
+    _ = conduit.plugins.PluginRuntime;
+
+    _ = conduit.protocol;
+    _ = conduit.nbt;
+    _ = conduit.binary_stream;
 }

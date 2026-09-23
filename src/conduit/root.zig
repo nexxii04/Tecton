@@ -1,54 +1,29 @@
-pub const Command = @import("./command/root.zig");
+//! Conduit — public API
+const std = @import("std");
+
+pub const binary_stream = @import("BinaryStream");
+pub const nbt = @import("nbt");
+pub const protocol = @import("protocol");
+
+pub const command = @import("./command/root.zig");
 pub const Conduit = @import("./conduit.zig").Conduit;
-pub const ServerPaths = @import("./conduit.zig").ServerPaths;
-pub const ServerOptions = @import("./conduit.zig").ServerOptions;
-/// Public vanilla server entry point for applications embedding Conduit.
 pub const Server = Conduit;
+pub const ServerOptions = @import("./conduit.zig").ServerOptions;
+pub const ServerPaths = @import("./conduit.zig").ServerPaths;
+pub const CommandPermissionChecker = @import("./conduit.zig").CommandPermissionChecker;
 pub const ServerProperties = @import("./config.zig").ServerProperties;
-pub const Events = @import("./events/root.zig");
-pub const PlayerSerialization = @import("./world/provider/serialization.zig");
-pub const Protocol = @import("protocol");
-pub const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
-pub const Task = @import("./tasks/tasks.zig").Task;
-pub const Plugins = @import("./plugins/root.zig");
-pub const GameInstance = @import("./world/game-instance.zig").GameInstance;
-pub const GameInstanceRegistry = @import("./world/game-instance.zig").GameInstanceRegistry;
-pub const ECS = @import("./entity/ecs.zig");
-pub const World = @import("./world/world.zig").World;
-pub const Dimension = @import("./world/dimension/dimension.zig").Dimension;
-pub const Player = @import("./player/player.zig").Player;
-pub const Entity = @import("./entity/entity.zig").Entity;
-pub const ItemType = @import("./items/item-type.zig").ItemType;
-pub const ItemStack = @import("./items/item-stack.zig").ItemStack;
-pub const Block = @import("./world/block/block.zig").Block;
-pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
-pub const BlockType = @import("./world/block/block-type.zig").BlockType;
-pub const EntityType = @import("./entity/entity-type.zig").EntityType;
-pub const Worlds = struct {
-    pub const World = @import("./world/world.zig").World;
-    pub const Dimension = @import("./world/dimension/dimension.zig").Dimension;
-};
-pub const Entities = struct {
-    pub const Entity = @import("./entity/entity.zig").Entity;
-    pub const ECS = @import("./entity/ecs.zig");
-};
-pub const Players = struct {
-    pub const Player = @import("./player/player.zig").Player;
-};
-pub const Items = struct {
-    pub const ItemType = @import("./items/item-type.zig").ItemType;
-    pub const ItemStack = @import("./items/item-stack.zig").ItemStack;
-};
-pub const Blocks = struct {
-    pub const Block = @import("./world/block/block.zig").Block;
-    pub const BlockType = @import("./world/block/block-type.zig").BlockType;
-    pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
-};
-pub const Registries = struct {
-    pub const ItemType = @import("./items/item-type.zig").ItemType;
-    pub const BlockType = @import("./world/block/block-type.zig").BlockType;
-    pub const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
-    pub const EntityType = @import("./entity/entity-type.zig").EntityType;
-    pub const EntityTypeRegistry = @import("./entity/entity-type-registry.zig").EntityTypeRegistry;
-};
+pub const container = @import("./container/root.zig");
+pub const entity = @import("./entity/root.zig");
+pub const events = @import("./events/root.zig");
+pub const items = @import("./items/root.zig");
+pub const network = @import("./network/root.zig");
+pub const player = @import("./player/root.zig");
+pub const plugins = @import("./plugins/root.zig");
+pub const tasks = @import("./tasks/root.zig");
 pub const version = @import("./version.zig").version;
+pub const block = @import("./world/block/root.zig");
+pub const world = @import("./world/root.zig");
+
+test {
+    std.testing.refAllDecls(@This());
+}
