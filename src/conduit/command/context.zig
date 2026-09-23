@@ -9,6 +9,7 @@ pub const CommandContext = struct {
     args: []const u8,
     network: *NetworkHandler,
     allocator: std.mem.Allocator,
+    command_userdata: ?*anyopaque = null,
 
     origin_type: []const u8 = "player",
     uuid: [16]u8 = .{0} ** 16,

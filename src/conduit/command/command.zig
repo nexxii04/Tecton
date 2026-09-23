@@ -23,6 +23,8 @@ pub const Command = struct {
     overloads: std.ArrayList(CommandOverload),
     subcommands: std.StringHashMap(*SubCommand),
     handler: CommandHandlerFn,
+    /// Plugin-owned context passed to handlers through CommandContext.
+    userdata: ?*anyopaque = null,
     subcommand_enum: ?CommandEnum = null,
     subcommand_overload_params: std.ArrayList([]const CommandParameter),
 
@@ -44,6 +46,7 @@ pub const Command = struct {
             .overloads = std.ArrayList(CommandOverload){ .items = &.{}, .capacity = 0 },
             .subcommands = std.StringHashMap(*SubCommand).init(allocator),
             .handler = handler,
+            .userdata = null,
             .subcommand_enum = null,
             .subcommand_overload_params = std.ArrayList([]const CommandParameter){ .items = &.{}, .capacity = 0 },
         };
@@ -77,6 +80,10 @@ pub const Command = struct {
         }
         self.subcommands.deinit();
         self.allocator.destroy(self);
+    }
+
+    pub fn setUserdata(self: *Command, userdata: ?*anyopaque) void {
+        self.userdata = userdata;
     }
 
     pub fn addOverload(self: *Command, params: []const CommandParameter) !void {

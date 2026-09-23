@@ -126,7 +126,11 @@ pub const CommandRegistry = struct {
 
         if (player) |p| {
             const conduit = network.conduit;
-            if (cmd.permission.len > 0 and !conduit.permission_manager.hasPermission(p.username, cmd.permission)) {
+            const permitted = if (cmd.permission.len == 0) true else if (conduit.command_permission_checker) |checker|
+                checker(conduit.command_permission_userdata, p.xuid, cmd.permission)
+            else
+                conduit.permission_manager.hasPermission(p.username, cmd.permission);
+            if (!permitted) {
                 return .{ .success = false, .message = "You do not have permission to run this command" };
             }
         }
@@ -136,6 +140,7 @@ pub const CommandRegistry = struct {
             .args = parsed.args,
             .network = network,
             .allocator = self.allocator,
+            .command_userdata = cmd.userdata,
             .origin_type = origin_type,
             .uuid = uuid,
             .request_id = request_id,
