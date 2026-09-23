@@ -29,6 +29,7 @@ pub const Entity = struct {
     ecs_id: u64 = 0,
     instance_id: u32 = 0,
     name_tag: []const u8 = "",
+    name_tag_owned: bool = false,
     nametag_always_visible: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, entity_type: *const EntityType, dimension: ?*Dimension) Entity {
@@ -50,6 +51,7 @@ pub const Entity = struct {
     }
 
     pub fn deinit(self: *Entity) void {
+        if (self.name_tag_owned) self.allocator.free(self.name_tag);
         for (self.traits.items) |instance| {
             if (instance.vtable.on_detach) |f| f(instance.ctx, self);
             if (instance.vtable.destroy_fn) |f| f(instance.ctx, self.allocator);
@@ -109,7 +111,16 @@ pub const Entity = struct {
     }
 
     pub fn setNameTag(self: *Entity, tag: []const u8) void {
+        if (self.name_tag_owned) self.allocator.free(self.name_tag);
         self.name_tag = tag;
+        self.name_tag_owned = false;
+    }
+
+    pub fn setOwnedNameTag(self: *Entity, tag: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, tag);
+        if (self.name_tag_owned) self.allocator.free(self.name_tag);
+        self.name_tag = owned;
+        self.name_tag_owned = true;
     }
 
     pub fn getNameTag(self: *const Entity) []const u8 {
