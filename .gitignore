@@ -39,3 +39,5 @@ src/conduit/plugins/*
 !src/conduit/plugins/dynamic_loader.zig
 !src/conduit/plugins/runtime.zig
 
+# Local Pi runtime state
+.atl/
