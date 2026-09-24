@@ -1,14 +1,16 @@
 const std = @import("std");
+
 const Raknet = @import("Raknet");
+
+const Conduit = @import("../../conduit.zig").Conduit;
+const Player = @import("../../player/player.zig").Player;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
+const WorldLifecycle = @import("../../world/world-lifecycle.zig");
+const World = @import("../../world/world.zig").World;
 const Command = @import("../command.zig").Command;
 const SubCommand = @import("../command.zig").SubCommand;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const Conduit = @import("../../conduit.zig").Conduit;
-const Player = @import("../../player/player.zig").Player;
-const World = @import("../../world/world.zig").World;
-const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const WorldLifecycle = @import("../../world/world-lifecycle.zig");
 
 pub fn register(registry: *CommandRegistry, conduit: *Conduit) !void {
     const world_enum_idx = try registerWorldEnum(registry, conduit);
@@ -396,18 +398,10 @@ fn handleTp(raw: *anyopaque) void {
         ctx.sendOutput(false, "Player not found");
         return;
     };
-    // transferToDimension refreshes the shared snapshot buffer, so iterate a
-    // private copy instead of the resolved slice.
-    var target_copy = std.ArrayList(*Player).empty;
-    defer target_copy.deinit(conduit.allocator);
-    target_copy.appendSlice(conduit.allocator, targets) catch {
-        ctx.sendOutput(false, "Out of memory");
-        return;
-    };
 
     var moved: usize = 0;
     var moved_name: []const u8 = "";
-    for (target_copy.items) |target| {
+    for (targets) |target| {
         if (target.pending_dimension != null) continue;
         if (target.entity.dimension == dimension) continue;
         target.transferToDimension(dimension);

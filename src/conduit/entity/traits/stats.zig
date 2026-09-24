@@ -1,11 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
+
+const Conduit = @import("../../conduit.zig").Conduit;
+const Player = @import("../../player/player.zig").Player;
 const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
-const Player = @import("../../player/player.zig").Player;
-const Conduit = @import("../../conduit.zig").Conduit;
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -69,7 +71,7 @@ fn onTick(state: *State, entity: *Entity) void {
 
     const player = getPlayer(entity) orelse return;
     const conduit: *Conduit = player.network.conduit;
-    const player_count = conduit.getPlayerCount() catch return;
+    const player_count = conduit.getPlayerCount();
     const update_interval: u64 = if (player_count <= 8)
         20
     else if (player_count <= 32)

@@ -1,10 +1,10 @@
-const Raknet = @import("Raknet");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
+const Raknet = @import("Raknet");
 
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
-const Player = @import("../../player/player.zig").Player;
 const Events = @import("../../events/root.zig");
+const Player = @import("../../player/player.zig").Player;
+const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const PlayerLog = @import("../player-log.zig");
 
 pub fn handleLogin(
@@ -30,7 +30,7 @@ pub fn handleLogin(
         return;
     }
 
-    const player_count = network.conduit.players.count();
+    const player_count = network.conduit.getPlayerCount();
     if (player_count >= network.conduit.config.max_players) {
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();

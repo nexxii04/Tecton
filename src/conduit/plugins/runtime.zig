@@ -694,7 +694,7 @@ pub const PluginRuntime = struct {
         const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
         const output = count_output;
         const conduit = self.conduit orelse return abi.result_not_found;
-        output.* = conduit.getPlayerCount() catch return abi.result_busy;
+        output.* = conduit.getPlayerCount();
         return abi.result_ok;
     }
 
