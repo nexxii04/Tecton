@@ -1,20 +1,22 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const LoginData = Protocol.Login.Decoder.LoginData;
-pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
-const Dimension = @import("../world/dimension/dimension.zig").Dimension;
-const Entity = @import("../entity/entity.zig").Entity;
-const EntityType = @import("../entity/entity-type.zig").EntityType;
-const Container = @import("../container/container.zig").Container;
+const Raknet = @import("Raknet");
 
+const Container = @import("../container/container.zig").Container;
+const EntityType = @import("../entity/entity-type.zig").EntityType;
+const Entity = @import("../entity/entity.zig").Entity;
+const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig");
+const CreatedOutputTrait = @import("../entity/traits/created-output.zig").CreatedOutputTrait;
+const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
-const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig");
-const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
 const TradeWindowTrait = @import("../entity/traits/trade-window.zig").TradeWindowTrait;
-const CreatedOutputTrait = @import("../entity/traits/created-output.zig").CreatedOutputTrait;
+pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
+const Dimension = @import("../world/dimension/dimension.zig").Dimension;
+const MoveDelta = @import("move-delta.zig");
 
 pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
 pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;
@@ -56,7 +58,9 @@ pub const Player = struct {
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
     pending_chunks: std.AutoHashMap(i64, void),
-    visible_players: std.AutoHashMap(i64, void),
+    visible_players: std.AutoHashMap(i64, u32),
+    visible_sweep: std.ArrayList(i64) = .empty,
+    visibility_epoch: u32 = 0,
     visible_entities: std.AutoHashMap(i64, i64),
     pending_removal: std.atomic.Value(bool) = .init(false),
     spawned: bool = false,
@@ -65,6 +69,9 @@ pub const Player = struct {
     opened_container: ?*Container = null,
     block_target: ?Protocol.BlockPosition = null,
     gamemode: Protocol.GameMode = .Creative,
+    last_broadcast: MoveDelta.LastBroadcast = .{},
+    on_ground: bool = true,
+    pending_move: ?MoveDelta.State = null,
 
     pub fn init(
         self: *Player,
@@ -84,7 +91,7 @@ pub const Player = struct {
             .uuid = loginData.identity_data.identity,
             .sent_chunks = std.AutoHashMap(i64, void).init(allocator),
             .pending_chunks = std.AutoHashMap(i64, void).init(allocator),
-            .visible_players = std.AutoHashMap(i64, void).init(allocator),
+            .visible_players = std.AutoHashMap(i64, u32).init(allocator),
             .visible_entities = std.AutoHashMap(i64, i64).init(allocator),
         };
 
@@ -139,6 +146,7 @@ pub const Player = struct {
         self.pending_chunks.deinit();
         self.visible_players.deinit();
         self.visible_entities.deinit();
+        self.visible_sweep.deinit(self.entity.allocator);
         self.login_data.deinit();
         self.entity.deinit();
     }
@@ -325,6 +333,8 @@ pub const Player = struct {
     fn clearTransferVisibility(self: *Player) void {
         const conduit = self.network.conduit;
 
+        self.last_broadcast.reset();
+
         var visible_it = self.visible_players.keyIterator();
         while (visible_it.next()) |runtime_id| {
             const other = conduit.players.get(runtime_id.*) orelse continue;
@@ -366,6 +376,8 @@ pub const Player = struct {
 
     pub fn onSpawn(self: *Player) !void {
         Raknet.Logger.DEBUG("Player {s} has spawned.", .{self.username});
+
+        self.last_broadcast.reset();
 
         if (self.entity.getTraitState(InventoryTrait)) |state| {
             var s: *InventoryTrait.TraitState = state;

@@ -1,29 +1,31 @@
 const std = @import("std");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
+const NBT = @import("nbt");
 const Protocol = @import("protocol");
-const Entity = @import("../entity.zig").Entity;
-const EntityTrait = @import("./trait.zig").EntityTrait;
-const Player = @import("../../player/player.zig").Player;
-const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const Conduit = @import("../../conduit.zig").Conduit;
-const TickProfiler = @import("../../tick-profiler.zig").TickProfiler;
-const Chunk = @import("../../world/chunk/chunk.zig").Chunk;
 const Raknet = @import("Raknet");
-const ThreadedTask = @import("../../tasks/threaded-tasks.zig").ThreadedTask;
+
+const Conduit = @import("../../conduit.zig").Conduit;
 const Compression = @import("../../network/compression/compression.zig").Compression;
 const CompressionOptions = @import("../../network/compression/options.zig").CompressionOptions;
-const WorldProvider = @import("../../world/provider/world-provider.zig").WorldProvider;
-const NBT = @import("nbt");
-const Block = @import("../../world/block/block.zig").Block;
+const Player = @import("../../player/player.zig").Player;
+const ThreadedTask = @import("../../tasks/threaded-tasks.zig").ThreadedTask;
+const TickProfiler = @import("../../tick-profiler.zig").TickProfiler;
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
 const BlockState = @import("../../world/block/block-permutation.zig").BlockState;
 const BlockType = @import("../../world/block/block-type.zig").BlockType;
+const Block = @import("../../world/block/block.zig").Block;
 const ChestTrait = @import("../../world/block/traits/chest.zig");
 const trait_mod = @import("../../world/block/traits/trait.zig");
+const Chunk = @import("../../world/chunk/chunk.zig").Chunk;
 const chunk_mod = @import("../../world/chunk/chunk.zig");
+const SubChunk = @import("../../world/chunk/subchunk.zig").SubChunk;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const LevelDBProvider = @import("../../world/provider/leveldb-provider.zig").LevelDBProvider;
 const ChunkColumnData = @import("../../world/provider/leveldb-provider.zig").ChunkColumnData;
-const SubChunk = @import("../../world/chunk/subchunk.zig").SubChunk;
+const WorldProvider = @import("../../world/provider/world-provider.zig").WorldProvider;
+const Entity = @import("../entity.zig").Entity;
+const EntityTrait = @import("./trait.zig").EntityTrait;
 
 pub const State = struct {
     last_chunk_x: i32,
@@ -42,7 +44,7 @@ fn getPlayer(entity: *Entity) ?*Player {
 fn onTick(state: *State, entity: *Entity) void {
     const player = getPlayer(entity) orelse return;
     if (!player.spawned) return;
-    const player_count = player.network.conduit.getPlayerCount() catch return;
+    const player_count = player.network.conduit.getPlayerCount();
     const visibility_interval: u8 = if (player_count <= 16)
         VISIBILITY_UPDATE_INTERVAL
     else if (player_count <= 48)
@@ -102,11 +104,18 @@ fn updatePlayerVisibility(player: *Player) void {
     const range = player.view_distance * 16;
     const range_sq: f32 = @floatFromInt(range * range);
 
+    player.visibility_epoch +%= 1;
+    const epoch = player.visibility_epoch;
+
     for (snapshots) |other| {
         if (other.entity.runtime_id == player.entity.runtime_id) continue;
+
+        const entry = player.visible_players.getPtr(other.entity.runtime_id);
+        if (entry) |e| e.* = epoch;
+
         if (!other.spawned) continue;
 
-        const currently_visible = player.visible_players.contains(other.entity.runtime_id);
+        const currently_visible = entry != null;
 
         if (other.entity.dimension != player.entity.dimension) {
             if (currently_visible) {
@@ -123,33 +132,38 @@ fn updatePlayerVisibility(player: *Player) void {
 
         if (in_range and !currently_visible) {
             spawnPlayerFor(player, other, allocator);
-            player.visible_players.put(other.entity.runtime_id, {}) catch {};
+            player.visible_players.put(other.entity.runtime_id, epoch) catch {};
         } else if (!in_range and currently_visible) {
             despawnPlayerFor(player, other, allocator);
             _ = player.visible_players.remove(other.entity.runtime_id);
         }
     }
 
-    var stale = std.ArrayList(i64).empty;
-    defer stale.deinit(allocator);
-    var it = player.visible_players.keyIterator();
-    while (it.next()) |rid| {
-        var found = false;
-        for (snapshots) |other| {
-            if (other.entity.runtime_id == rid.*) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            stale.append(allocator, rid.*) catch {};
-        }
-    }
-    for (stale.items) |rid| {
-        _ = player.visible_players.remove(rid);
-    }
+    _ = sweepUnseenPlayers(&player.visible_players, epoch, &player.visible_sweep, allocator) catch 0;
 
     updateTrackedEntities(player);
+}
+
+fn sweepUnseenPlayers(
+    map: *std.AutoHashMap(i64, u32),
+    epoch: u32,
+    scratch: *std.ArrayList(i64),
+    allocator: std.mem.Allocator,
+) !usize {
+    scratch.clearRetainingCapacity();
+
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.* != epoch) {
+            try scratch.append(allocator, entry.key_ptr.*);
+        }
+    }
+
+    const removed = scratch.items.len;
+    for (scratch.items) |runtime_id| {
+        _ = map.remove(runtime_id);
+    }
+    return removed;
 }
 
 fn updateTrackedEntities(player: *Player) void {
@@ -160,8 +174,6 @@ fn updateTrackedEntities(player: *Player) void {
     const center_z = @as(i32, @intFromFloat(@floor(player.entity.position.z))) >> 4;
     const view = player.view_distance;
 
-    // Mirror chunk streaming's circular chunk radius: every entity the client
-    // could know about lives in one of these buckets.
     var chunk_dx: i32 = -view;
     while (chunk_dx <= view) : (chunk_dx += 1) {
         var chunk_dz: i32 = -view;
@@ -1445,6 +1457,122 @@ pub const ChunkLoadingTrait = EntityTrait(State, .{
     .on_tick = onTick,
 });
 
+test "the epoch sweep matches the original linear sweep" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x5eed1234);
+    const random = rng.random();
+
+    var map = std.AutoHashMap(i64, u32).init(allocator);
+    defer map.deinit();
+    var linear = std.AutoHashMap(i64, void).init(allocator);
+    defer linear.deinit();
+    var scratch = std.ArrayList(i64).empty;
+    defer scratch.deinit(allocator);
+    var live = std.ArrayList(i64).empty;
+    defer live.deinit(allocator);
+    var stale = std.ArrayList(i64).empty;
+    defer stale.deinit(allocator);
+
+    const bernoulli = struct {
+        fn f(r: std.Random) bool {
+            return r.uintLessThan(u64, 2) == 1;
+        }
+    }.f;
+
+    for (0..1000) |_| {
+        map.clearRetainingCapacity();
+        linear.clearRetainingCapacity();
+        live.clearRetainingCapacity();
+
+        const universe: i64 = random.intRangeAtMost(i64, 0, 40);
+        const epoch: u32 = random.intRangeAtMost(u32, 1, 1000);
+
+        var id: i64 = 0;
+        while (id < universe) : (id += 1) {
+            if (bernoulli(random)) {
+                try map.put(id, epoch -% 1);
+                try linear.put(id, {});
+            }
+            if (bernoulli(random)) try live.append(allocator, id);
+        }
+
+        for (live.items) |l| {
+            if (map.getPtr(l)) |p| p.* = epoch;
+        }
+        _ = try sweepUnseenPlayers(&map, epoch, &scratch, allocator);
+
+        stale.clearRetainingCapacity();
+        var it = linear.keyIterator();
+        while (it.next()) |rid| {
+            var found = false;
+            for (live.items) |l| {
+                if (l == rid.*) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) try stale.append(allocator, rid.*);
+        }
+        for (stale.items) |rid| _ = linear.remove(rid);
+
+        try std.testing.expectEqual(linear.count(), map.count());
+        var check = map.keyIterator();
+        while (check.next()) |rid| {
+            try std.testing.expect(linear.contains(rid.*));
+        }
+    }
+}
+
+test "a wrapping epoch does not purge live entries" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(i64, u32).init(allocator);
+    defer map.deinit();
+    var scratch = std.ArrayList(i64).empty;
+    defer scratch.deinit(allocator);
+
+    try map.put(1, std.math.maxInt(u32));
+    try map.put(2, std.math.maxInt(u32));
+    try map.put(3, 7);
+
+    const previous: u32 = std.math.maxInt(u32);
+    const epoch = previous +% 1;
+    try std.testing.expectEqual(@as(u32, 0), epoch);
+
+    inline for (.{ 1, 2 }) |l| {
+        map.getPtr(l).?.* = epoch;
+    }
+
+    const removed = try sweepUnseenPlayers(&map, epoch, &scratch, allocator);
+    try std.testing.expectEqual(@as(usize, 1), removed);
+    try std.testing.expectEqual(@as(usize, 2), map.count());
+    try std.testing.expect(map.contains(1));
+    try std.testing.expect(map.contains(2));
+    try std.testing.expect(!map.contains(3));
+}
+
+test "the sweep reuses its scratch without allocating between passes" {
+    const allocator = std.testing.allocator;
+    var map = std.AutoHashMap(i64, u32).init(allocator);
+    defer map.deinit();
+    var scratch = std.ArrayList(i64).empty;
+    defer scratch.deinit(allocator);
+
+    try map.put(1, 0);
+    try map.put(2, 0);
+    try map.put(3, 0);
+
+    try std.testing.expectEqual(@as(usize, 3), try sweepUnseenPlayers(&map, 1, &scratch, allocator));
+    try std.testing.expectEqual(@as(usize, 0), map.count());
+    const capacity_after_first = scratch.capacity;
+    try std.testing.expect(capacity_after_first >= 3);
+
+    try map.put(9, 0);
+    try map.put(10, 0);
+    try std.testing.expectEqual(@as(usize, 2), try sweepUnseenPlayers(&map, 1, &scratch, allocator));
+    try std.testing.expectEqual(capacity_after_first, scratch.capacity);
+    try std.testing.expectEqual(@as(usize, 0), map.count());
+}
+
 test "two-tier chunk classification matches squared distance formula" {
     var rng = std.Random.DefaultPrng.init(0xabcd1234);
     const random = rng.random();
@@ -1482,7 +1610,8 @@ test "render-only chunks with block actors bypass packet cache" {
         .trait_ids = &.{},
         .nbt_data = null,
     };
-    const parsed = [_]ParsedBlockEntity{entity};
+
+    var parsed = [_]ParsedBlockEntity{entity};
     const data = ChunkBlockData{ .parsed_entities = &parsed, .trait_positions = &.{} };
     try std.testing.expect(!shouldCacheChunkPacket(false, &data));
 }

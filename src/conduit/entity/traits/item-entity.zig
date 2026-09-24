@@ -1,14 +1,17 @@
 const std = @import("std");
-const Protocol = @import("protocol");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
-const Entity = @import("../entity.zig").Entity;
-const EntityTrait = @import("./trait.zig").EntityTrait;
-const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const Player = @import("../../player/player.zig").Player;
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const InventoryTrait = @import("./inventory.zig");
-const GravityTrait = @import("./gravity.zig").GravityTrait;
+const Protocol = @import("protocol");
+
 const Container = @import("../../container/container.zig").Container;
+const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemType = @import("../../items/item-type.zig").ItemType;
+const Player = @import("../../player/player.zig").Player;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
+const Entity = @import("../entity.zig").Entity;
+const GravityTrait = @import("./gravity.zig").GravityTrait;
+const InventoryTrait = @import("./inventory.zig");
+const EntityTrait = @import("./trait.zig").EntityTrait;
 
 pub const State = struct {
     stack: ItemStack,
@@ -60,15 +63,7 @@ fn onTick(state: *State, entity: *Entity) void {
 
     const conduit = dimension.world.conduit;
 
-    conduit.players_mutex.lock(conduit.io) catch |err| {
-        std.log.err("failed to acquire lock: {}", .{err});
-        return;
-    };
-
-    const player_count = conduit.players.count();
-    conduit.players_mutex.unlock(conduit.io);
-
-    if (player_count == 0) return;
+    if (conduit.getPlayerCount() == 0) return;
 
     const snapshots = conduit.getPlayerSnapshots();
 
@@ -229,14 +224,35 @@ pub const ItemEntityTrait = EntityTrait(State, .{
     .on_detach = onDetach,
 });
 
+fn registerMergeTestStone(allocator: std.mem.Allocator) !*ItemType {
+    try ItemType.initRegistry(allocator);
+    const item_type = try ItemType.init(
+        allocator,
+        try allocator.dupe(u8, "minecraft:invalid_merge_test_stone"),
+        9001,
+        64,
+        true,
+        &.{},
+        false,
+        0,
+        .{ .End = .{} },
+    );
+    try item_type.register();
+    return item_type;
+}
+
 test "grounded item merge rejects airborne items" {
-    const stone = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stack_size = 1 }) orelse return error.TestUnexpectedResult;
+    const allocator = std.testing.allocator;
+    const stone_type = try registerMergeTestStone(allocator);
+    defer ItemType.deinitRegistry();
+
+    const stone = ItemStack.init(allocator, stone_type, .{ .stack_size = 1 });
     defer {
         var item = stone;
         item.deinit();
     }
 
-    const other = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stack_size = 1 }) orelse return error.TestUnexpectedResult;
+    const other = ItemStack.init(allocator, stone_type, .{ .stack_size = 1 });
     defer {
         var item = other;
         item.deinit();
@@ -247,13 +263,17 @@ test "grounded item merge rejects airborne items" {
 }
 
 test "grounded item merge accepts compatible grounded items in range" {
-    const stone = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stack_size = 1 }) orelse return error.TestUnexpectedResult;
+    const allocator = std.testing.allocator;
+    const stone_type = try registerMergeTestStone(allocator);
+    defer ItemType.deinitRegistry();
+
+    const stone = ItemStack.init(allocator, stone_type, .{ .stack_size = 1 });
     defer {
         var item = stone;
         item.deinit();
     }
 
-    const other = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stack_size = 1 }) orelse return error.TestUnexpectedResult;
+    const other = ItemStack.init(allocator, stone_type, .{ .stack_size = 1 });
     defer {
         var item = other;
         item.deinit();

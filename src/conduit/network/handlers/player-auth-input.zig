@@ -18,14 +18,6 @@ const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const processItemStackRequest = @import("./item-stack-request.zig").processItemStackRequest;
 
-/// Converts a rotation in degrees to the signed byte format used by
-/// MoveActorDelta (256 steps across a full 360° turn).
-fn rotationToByte(degrees: f32) i8 {
-    const normalized = @mod(degrees, 360.0);
-    const steps: u32 = @intFromFloat(normalized / 360.0 * 256.0);
-    return @bitCast(@as(u8, @truncate(steps)));
-}
-
 pub fn handlePlayerBlockAction(
     network: *NetworkHandler,
     player: *Player,
@@ -85,27 +77,11 @@ pub fn handlePlayerAuthInput(
         }
     }
 
-    network.scratch_stream.reset();
-
-    const move_packet = Protocol.MoveActorDeltaPacket{
-        .runtime_id = @intCast(player.entity.runtime_id),
-        .x = player.entity.position.x,
-        .y = player.entity.position.y,
-        .z = player.entity.position.z,
-        .rotation_x = rotationToByte(player.entity.rotation.x),
-        .rotation_y = rotationToByte(player.entity.rotation.y),
-        .rotation_y_head = rotationToByte(player.entity.head_yaw),
-        .on_ground = true,
+    player.pending_move = .{
+        .position = .{ player.entity.position.x, player.entity.position.y, player.entity.position.z },
+        .rotation = .{ player.entity.rotation.x, player.entity.rotation.y, player.entity.head_yaw },
+        .on_ground = player.on_ground,
     };
-    const serialized = try move_packet.serialize(&network.scratch_stream);
-
-    const snapshots = network.conduit.getPlayerSnapshots();
-    for (snapshots) |other| {
-        if (other.entity.runtime_id == player.entity.runtime_id) continue;
-        if (!other.spawned) continue;
-        if (!other.visible_players.contains(player.entity.runtime_id)) continue;
-        try network.sendPacket(other.connection, serialized);
-    }
 }
 
 fn handleItemUseTransaction(
@@ -165,12 +141,14 @@ fn handleItemUseTransaction(
 
     const network_id: u32 = @bitCast(permutation.network_id);
     {
-        network.scratch_stream.reset();
+        const scratch = network.scratch.begin();
+        defer scratch.deinit();
+
         const update = Protocol.UpdateBlockPacket{
             .position = pos,
             .network_block_id = network_id,
         };
-        const serialized = try update.serialize(&network.scratch_stream);
+        const serialized = try update.serialize(scratch.stream());
 
         dimension.broadcastBlockUpdateToViewersExcept(pos, player, serialized);
     }
@@ -265,12 +243,14 @@ fn handleBlockAction(
             broadcastLevelEvent(dimension, network, .ParticlesDestroyBlock, centered(pos), @bitCast(perm.network_id));
 
             {
-                network.scratch_stream.reset();
+                const scratch = network.scratch.begin();
+                defer scratch.deinit();
+
                 const update = Protocol.UpdateBlockPacket{
                     .position = pos,
                     .network_block_id = @bitCast(air.network_id),
                 };
-                const serialized = try update.serialize(&network.scratch_stream);
+                const serialized = try update.serialize(scratch.stream());
                 dimension.broadcastBlockUpdateToViewers(pos, serialized);
             }
         },
@@ -287,22 +267,26 @@ fn centered(pos: Protocol.BlockPosition) Protocol.Vector3f {
 }
 
 fn sendBlockCorrection(network: *NetworkHandler, player: *Player, pos: Protocol.BlockPosition, network_block_id: u32) void {
-    network.scratch_stream.reset();
+    const scratch = network.scratch.begin();
+    defer scratch.deinit();
+
     const update = Protocol.UpdateBlockPacket{
         .position = pos,
         .network_block_id = network_block_id,
     };
-    const serialized = update.serialize(&network.scratch_stream) catch return;
+    const serialized = update.serialize(scratch.stream()) catch return;
     network.sendPacket(player.connection, serialized) catch {};
 }
 
 fn broadcastLevelEvent(dimension: *Dimension, network: *NetworkHandler, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
-    network.scratch_stream.reset();
+    const scratch = network.scratch.begin();
+    defer scratch.deinit();
+
     const pkt = Protocol.LevelEventPacket{
         .event = event,
         .position = position,
         .data = data,
     };
-    const serialized = pkt.serialize(&network.scratch_stream) catch return;
+    const serialized = pkt.serialize(scratch.stream()) catch return;
     dimension.broadcastToNearby(position, Dimension.PARTICLE_BROADCAST_RADIUS, serialized);
 }
