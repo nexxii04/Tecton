@@ -1,18 +1,20 @@
 const std = @import("std");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
+
+const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
+const Player = @import("../player/player.zig").Player;
 const Command = @import("command.zig").Command;
-const CommandHandlerFn = @import("command.zig").CommandHandlerFn;
 const CommandContext = @import("context.zig").CommandContext;
+const CommandHandlerFn = @import("command.zig").CommandHandlerFn;
 const CommandPermission = @import("permission.zig").CommandPermission;
 const types = @import("types.zig");
 const CommandEnum = types.CommandEnum;
 const SoftEnum = types.SoftEnum;
 const CommandParameter = types.CommandParameter;
 const CommandOverload = types.CommandOverload;
-const Player = @import("../player/player.zig").Player;
-const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
 
 pub const CommandResult = struct {
     success: bool,
@@ -145,6 +147,7 @@ pub const CommandRegistry = struct {
             .uuid = uuid,
             .request_id = request_id,
         };
+        defer ctx.deinit();
 
         if (cmd.subcommands.count() > 0 and parsed.args.len > 0) {
             const first_arg_end = std.mem.indexOfScalar(u8, parsed.args, ' ') orelse parsed.args.len;
