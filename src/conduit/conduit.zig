@@ -20,10 +20,13 @@ const VillagerTradeTrait = EntityTraits.VillagerTradeTrait;
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
 const ItemPalette = @import("./items/item-palette.zig");
 const BanManager = @import("./network/ban-manager.zig").BanManager;
+const MovementBroadcast = @import("./network/movement-broadcast.zig");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
+const MoveDelta = @import("./player/move-delta.zig");
 const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
 const PlayerLocations = @import("./player/player-locations.zig").PlayerLocations;
 const PlayerLocation = @import("./player/player-locations.zig").Location;
+const PlayerSnapshot = @import("./player/player-snapshot.zig").PlayerSnapshot;
 const Player = @import("./player/player.zig").Player;
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 const ThreadedTaskQueue = @import("./tasks/threaded-tasks.zig").ThreadedTaskQueue;
@@ -40,6 +43,7 @@ const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
 const OpenBitTrait = @import("./world/block/traits/open-bit.zig").OpenBitTrait;
 const UpperBlockTrait = @import("./world/block/traits/upper-block.zig").UpperBlockTrait;
 const WallConnectionTrait = @import("./world/block/traits/wall-connection.zig").WallConnectionTrait;
+const ChunkHash = @import("./world/dimension/dimension.zig").ChunkHash;
 const Generator = @import("./world/generator/root.zig");
 const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
 const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
@@ -76,6 +80,16 @@ pub const ServerOptions = struct {
     command_permission_userdata: ?*anyopaque = null,
 };
 
+const save_chunks_per_tick: usize = 32;
+const save_players_per_tick: usize = 2;
+const save_ns_budget: u64 = 2_000_000;
+
+const SaveGroup = struct {
+    world: []u8,
+    dim: []u8,
+    hashes: []ChunkHash,
+};
+
 pub const Conduit = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -100,11 +114,18 @@ pub const Conduit = struct {
     players: std.AutoHashMap(i64, *Player),
     connection_map: std.AutoHashMap(usize, *Player),
     players_mutex: std.Io.Mutex = .init,
-    snapshot_buf: std.ArrayList(*Player),
+    players_count: std.atomic.Value(usize) = .init(0),
+    players_snapshot: PlayerSnapshot,
     pending_player_removals: std.ArrayList(*Player),
     pending_player_removals_mutex: std.Io.Mutex = .init,
+    movement_deltas: std.ArrayList(MovementBroadcast.DeltaRef) = .empty,
+    movement_batch: std.ArrayList([]const u8) = .empty,
+    save_in_flight: bool = false,
+    save_plan: std.ArrayListUnmanaged(SaveGroup) = .empty,
+    save_cursor: struct { group: usize = 0, chunk: usize = 0 } = .{},
+    save_players_pending: bool = false,
+    save_player_cursor: usize = 0,
     worlds: std.StringHashMap(*World),
-    /// Names of worlds with a create/unload operation in flight. Tick-thread only.
     world_ops: std.StringHashMap(void),
     player_entity_type: EntityType,
     creative_content: ?CreativeContentLoader.CreativeContentData,
@@ -157,6 +178,15 @@ pub const Conduit = struct {
         Raknet.Logger.init(allocator);
         var owned_config = config;
         errdefer owned_config.deinit();
+        const max_mtu = ServerProperties.clampMaxMtu(owned_config.max_mtu);
+        if (max_mtu != owned_config.max_mtu) {
+            Raknet.Logger.WARN("max-mtu={d} is outside the supported range {d}-{d}, using {d}", .{
+                owned_config.max_mtu,
+                ServerProperties.min_max_mtu,
+                ServerProperties.max_max_mtu,
+                max_mtu,
+            });
+        }
         const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(owned_config.max_players)) * 8);
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();
@@ -194,11 +224,11 @@ pub const Conduit = struct {
                     .name = owned_config.motd,
                     .gamemode = "Creative",
                 },
-                .max_mtu = 1028,
+                .max_mtu = max_mtu,
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
             .connection_map = std.AutoHashMap(usize, *Player).init(allocator),
-            .snapshot_buf = std.ArrayList(*Player).empty,
+            .players_snapshot = PlayerSnapshot.init(),
             .pending_player_removals = std.ArrayList(*Player).empty,
             .worlds = std.StringHashMap(*World).init(allocator),
             .world_ops = std.StringHashMap(void).init(allocator),
@@ -435,6 +465,7 @@ pub const Conduit = struct {
                 },
             );
         }
+        Raknet.Logger.INFO("RakNet MTU cap: {d}", .{self.raknet.options.max_mtu});
         Raknet.Logger.INFO("Loaded {d} threads, {d} worker threads available", .{
             totalServerThreadCount(self.threaded_tasks.workerCount()),
             self.threaded_tasks.workerCount(),
@@ -508,12 +539,18 @@ pub const Conduit = struct {
         return self.connection_map.get(@intFromPtr(connection));
     }
 
+    fn publishPlayerCountLocked(self: *Conduit) void {
+        self.players_count.store(self.players.count(), .release);
+    }
+
     pub fn addPlayer(self: *Conduit, player: *Player) !void {
         try self.players_mutex.lock(self.io);
         defer self.players_mutex.unlock(self.io);
         try self.players.put(player.entity.runtime_id, player);
+        self.publishPlayerCountLocked();
         try self.connection_map.put(@intFromPtr(player.connection), player);
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
+        self.players_snapshot.publish(self.allocator, self.players.valueIterator());
     }
 
     pub fn removePlayer(self: *Conduit, player: *Player) void {
@@ -523,8 +560,10 @@ pub const Conduit = struct {
         };
         defer self.players_mutex.unlock(self.io);
         _ = self.players.remove(player.entity.runtime_id);
+        self.publishPlayerCountLocked();
         _ = self.connection_map.remove(@intFromPtr(player.connection));
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
+        self.players_snapshot.publish(self.allocator, self.players.valueIterator());
     }
     pub fn removeConnectionMapping(self: *Conduit, connection: *Raknet.Connection) void {
         self.players_mutex.lock(self.io) catch |err| {
@@ -533,6 +572,7 @@ pub const Conduit = struct {
         };
         defer self.players_mutex.unlock(self.io);
         _ = self.connection_map.remove(@intFromPtr(connection));
+        self.players_snapshot.publish(self.allocator, self.players.valueIterator());
     }
 
     pub fn enqueuePlayerRemoval(self: *Conduit, player: *Player) void {
@@ -564,26 +604,84 @@ pub const Conduit = struct {
         }
     }
 
-    pub fn getPlayerSnapshots(self: *Conduit) []*Player {
-        self.players_mutex.lock(self.io) catch |err| {
-            std.log.err("failed to acquire lock: {}", .{err});
-            return &.{};
-        };
-
-        defer self.players_mutex.unlock(self.io);
-        self.snapshot_buf.clearRetainingCapacity();
-        var it = self.players.valueIterator();
-        while (it.next()) |p| {
-            if (p.*.pending_removal.load(.acquire)) continue;
-            self.snapshot_buf.append(self.allocator, p.*) catch break;
+    fn flushMovementBroadcasts(self: *Conduit) void {
+        const started = Timestamp.now(self.io, .awake);
+        defer {
+            const elapsed = started.durationTo(.now(self.io, .awake));
+            self.profiler.record(.movement_broadcast, @intCast(@max(0, elapsed.nanoseconds)));
         }
-        return self.snapshot_buf.items;
+
+        const snapshots = self.getPlayerSnapshots();
+
+        const scratch = self.network.scratch.begin();
+        defer scratch.deinit();
+        const stream = scratch.stream();
+
+        self.movement_deltas.clearRetainingCapacity();
+        for (snapshots) |emitter| {
+            const state = emitter.pending_move orelse continue;
+            emitter.pending_move = null;
+
+            if (emitter.pending_removal.load(.acquire)) continue;
+
+            const delta = MoveDelta.nextDelta(
+                &emitter.last_broadcast,
+                @intCast(emitter.entity.runtime_id),
+                state,
+                self.tick_count,
+            ) orelse continue;
+
+            const before = stream.getBuffer().len;
+            _ = delta.serialize(stream) catch continue;
+
+            self.movement_deltas.append(
+                self.allocator,
+                MovementBroadcast.markRef(stream, emitter.entity.runtime_id, before),
+            ) catch continue;
+        }
+
+        if (self.movement_deltas.items.len == 0) return;
+
+        const payload = stream.getBuffer();
+
+        for (snapshots) |viewer| {
+            if (!viewer.spawned) continue;
+            if (viewer.pending_removal.load(.acquire)) continue;
+
+            var index: usize = 0;
+            while (index < self.movement_deltas.items.len) {
+                self.movement_batch.clearRetainingCapacity();
+                index = MovementBroadcast.fillBatch(
+                    &self.movement_batch,
+                    self.allocator,
+                    payload,
+                    self.movement_deltas.items,
+                    index,
+                    viewer.entity.runtime_id,
+                    viewer.visible_players,
+                    MovementBroadcast.MAX_BATCH_BYTES,
+                );
+                if (self.movement_batch.items.len == 0) break;
+                self.network.sendPacketsUncompressed(viewer.connection, self.movement_batch.items) catch {};
+            }
+        }
     }
 
-    pub fn getPlayerCount(self: *Conduit) !usize {
-        try self.players_mutex.lock(self.io);
+    pub fn rebuildPlayerSnapshot(self: *Conduit) void {
+        self.players_mutex.lock(self.io) catch |err| {
+            std.log.err("failed to acquire lock: {}", .{err});
+            return;
+        };
         defer self.players_mutex.unlock(self.io);
-        return self.players.count();
+        self.players_snapshot.publish(self.allocator, self.players.valueIterator());
+    }
+
+    pub fn getPlayerSnapshots(self: *Conduit) []const *Player {
+        return self.players_snapshot.items();
+    }
+
+    pub fn getPlayerCount(self: *const Conduit) usize {
+        return self.players_count.load(.acquire);
     }
 
     pub fn registerEcsEntity(self: *Conduit, entity: *Entity) void {
@@ -640,19 +738,24 @@ pub const Conduit = struct {
         self.profiler.record(.raknet_tick, raknet_ns);
 
         const packet_drain_budget = tick_budget_ns * 5 / 100;
-        {
-            const pd_start = Timestamp.now(self.io, .awake);
-            _ = self.network.drainPackets(packet_drain_budget, 64);
-            const pd_end = pd_start.durationTo(.now(self.io, .awake));
-            self.profiler.record(.packet_drain, @intCast(@max(0, pd_end.nanoseconds)));
-        }
-        if (self.network.decompress_pending > 256 and self.tick_count % target_tps_u64 == 0) {
-            Raknet.Logger.WARN("Network packet backlog: pending={d}", .{
-                self.network.decompress_pending,
+        const packet_drain_cap: usize = @max(256, self.getPlayerCount() * 8);
+        const pd_start = Timestamp.now(self.io, .awake);
+        const drain_result = self.network.drainPackets(packet_drain_budget, packet_drain_cap);
+        const pd_end = pd_start.durationTo(.now(self.io, .awake));
+        self.profiler.record(.packet_drain, @intCast(@max(0, pd_end.nanoseconds)));
+
+        const decompress_pending = self.network.decompress_pending.load(.monotonic);
+        const dropped_packets = self.network.dropped_packets.load(.monotonic);
+        if ((decompress_pending > 256 or dropped_packets > 0) and self.tick_count % target_tps_u64 == 0) {
+            Raknet.Logger.WARN("Network packet backlog: pending={d} queued={d} dropped={d}", .{
+                decompress_pending,
+                drain_result.remaining,
+                dropped_packets,
             });
         }
 
         self.drainPendingPlayerRemovals();
+        self.rebuildPlayerSnapshot();
 
         var phase_start = Timestamp.now(self.io, .awake);
         const snapshots = self.getPlayerSnapshots();
@@ -701,6 +804,8 @@ pub const Conduit = struct {
         if (self.console_started) self.console.drainCommands();
         if (self.tick_callback) |callback| callback(self.tick_userdata);
 
+        self.flushMovementBroadcasts();
+
         const work_end = work_start.durationTo(.now(self.io, .awake));
         const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
         const total_tick_ns = raknet_ns + work_ns;
@@ -736,9 +841,8 @@ pub const Conduit = struct {
             self.tick_interval_samples = 0;
         }
 
-        if (self.tick_count % 6000 == 0) {
-            self.saveAllWorlds();
-        }
+        if (self.tick_count % 6000 == 0) self.beginSavePass();
+        self.tickIncrementalSave();
     }
 
     pub fn buildWorld(self: *Conduit, name: []const u8) !*World {
@@ -746,7 +850,7 @@ pub const Conduit = struct {
         const db_path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}/db", .{ self.paths.worlds, name });
         std.Io.Dir.cwd().createDirPath(self.io, db_path) catch {};
 
-        const provider = try LevelDBProvider.init(self.allocator, db_path);
+        const provider = try LevelDBProvider.init(self.io, self.allocator, db_path);
         const world = self.allocator.create(World) catch |err| {
             provider.deinit();
             return err;
@@ -861,6 +965,107 @@ pub const Conduit = struct {
         self.broadcastAvailableCommands();
     }
 
+    /// Plans a save pass over every loaded chunk. The pass keeps its own copy
+    /// of the world and dimension names, so a world unloaded mid-pass is
+    /// skipped instead of dangling.
+    fn beginSavePass(self: *Conduit) void {
+        self.freeSavePlan();
+        self.save_cursor = .{};
+        self.save_player_cursor = 0;
+        self.save_players_pending = true;
+        self.save_in_flight = true;
+
+        var worlds_it = self.worlds.valueIterator();
+        while (worlds_it.next()) |world| {
+            var dims_it = world.*.dimensions.valueIterator();
+            while (dims_it.next()) |dim| {
+                var hashes = std.ArrayListUnmanaged(ChunkHash).empty;
+                var chunk_it = dim.*.chunks.keyIterator();
+                while (chunk_it.next()) |hash| hashes.append(self.allocator, hash.*) catch break;
+                if (hashes.items.len == 0) {
+                    hashes.deinit(self.allocator);
+                    continue;
+                }
+                const owned = hashes.toOwnedSlice(self.allocator) catch {
+                    hashes.deinit(self.allocator);
+                    continue;
+                };
+                const world_name = self.allocator.dupe(u8, world.*.identifier) catch {
+                    self.allocator.free(owned);
+                    continue;
+                };
+                const dim_name = self.allocator.dupe(u8, dim.*.identifier) catch {
+                    self.allocator.free(owned);
+                    self.allocator.free(world_name);
+                    continue;
+                };
+                self.save_plan.append(self.allocator, .{ .world = world_name, .dim = dim_name, .hashes = owned }) catch {
+                    self.allocator.free(owned);
+                    self.allocator.free(world_name);
+                    self.allocator.free(dim_name);
+                    continue;
+                };
+            }
+        }
+    }
+
+    fn freeSavePlan(self: *Conduit) void {
+        for (self.save_plan.items) |group| {
+            self.allocator.free(group.hashes);
+            self.allocator.free(group.world);
+            self.allocator.free(group.dim);
+        }
+        self.save_plan.deinit(self.allocator);
+        self.save_plan = .empty;
+    }
+
+    fn tickIncrementalSave(self: *Conduit) void {
+        if (!self.save_in_flight) return;
+
+        const started = Timestamp.now(self.io, .awake);
+        var budget = save_chunks_per_tick;
+        while (budget > 0 and self.save_cursor.group < self.save_plan.items.len) {
+            const group = self.save_plan.items[self.save_cursor.group];
+            if (self.save_cursor.chunk >= group.hashes.len) {
+                self.save_cursor.group += 1;
+                self.save_cursor.chunk = 0;
+                continue;
+            }
+            const hash = group.hashes[self.save_cursor.chunk];
+            self.save_cursor.chunk += 1;
+            budget -= 1;
+            self.saveOneChunk(group, hash);
+            if (started.durationTo(.now(self.io, .awake)).nanoseconds >= save_ns_budget) break;
+        }
+
+        if (self.save_cursor.group < self.save_plan.items.len) return;
+
+        if (self.save_players_pending) {
+            const snapshots = self.getPlayerSnapshots();
+            var saved: usize = 0;
+            while (saved < save_players_per_tick and self.save_player_cursor < snapshots.len) : (saved += 1) {
+                snapshots[self.save_player_cursor].savePlayerData();
+                self.save_player_cursor += 1;
+            }
+            if (self.save_player_cursor < snapshots.len) return;
+            self.save_players_pending = false;
+        }
+
+        self.save_in_flight = false;
+        self.freeSavePlan();
+    }
+
+    /// Same work as `World.save` for one chunk, but reached through the plan so
+    /// the walk can be spread across ticks.
+    fn saveOneChunk(self: *Conduit, group: SaveGroup, hash: ChunkHash) void {
+        const world = self.worlds.get(group.world) orelse return;
+        const dim = world.getDimension(group.dim) orelse return;
+        const chunk = dim.chunks.get(hash) orelse return;
+        world.provider.writeChunkEntities(chunk, dim) catch {};
+        world.provider.writeBlockEntities(chunk, dim) catch {};
+        if (chunk.dirty) world.provider.writeChunk(chunk, dim) catch {};
+    }
+
     pub fn saveAllWorlds(self: *Conduit) void {
         var worlds_it = self.worlds.valueIterator();
         while (worlds_it.next()) |world| {
@@ -881,6 +1086,7 @@ pub const Conduit = struct {
         self.threaded_tasks.drainCompleted(std.math.maxInt(u64));
         self.drainPendingPlayerRemovals();
         self.saveAllWorlds();
+        self.freeSavePlan();
         self.threaded_tasks.deinit();
 
         var it = self.players.valueIterator();
@@ -888,9 +1094,11 @@ pub const Conduit = struct {
             player.*.deinit();
             self.allocator.destroy(player.*);
         }
+        self.movement_deltas.deinit(self.allocator);
+        self.movement_batch.deinit(self.allocator);
         self.players.deinit();
         self.connection_map.deinit();
-        self.snapshot_buf.deinit(self.allocator);
+        self.players_snapshot.deinit(self.allocator);
         self.plugin_runtime.deinit();
 
         var worlds_it = self.worlds.valueIterator();
@@ -967,7 +1175,116 @@ fn readLevelDatSpawn(io: std.Io, allocator: std.mem.Allocator, path: []const u8)
     return Protocol.BlockPosition{ .x = sx, .y = sy, .z = sz };
 }
 
+test "every `players` mutation refreshes the atomic count" {
+    const source = @embedFile("conduit.zig");
+    const mutating_calls = [_][]const u8{
+        "self.players.put(",
+        "self.players.putNoClobber(",
+        "self.players.remove(",
+        "self.players.fetchRemove(",
+        "self.players.clearRetainingCapacity(",
+        "self.players.clearAndFree(",
+    };
+    const refresh = "publishPlayerCountLocked()";
+    const max_gap: usize = 4;
+
+    var mutations: usize = 0;
+    var missing: ?usize = null;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    var line_no: usize = 0;
+    var last_mutation_line: usize = 0;
+    while (lines.next()) |line| {
+        line_no += 1;
+        var is_mutation = false;
+        for (mutating_calls) |needle| {
+            if (std.mem.indexOf(u8, line, needle) != null) is_mutation = true;
+        }
+        if (is_mutation) {
+            mutations += 1;
+            last_mutation_line = line_no;
+            continue;
+        }
+        if (last_mutation_line != 0 and line_no - last_mutation_line <= max_gap) {
+            if (std.mem.indexOf(u8, line, refresh) != null) last_mutation_line = 0;
+        }
+        if (last_mutation_line != 0 and line_no - last_mutation_line > max_gap and missing == null) {
+            missing = last_mutation_line;
+        }
+    }
+
+    if (missing) |at| {
+        std.debug.print("conduit.zig:{d}: `players` mutation without refreshing the counter\n", .{at});
+        return error.TestUnexpectedResult;
+    }
+    try std.testing.expectEqual(@as(usize, 0), last_mutation_line);
+    try std.testing.expect(mutations >= 2);
+}
+
+test "the RakNet MTU cap is the clamped config value, never a literal" {
+    const source = @embedFile("conduit.zig");
+    const cutoff = std.mem.indexOf(u8, source, "test \"the RakNet MTU cap") orelse return error.TestUnexpectedResult;
+    const init_code = source[0..cutoff];
+    try std.testing.expect(std.mem.indexOf(u8, init_code, "ServerProperties.clampMaxMtu(owned_config.max_mtu)") != null);
+
+    var found: usize = 0;
+    var rest: []const u8 = init_code;
+    while (std.mem.indexOf(u8, rest, ".max_mtu = ")) |at| {
+        const value_start = at + ".max_mtu = ".len;
+        const end = std.mem.indexOfScalarPos(u8, rest, value_start, ',') orelse return error.TestUnexpectedResult;
+        if (!std.mem.eql(u8, rest[value_start..end], "max_mtu")) {
+            std.debug.print("conduit.zig: the RakNet MTU cap is not the clamped config value\n", .{});
+            return error.TestUnexpectedResult;
+        }
+        found += 1;
+        rest = rest[end..];
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "onTick broadcasts movement and no path skips the flush" {
+    const source = @embedFile("conduit.zig");
+    const flush_call = "self.flushMovementBroadcasts()";
+
+    const on_tick_start = std.mem.indexOf(u8, source, "fn onTick(context: ?*anyopaque) void {") orelse
+        return error.TestUnexpectedResult;
+    const on_tick_end = std.mem.indexOfPos(u8, source, on_tick_start, "\n    pub fn buildWorld(") orelse
+        return error.TestUnexpectedResult;
+    const body = source[on_tick_start..on_tick_end];
+
+    const allocator = std.testing.allocator;
+    var code: std.ArrayList(u8) = .empty;
+    defer code.deinit(allocator);
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| {
+        const stripped = if (std.mem.indexOf(u8, line, "//")) |at| line[0..at] else line;
+        try code.appendSlice(allocator, stripped);
+        try code.append(allocator, '\n');
+    }
+
+    const flush_at = std.mem.indexOf(u8, code.items, flush_call) orelse {
+        std.debug.print("conduit.zig: onTick no longer calls {s}: movement is not broadcast\n", .{flush_call});
+        return error.TestUnexpectedResult;
+    };
+
+    if (std.mem.indexOf(u8, code.items[0..flush_at], "return")) |at| {
+        const line_no = std.mem.count(u8, code.items[0..at], "\n") + 2;
+        std.debug.print(
+            "conduit.zig:{d}: onTick returns before the movement flush\n",
+            .{on_tick_start_line(source, on_tick_start) + line_no},
+        );
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn on_tick_start_line(source: []const u8, at: usize) usize {
+    return std.mem.count(u8, source[0..at], "\n") + 1;
+}
+
 test {
     _ = @import("./command/list/world.zig");
     _ = @import("./world/provider/leveldb-provider.zig");
+    _ = @import("./entity/traits/chunk-loading.zig");
+    _ = @import("./player/player-snapshot.zig");
+    _ = @import("./player/move-delta.zig");
+    _ = @import("./network/movement-broadcast.zig");
 }

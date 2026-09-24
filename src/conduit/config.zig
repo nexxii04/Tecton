@@ -16,10 +16,19 @@ pub const ServerProperties = struct {
     worker_threads: u32 = 0,
     max_view_distance: u32 = 16,
     simulation_distance: u32 = 4,
+    max_mtu: u16 = max_max_mtu,
     default_group: []const u8 = "member",
 
     allocator: std.mem.Allocator,
     _allocated_strings: std.ArrayList([]const u8) = .empty,
+
+    // 576 is the IPv4 minimum reassembly size, the smallest MTU a RakNet handshake survives.
+    pub const min_max_mtu: u16 = 576;
+    pub const max_max_mtu: u16 = Raknet.MAX_MTU_SIZE;
+
+    pub fn clampMaxMtu(requested: u16) u16 {
+        return @min(@max(requested, min_max_mtu), max_max_mtu);
+    }
 
     const comments = .{
         .address = "What address should the server run on",
@@ -31,6 +40,7 @@ pub const ServerProperties = struct {
         .worker_threads = "Conduit worker threads (0 = auto, higher values are clamped)",
         .max_view_distance = "Max view distance in chunks",
         .simulation_distance = "Simulation distance in chunks (chunks within this range are kept loaded)",
+        .max_mtu = "Max RakNet MTU (clamped to 576-1400; clients still negotiate the minimum with this cap)",
         .default_group = "Default permission group for new players",
     };
 
@@ -154,6 +164,58 @@ pub const ServerProperties = struct {
         self._allocated_strings.deinit(self.allocator);
     }
 };
+
+test "max mtu clamps to the range RakNet supports" {
+    const clamp = ServerProperties.clampMaxMtu;
+    try std.testing.expectEqual(ServerProperties.max_max_mtu, clamp(ServerProperties.max_max_mtu));
+    try std.testing.expectEqual(@as(u16, 1400), clamp(1492));
+    try std.testing.expectEqual(ServerProperties.max_max_mtu, clamp(std.math.maxInt(u16)));
+    try std.testing.expectEqual(@as(u16, 1028), clamp(1028));
+    try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(ServerProperties.min_max_mtu));
+    try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(0));
+}
+
+test "max mtu defaults to the RakNet ceiling" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try std.testing.expectEqual(ServerProperties.max_max_mtu, properties.max_mtu);
+}
+
+test "an existing max-mtu line overrides the default and rejects garbage" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+
+    try properties.setField("max-mtu", "1028");
+    try std.testing.expectEqual(@as(u16, 1028), properties.max_mtu);
+
+    try std.testing.expectError(error.InvalidValue, properties.setField("max-mtu", "big"));
+    try std.testing.expectError(error.UnknownProperty, properties.setField("mtu", "1028"));
+}
+
+test "a saved properties file carries max-mtu and loads it back" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const path = "test-max-mtu.properties";
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var properties = ServerProperties{ .allocator = allocator };
+    defer properties.deinit();
+    properties.max_mtu = 1188;
+    try properties.save(io, path);
+
+    var content: [4096]u8 = undefined;
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var read_buf: [512]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const bytes = try reader.interface.readSliceShort(&content);
+    try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nmax-mtu=1188\n") != null);
+
+    var loaded = try ServerProperties.load(io, allocator, path);
+    defer loaded.deinit();
+    try std.testing.expectEqual(@as(u16, 1188), loaded.max_mtu);
+    try std.testing.expectEqual(@as(u16, 19132), loaded.port);
+}
 
 test "verbose startup logs are disabled in release modes" {
     try std.testing.expect(shouldEmitVerboseStartupLogs(.Debug));
