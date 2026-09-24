@@ -1,8 +1,10 @@
 const std = @import("std");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Player = @import("../player/player.zig").Player;
+
 const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
+const Player = @import("../player/player.zig").Player;
 
 pub const CommandContext = struct {
     player: ?*Player = null,
@@ -16,6 +18,11 @@ pub const CommandContext = struct {
     request_id: []const u8 = "",
 
     single_target_buf: [1]*Player = undefined,
+    multi_target_buf: std.ArrayList(*Player) = .empty,
+
+    pub fn deinit(self: *CommandContext) void {
+        self.multi_target_buf.deinit(self.allocator);
+    }
 
     pub fn sendOutput(self: *CommandContext, success: bool, message: []const u8) void {
         const player = self.player orelse {
@@ -53,13 +60,15 @@ pub const CommandContext = struct {
         return null;
     }
 
-    pub fn resolvePlayers(self: *CommandContext, name: []const u8) ?[]*Player {
+    pub fn resolvePlayers(self: *CommandContext, name: []const u8) ?[]const *Player {
         if (name.len >= 2 and name[0] == '@') {
             const kind = name[1];
             if (kind == 'a' or kind == 'e') {
                 const snapshots = self.network.conduit.getPlayerSnapshots();
                 if (snapshots.len == 0) return null;
-                return snapshots;
+                self.multi_target_buf.clearRetainingCapacity();
+                self.multi_target_buf.appendSlice(self.allocator, snapshots) catch return null;
+                return self.multi_target_buf.items;
             }
         }
         const single = self.resolvePlayer(name) orelse return null;

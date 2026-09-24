@@ -73,11 +73,14 @@ pub fn build(b: *std.Build) void {
     const binarystream_mod = binarystream_dep.module("BinaryStream");
     const raknet_dep = b.dependency("ZigNet", .{ .target = target, .optimize = optimize });
     const raknet_mod = raknet_dep.module("Raknet");
-    raknet_mod.addImport("BinaryStream", binarystream_mod);
     const nbt_dep = b.dependency("nbt", .{ .target = target, .optimize = optimize });
     const nbt_mod = nbt_dep.module("nbt");
     const protocol_dep = b.dependency("protocol", .{ .target = target, .optimize = optimize });
     const protocol_mod = protocol_dep.module("Protocol");
+
+    nbt_mod.addImport("BinaryStream", binarystream_mod);
+    raknet_mod.addImport("BinaryStream", binarystream_mod);
+    protocol_mod.addImport("BinaryStream", binarystream_mod);
 
     const leveldb_mod = b.addModule("leveldb", .{ .root_source_file = b.path("libs/leveldb/leveldb.zig"), .target = target });
     const conduit_mod = b.addModule("conduit", .{ .root_source_file = b.path("src/conduit/root.zig"), .target = target });
@@ -173,7 +176,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/library/embedded_api_test.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "conduit", .module = conduit_mod } },
+        .imports = &.{.{ .name = "conduit", .module = conduit_mod }},
     });
     const library_tests = b.addTest(.{ .root_module = library_test_mod });
     library_tests.root_module.linkLibrary(leveldb_lib);
