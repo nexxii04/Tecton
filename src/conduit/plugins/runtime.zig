@@ -8,6 +8,12 @@ const World = @import("../world/world.zig").World;
 const abi = @import("abi.zig");
 const NativePlugin = @import("dynamic_loader.zig").NativePlugin;
 const Handles = @import("handles.zig");
+const SendPriority = @import("../network/root.zig").SendPriority;
+const Player = @import("../player/player.zig").Player;
+
+/// Sanity ceiling for a plugin-sent payload; large payloads get fragmented into
+/// hundreds of RakNet frames, which floods the client.
+const MAX_PLUGIN_PACKET_BYTES: usize = 1 << 20;
 
 pub const PluginRuntime = struct {
     allocator: std.mem.Allocator,
@@ -34,6 +40,7 @@ pub const PluginRuntime = struct {
     items_api: abi.ItemsApi,
     blocks_api: abi.BlocksApi,
     inventories_api: abi.InventoriesApi,
+    network_api: abi.NetworkApi,
 
     pub const NATIVE_BRIDGE_OWNER_ID: u16 = 0xC001;
 
@@ -79,6 +86,7 @@ pub const PluginRuntime = struct {
             .items_api = undefined,
             .blocks_api = undefined,
             .inventories_api = undefined,
+            .network_api = undefined,
         };
         runtime.core_api = .{
             .header = .{ .struct_size = @sizeOf(abi.CoreApi), .major = 1, .minor = 0, .interface_id = abi.interface_core, .features = 0 },
@@ -120,6 +128,11 @@ pub const PluginRuntime = struct {
             .cancel = schedulerCancel,
             .cancel_owner = schedulerCancelOwner,
         };
+        runtime.network_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.NetworkApi), .major = 1, .minor = 0, .interface_id = abi.interface_network, .features = 0 },
+            .send = networkSend,
+            .broadcast = networkBroadcast,
+        };
         runtime.host = .{
             .struct_size = @sizeOf(abi.HostApi),
             .api = .{ .major = abi.abi_major, .minor = abi.abi_minor, .protocol = 0 },
@@ -131,7 +144,7 @@ pub const PluginRuntime = struct {
             .world_set_block = worldSetBlock,
             .event_subscribe = eventSubscribe,
             .event_unsubscribe = eventUnsubscribe,
-            .features = abi.feature_events | abi.feature_world | abi.feature_logging | abi.feature_allocator | abi.feature_interfaces | abi.feature_core | abi.feature_scheduler | abi.feature_players | abi.feature_entities | abi.feature_items | abi.feature_blocks | abi.feature_inventories,
+            .features = abi.feature_events | abi.feature_world | abi.feature_logging | abi.feature_allocator | abi.feature_interfaces | abi.feature_core | abi.feature_scheduler | abi.feature_players | abi.feature_entities | abi.feature_items | abi.feature_blocks | abi.feature_inventories | abi.feature_network,
             .log_debug = logDebug,
             .log_info = logInfo,
             .log_warn = logWarn,
@@ -411,6 +424,10 @@ pub const PluginRuntime = struct {
             },
             abi.interface_inventories => {
                 output.* = @ptrCast(&self.inventories_api);
+                return abi.result_ok;
+            },
+            abi.interface_network => {
+                output.* = @ptrCast(&self.network_api);
                 return abi.result_ok;
             },
             else => return abi.result_unsupported,
@@ -767,6 +784,53 @@ pub const PluginRuntime = struct {
         return 0;
     }
 
+    fn networkSend(context: ?*anyopaque, player_handle: u64, bytes: abi.StringView, priority: u32) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const send_priority = sendPriority(priority) orelse return abi.result_invalid_argument;
+        const payload = bytes.slice();
+        if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) return abi.result_invalid_argument;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        if (!isTickThread(conduit)) return abi.result_wrong_thread;
+        const player = self.findPlayerByHandle(conduit, player_handle) orelse return abi.result_invalid_handle;
+        conduit.network.sendPacketWith(player.connection, payload, send_priority) catch return abi.result_out_of_memory;
+        return abi.result_ok;
+    }
+
+    fn networkBroadcast(context: ?*anyopaque, bytes: abi.StringView, priority: u32) callconv(.c) i32 {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const send_priority = sendPriority(priority) orelse return abi.result_invalid_argument;
+        const payload = bytes.slice();
+        if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) return abi.result_invalid_argument;
+        const conduit = self.conduit orelse return abi.result_not_found;
+        if (!isTickThread(conduit)) return abi.result_wrong_thread;
+        for (conduit.getPlayerSnapshots()) |player| {
+            if (!player.spawned) continue;
+            conduit.network.sendPacketWith(player.connection, payload, send_priority) catch {};
+        }
+        return abi.result_ok;
+    }
+
+    fn isTickThread(conduit: *Conduit) bool {
+        const tick_thread = conduit.tick_thread_id.load(.acquire);
+        return tick_thread != 0 and tick_thread == @as(usize, @intCast(std.Thread.getCurrentId()));
+    }
+
+    fn sendPriority(value: u32) ?SendPriority {
+        return switch (value) {
+            abi.packet_priority_normal => .normal,
+            abi.packet_priority_immediate => .immediate,
+            else => null,
+        };
+    }
+
+    fn findPlayerByHandle(self: *PluginRuntime, conduit: *Conduit, handle: u64) ?*Player {
+        const pointer = self.handles.get(.player, handle) orelse return null;
+        for (conduit.getPlayerSnapshots()) |player| {
+            if (@intFromPtr(player) == pointer) return player;
+        }
+        return null;
+    }
+
     fn findWorldByHandle(self: *PluginRuntime, conduit: *Conduit, handle: u64) ?*World {
         const pointer = self.handles.get(.world, handle) orelse return null;
         var worlds = conduit.worlds.valueIterator();
@@ -816,4 +880,35 @@ test "core and scheduler interfaces are independently discoverable" {
     var inventories: ?abi.InterfacePtr = null;
     try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_inventories, 1, 0, &inventories));
     try std.testing.expect(inventories != null);
+
+    var network: ?abi.InterfacePtr = null;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_network, 1, 0, &network));
+    try std.testing.expect(network != null);
+    try std.testing.expectEqual(abi.interface_network, network.?.interface_id);
+    try std.testing.expectEqual(@as(u32, @sizeOf(abi.NetworkApi)), network.?.struct_size);
+    try std.testing.expect(runtime.host.features & abi.feature_network != 0);
+}
+
+test "network send validates priority and payload before resolving anything else" {
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+
+    const payload = "packet";
+    const view = abi.StringView{ .data = payload.ptr, .length = payload.len };
+
+    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkSend(@ptrCast(&runtime), 1, view, 7));
+    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkSend(@ptrCast(&runtime), 1, .{}, abi.packet_priority_normal));
+    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkBroadcast(@ptrCast(&runtime), .{}, abi.packet_priority_immediate));
+
+    const oversized = try std.testing.allocator.alloc(u8, MAX_PLUGIN_PACKET_BYTES + 1);
+    defer std.testing.allocator.free(oversized);
+    const big = abi.StringView{ .data = oversized.ptr, .length = oversized.len };
+    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkBroadcast(@ptrCast(&runtime), big, abi.packet_priority_normal));
+
+    try std.testing.expectEqual(abi.result_not_found, PluginRuntime.networkSend(@ptrCast(&runtime), 1, view, abi.packet_priority_immediate));
+    try std.testing.expectEqual(abi.result_not_found, PluginRuntime.networkBroadcast(@ptrCast(&runtime), view, abi.packet_priority_normal));
+
+    try std.testing.expectEqual(SendPriority.normal, PluginRuntime.sendPriority(abi.packet_priority_normal).?);
+    try std.testing.expectEqual(SendPriority.immediate, PluginRuntime.sendPriority(abi.packet_priority_immediate).?);
+    try std.testing.expect(PluginRuntime.sendPriority(7) == null);
 }

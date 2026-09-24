@@ -22,6 +22,7 @@ const ItemPalette = @import("./items/item-palette.zig");
 const BanManager = @import("./network/ban-manager.zig").BanManager;
 const MovementBroadcast = @import("./network/movement-broadcast.zig");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
+const SendPriority = @import("./network/root.zig").SendPriority;
 const MoveDelta = @import("./player/move-delta.zig");
 const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
 const PlayerLocations = @import("./player/player-locations.zig").PlayerLocations;
@@ -120,6 +121,8 @@ pub const Conduit = struct {
     pending_player_removals_mutex: std.Io.Mutex = .init,
     movement_deltas: std.ArrayList(MovementBroadcast.DeltaRef) = .empty,
     movement_batch: std.ArrayList([]const u8) = .empty,
+    movement_priority: SendPriority = .normal,
+    tick_thread_id: std.atomic.Value(usize) = .init(0),
     save_in_flight: bool = false,
     save_plan: std.ArrayListUnmanaged(SaveGroup) = .empty,
     save_cursor: struct { group: usize = 0, chunk: usize = 0 } = .{},
@@ -187,6 +190,10 @@ pub const Conduit = struct {
                 max_mtu,
             });
         }
+        const movement_priority = SendPriority.parse(owned_config.movement_send_priority) orelse fallback: {
+            Raknet.Logger.WARN("movement-send-priority={s} is not a known priority, using normal", .{owned_config.movement_send_priority});
+            break :fallback SendPriority.normal;
+        };
         const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(owned_config.max_players)) * 8);
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();
@@ -207,6 +214,7 @@ pub const Conduit = struct {
             .lifecycle_userdata = options.lifecycle_userdata,
             .command_permission_checker = options.command_permission_checker,
             .command_permission_userdata = options.command_permission_userdata,
+            .movement_priority = movement_priority,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(io, .{
                 .address = owned_config.address,
@@ -452,6 +460,7 @@ pub const Conduit = struct {
         self.network = try NetworkHandler.init(self);
         self.network_initialized = true;
 
+        self.tick_thread_id.store(0, .release);
         self.raknet.setTickCallback(onTick, self);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
         try self.threaded_tasks.start();
@@ -466,6 +475,7 @@ pub const Conduit = struct {
             );
         }
         Raknet.Logger.INFO("RakNet MTU cap: {d}", .{self.raknet.options.max_mtu});
+        Raknet.Logger.INFO("Movement send priority: {s}", .{self.movement_priority.label()});
         Raknet.Logger.INFO("Loaded {d} threads, {d} worker threads available", .{
             totalServerThreadCount(self.threaded_tasks.workerCount()),
             self.threaded_tasks.workerCount(),
@@ -662,7 +672,7 @@ pub const Conduit = struct {
                     MovementBroadcast.MAX_BATCH_BYTES,
                 );
                 if (self.movement_batch.items.len == 0) break;
-                self.network.sendPacketsUncompressed(viewer.connection, self.movement_batch.items) catch {};
+                self.network.sendPacketsUncompressedWith(viewer.connection, self.movement_batch.items, self.movement_priority) catch {};
             }
         }
     }
@@ -712,8 +722,21 @@ pub const Conduit = struct {
         return @as(f64, @floatFromInt(@max(@as(u32, 1), self.config.max_tps)));
     }
 
+    /// Switches the movement broadcast between buffered (`normal`) and queue
+    /// flushing (`immediate`) at runtime.
+    pub fn setMovementSendPriority(self: *Conduit, priority: SendPriority) void {
+        self.movement_priority = priority;
+    }
+
+    pub fn movementSendPriority(self: *const Conduit) SendPriority {
+        return self.movement_priority;
+    }
+
     fn onTick(context: ?*anyopaque) void {
         const self = @as(*Conduit, @ptrCast(@alignCast(context)));
+        if (self.tick_thread_id.load(.monotonic) == 0) {
+            self.tick_thread_id.store(@intCast(std.Thread.getCurrentId()), .release);
+        }
         const work_start = Timestamp.now(self.io, .awake);
         const target_tps_u64 = @max(@as(u64, 1), @as(u64, self.config.max_tps));
         const tick_budget_ns: u64 = std.time.ns_per_s / target_tps_u64;
@@ -1239,6 +1262,13 @@ test "the RakNet MTU cap is the clamped config value, never a literal" {
         rest = rest[end..];
     }
     try std.testing.expectEqual(@as(usize, 1), found);
+}
+
+test "the movement flush sends with the configured priority, never a literal" {
+    const source = @embedFile("conduit.zig");
+    const cutoff = std.mem.indexOf(u8, source, "test \"the movement flush sends with the configured priority") orelse return error.TestUnexpectedResult;
+    const code = source[0..cutoff];
+    try std.testing.expect(std.mem.indexOf(u8, code, "sendPacketsUncompressedWith(viewer.connection, self.movement_batch.items, self.movement_priority)") != null);
 }
 
 test "onTick broadcasts movement and no path skips the flush" {

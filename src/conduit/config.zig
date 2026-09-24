@@ -17,6 +17,7 @@ pub const ServerProperties = struct {
     max_view_distance: u32 = 16,
     simulation_distance: u32 = 4,
     max_mtu: u16 = max_max_mtu,
+    movement_send_priority: []const u8 = "normal",
     default_group: []const u8 = "member",
 
     allocator: std.mem.Allocator,
@@ -41,6 +42,7 @@ pub const ServerProperties = struct {
         .max_view_distance = "Max view distance in chunks",
         .simulation_distance = "Simulation distance in chunks (chunks within this range are kept loaded)",
         .max_mtu = "Max RakNet MTU (clamped to 576-1400; clients still negotiate the minimum with this cap)",
+        .movement_send_priority = "Movement broadcast priority: normal (buffered, up to one tick) or immediate (flush the connection queue now)",
         .default_group = "Default permission group for new players",
     };
 
@@ -173,6 +175,41 @@ test "max mtu clamps to the range RakNet supports" {
     try std.testing.expectEqual(@as(u16, 1028), clamp(1028));
     try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(ServerProperties.min_max_mtu));
     try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(0));
+}
+
+test "movement-send-priority keeps whatever the file says and defaults to normal" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try std.testing.expectEqualStrings("normal", properties.movement_send_priority);
+
+    try properties.setField("movement-send-priority", "immediate");
+    try std.testing.expectEqualStrings("immediate", properties.movement_send_priority);
+
+    try std.testing.expectError(error.UnknownProperty, properties.setField("movement-send_priority", "normal"));
+}
+
+test "a saved properties file carries movement-send-priority and loads it back" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const path = "test-movement-priority.properties";
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var properties = ServerProperties{ .allocator = allocator };
+    defer properties.deinit();
+    properties.movement_send_priority = "immediate";
+    try properties.save(io, path);
+
+    var content: [8192]u8 = undefined;
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var read_buf: [512]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const bytes = try reader.interface.readSliceShort(&content);
+    try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nmovement-send-priority=immediate\n") != null);
+
+    var loaded = try ServerProperties.load(io, allocator, path);
+    defer loaded.deinit();
+    try std.testing.expectEqualStrings("immediate", loaded.movement_send_priority);
 }
 
 test "max mtu defaults to the RakNet ceiling" {

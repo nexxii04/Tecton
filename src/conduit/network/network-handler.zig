@@ -210,6 +210,37 @@ const ConnectionRegistry = struct {
     }
 };
 
+/// When a frame leaves the server. `immediate` flushes the whole outgoing queue
+/// of that connection without a time budget, so it belongs to packets whose
+/// delay is visible (spawn, teleport, disconnect), not to bulk traffic.
+pub const SendPriority = enum {
+    normal,
+    immediate,
+
+    pub fn parse(value: []const u8) ?SendPriority {
+        if (std.mem.eql(u8, value, "normal")) return .normal;
+        if (std.mem.eql(u8, value, "immediate")) return .immediate;
+        return null;
+    }
+
+    pub fn label(self: SendPriority) []const u8 {
+        return switch (self) {
+            .normal => "normal",
+            .immediate => "immediate",
+        };
+    }
+};
+
+test "send priority parses both values and nothing else" {
+    try std.testing.expectEqual(SendPriority.normal, SendPriority.parse("normal").?);
+    try std.testing.expectEqual(SendPriority.immediate, SendPriority.parse("immediate").?);
+    try std.testing.expect(SendPriority.parse("Normal") == null);
+    try std.testing.expect(SendPriority.parse("") == null);
+    try std.testing.expect(SendPriority.parse("asap") == null);
+    try std.testing.expectEqualStrings("normal", SendPriority.normal.label());
+    try std.testing.expectEqualStrings("immediate", SendPriority.immediate.label());
+}
+
 pub const NetworkHandler = struct {
     conduit: *Conduit,
     io: std.Io,
@@ -593,31 +624,47 @@ pub const NetworkHandler = struct {
     }
 
     pub fn sendPacket(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
+        return self.sendPacketWith(conn, packet, .normal);
+    }
+
+    pub fn sendPacketWith(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8, priority: SendPriority) !void {
         const packets = [_][]const u8{packet};
         const compressed = try Compression.compress(&packets, self.options, self.allocator);
         defer self.allocator.free(compressed);
-        conn.sendReliableMessage(compressed, .Normal);
+        deliver(conn, compressed, priority);
     }
 
     pub fn sendImmediate(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
-        const packets = [_][]const u8{packet};
-        const compressed = try Compression.compress(&packets, self.options, self.allocator);
-        defer self.allocator.free(compressed);
-        conn.sendReliableMessage(compressed, .Immediate);
+        return self.sendPacketWith(conn, packet, .immediate);
     }
 
     pub fn sendPackets(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) !void {
+        return self.sendPacketsWith(conn, packets, .normal);
+    }
+
+    pub fn sendPacketsWith(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8, priority: SendPriority) !void {
         const compressed = try Compression.compress(packets, self.options, self.allocator);
         defer self.allocator.free(compressed);
-        conn.sendReliableMessage(compressed, .Normal);
+        deliver(conn, compressed, priority);
     }
 
     pub fn sendPacketsUncompressed(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) !void {
+        return self.sendPacketsUncompressedWith(conn, packets, .normal);
+    }
+
+    pub fn sendPacketsUncompressedWith(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8, priority: SendPriority) !void {
         var options = self.options;
         options.compression_threshold = std.math.maxInt(u16);
         const compressed = try Compression.compress(packets, options, self.allocator);
         defer self.allocator.free(compressed);
-        conn.sendReliableMessage(compressed, .Normal);
+        deliver(conn, compressed, priority);
+    }
+
+    fn deliver(conn: *Raknet.Connection, bytes: []const u8, priority: SendPriority) void {
+        conn.sendReliableMessage(bytes, switch (priority) {
+            .normal => .Normal,
+            .immediate => .Immediate,
+        });
     }
 
     pub fn deinit(self: *NetworkHandler) void {

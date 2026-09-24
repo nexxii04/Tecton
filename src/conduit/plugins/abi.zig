@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const abi_major: u32 = 1;
-pub const abi_minor: u32 = 3;
+pub const abi_minor: u32 = 4;
 pub const descriptor_query_minor: u32 = 0;
 pub const descriptor_version: u32 = 1;
 pub const feature_events: u64 = 1 << 0;
@@ -16,6 +16,7 @@ pub const feature_entities: u64 = 1 << 8;
 pub const feature_items: u64 = 1 << 9;
 pub const feature_blocks: u64 = 1 << 10;
 pub const feature_inventories: u64 = 1 << 11;
+pub const feature_network: u64 = 1 << 12;
 pub const interface_core: u32 = 1;
 pub const interface_logging: u32 = 2;
 pub const interface_events: u32 = 3;
@@ -27,6 +28,7 @@ pub const interface_items: u32 = 8;
 pub const interface_blocks: u32 = 9;
 pub const interface_inventories: u32 = 10;
 pub const interface_registries: u32 = 11;
+pub const interface_network: u32 = 12;
 pub const event_flag_cancelable: u32 = 1 << 0;
 pub const event_flag_mutable: u32 = 1 << 1;
 pub const event_flag_callback_only: u32 = 1 << 2;
@@ -39,6 +41,9 @@ pub const result_invalid_handle: i32 = -5;
 pub const result_busy: i32 = -6;
 pub const result_conflict: i32 = -7;
 pub const result_out_of_memory: i32 = -8;
+
+pub const packet_priority_normal: u32 = 0;
+pub const packet_priority_immediate: u32 = 1;
 
 pub const StringView = extern struct {
     data: ?[*]const u8 = null,
@@ -80,6 +85,8 @@ pub const SchedulerCallbackFn = *const fn (?*anyopaque) callconv(.c) i32;
 pub const SchedulerScheduleFn = *const fn (?*anyopaque, u32, SchedulerCallbackFn, ?*anyopaque, ?*u64) callconv(.c) i32;
 pub const SchedulerCancelFn = *const fn (?*anyopaque, u64) callconv(.c) i32;
 pub const SchedulerCancelOwnerFn = *const fn (?*anyopaque, u32) callconv(.c) i32;
+pub const NetworkSendFn = *const fn (?*anyopaque, u64, StringView, u32) callconv(.c) i32;
+pub const NetworkBroadcastFn = *const fn (?*anyopaque, StringView, u32) callconv(.c) i32;
 
 pub const SnapshotHeader = extern struct { struct_size: u32, version: u16, reserved: u16 };
 pub const WorldSnapshot = extern struct { header: SnapshotHeader, handle: u64, name: StringView };
@@ -107,6 +114,7 @@ pub const BlocksApi = extern struct { header: InterfaceHeader, get_snapshot: Blo
 pub const InventoriesApi = extern struct { header: InterfaceHeader, get_size: InventoryGetSizeFn, get_item: InventoryGetItemFn };
 pub const CoreApi = extern struct { header: InterfaceHeader, get_tick: CoreGetTickFn, get_state: CoreGetStateFn };
 pub const SchedulerApi = extern struct { header: InterfaceHeader, schedule: SchedulerScheduleFn, cancel: SchedulerCancelFn, cancel_owner: SchedulerCancelOwnerFn };
+pub const NetworkApi = extern struct { header: InterfaceHeader, send: NetworkSendFn, broadcast: NetworkBroadcastFn };
 pub const Allocator = extern struct { userdata: ?*anyopaque, alloc: AllocFn, free: FreeFn };
 
 pub const HostApi = extern struct {

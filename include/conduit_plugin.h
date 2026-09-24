@@ -13,7 +13,7 @@
 #endif
 
 #define CONDUIT_PLUGIN_ABI_MAJOR 1u
-#define CONDUIT_PLUGIN_ABI_MINOR 3u
+#define CONDUIT_PLUGIN_ABI_MINOR 4u
 #define CONDUIT_PLUGIN_DESCRIPTOR_QUERY_MINOR 0u
 #define CONDUIT_PLUGIN_DESCRIPTOR_VERSION 1u
 #define CONDUIT_PLUGIN_FEATURE_EVENTS (1ull << 0)
@@ -28,6 +28,7 @@
 #define CONDUIT_PLUGIN_FEATURE_ITEMS (1ull << 9)
 #define CONDUIT_PLUGIN_FEATURE_BLOCKS (1ull << 10)
 #define CONDUIT_PLUGIN_FEATURE_INVENTORIES (1ull << 11)
+#define CONDUIT_PLUGIN_FEATURE_NETWORK (1ull << 12)
 #define CONDUIT_INTERFACE_CORE 1u
 #define CONDUIT_INTERFACE_LOGGING 2u
 #define CONDUIT_INTERFACE_EVENTS 3u
@@ -39,6 +40,7 @@
 #define CONDUIT_INTERFACE_BLOCKS 9u
 #define CONDUIT_INTERFACE_INVENTORIES 10u
 #define CONDUIT_INTERFACE_REGISTRIES 11u
+#define CONDUIT_INTERFACE_NETWORK 12u
 
 #define CONDUIT_EVENT_FLAG_CANCELABLE (1u << 0)
 #define CONDUIT_EVENT_FLAG_MUTABLE (1u << 1)
@@ -53,6 +55,9 @@
 #define CONDUIT_RESULT_BUSY (-6)
 #define CONDUIT_RESULT_CONFLICT (-7)
 #define CONDUIT_RESULT_OUT_OF_MEMORY (-8)
+
+#define CONDUIT_PACKET_PRIORITY_NORMAL 0u
+#define CONDUIT_PACKET_PRIORITY_IMMEDIATE 1u
 #define CONDUIT_EVENT_CUSTOM_BASE 0x1000u
 
 #define CONDUIT_STRUCT_HAS_FIELD(value, type, field) \
@@ -296,6 +301,8 @@ typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_items_get_snapshot_fn)(void *userda
 typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_blocks_get_snapshot_fn)(void *userdata, uint64_t world, conduit_string_view dimension, int32_t x, int32_t y, int32_t z, conduit_block_snapshot *snapshot, size_t snapshot_size);
 typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_inventory_get_size_fn)(void *userdata, uint64_t player, uint32_t *size);
 typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_inventory_get_item_fn)(void *userdata, uint64_t player, uint32_t slot, conduit_inventory_item_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_network_send_fn)(void *userdata, uint64_t player, conduit_string_view packet, uint32_t priority);
+typedef int32_t(CONDUIT_PLUGIN_CALL *conduit_network_broadcast_fn)(void *userdata, conduit_string_view packet, uint32_t priority);
 
 typedef struct conduit_items_api {
   conduit_interface_header header;
@@ -326,6 +333,12 @@ typedef struct conduit_scheduler_api {
   conduit_scheduler_cancel_fn cancel;
   conduit_scheduler_cancel_owner_fn cancel_owner;
 } conduit_scheduler_api;
+
+typedef struct conduit_network_api {
+  conduit_interface_header header;
+  conduit_network_send_fn send;
+  conduit_network_broadcast_fn broadcast;
+} conduit_network_api;
 
 typedef struct conduit_allocator {
   void *userdata;
