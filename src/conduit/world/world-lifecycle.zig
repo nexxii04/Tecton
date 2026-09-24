@@ -46,6 +46,7 @@ const WorldLifecycleTask = struct {
             .uuid = self.uuid,
             .request_id = self.request_id,
         };
+        defer ctx.deinit();
         ctx.sendOutput(success, message);
     }
 };

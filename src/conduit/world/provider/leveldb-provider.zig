@@ -1,30 +1,32 @@
 const std = @import("std");
-const LevelDB = @import("leveldb");
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
+const LevelDB = @import("leveldb");
 const NBT = @import("nbt");
 const CompoundTag = NBT.CompoundTag;
 const ReadWriteOptions = NBT.ReadWriteOptions;
 const Protocol = @import("protocol");
-const WorldProvider = @import("./world-provider.zig").WorldProvider;
+
+const Entity = @import("../../entity/entity.zig").Entity;
+const Player = @import("../../player/player.zig").Player;
+const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const Block = @import("../block/block.zig").Block;
+const ChestTrait = @import("../block/traits/chest.zig");
+const trait_mod = @import("../block/traits/trait.zig");
 const Chunk = @import("../chunk/chunk.zig").Chunk;
+const chunk_mod = @import("../chunk/chunk.zig");
 const SubChunk = @import("../chunk/subchunk.zig").SubChunk;
 const Dimension = @import("../dimension/dimension.zig").Dimension;
 const chunkHash = @import("../dimension/dimension.zig").chunkHash;
 const ChunkHash = @import("../dimension/dimension.zig").ChunkHash;
-const chunk_mod = @import("../chunk/chunk.zig");
+const persistence = @import("./persistence.zig");
 const serialization = @import("./serialization.zig");
-const Entity = @import("../../entity/entity.zig").Entity;
-const Player = @import("../../player/player.zig").Player;
+const WorldProvider = @import("./world-provider.zig").WorldProvider;
 
 const TAG_SUBCHUNK_PREFIX: u8 = 47;
 const TAG_VERSION: u8 = 44;
 const TAG_VERSION_OLD: u8 = 118;
 const TAG_BLOCK_ENTITY: u8 = 49;
-
-const trait_mod = @import("../block/traits/trait.zig");
-const Block = @import("../block/block.zig").Block;
-const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
-const ChestTrait = @import("../block/traits/chest.zig");
 
 pub const ChunkColumnData = struct {
     has_version: bool = false,
@@ -43,21 +45,32 @@ pub const ChunkColumnData = struct {
 };
 
 pub const LevelDBProvider = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     db: LevelDB.DB,
     chunks: std.AutoHashMap(*Dimension, std.AutoHashMap(ChunkHash, *Chunk)),
+    writer: persistence.Writer,
 
-    pub fn init(allocator: std.mem.Allocator, path: [*:0]const u8) !*LevelDBProvider {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, path: [*:0]const u8) !*LevelDBProvider {
         const self = try allocator.create(LevelDBProvider);
+        errdefer allocator.destroy(self);
+        var db = try LevelDB.DB.open(path, true);
+        errdefer db.close();
         self.* = .{
+            .io = io,
             .allocator = allocator,
-            .db = try LevelDB.DB.open(path, true),
+            .db = db,
             .chunks = std.AutoHashMap(*Dimension, std.AutoHashMap(ChunkHash, *Chunk)).init(allocator),
+            .writer = persistence.Writer.init(io, allocator, .{ .ctx = self, .write = sinkWrite }),
         };
+        try self.writer.start();
         return self;
     }
 
     pub fn deinit(self: *LevelDBProvider) void {
+        // Drains the queue before closing the database: whatever the writer
+        // still holds is the newest state and has to reach disk.
+        self.writer.deinit();
         var chunk_iter = self.chunks.iterator();
         while (chunk_iter.next()) |entry| {
             entry.value_ptr.deinit();
@@ -68,6 +81,7 @@ pub const LevelDBProvider = struct {
     }
 
     pub fn readChunk(self: *LevelDBProvider, x: i32, z: i32, dimension: *Dimension) !*Chunk {
+        self.awaitChunk(x, z, dimension.dimension_type);
         const gop = try self.chunks.getOrPut(dimension);
         if (!gop.found_existing) {
             gop.value_ptr.* = std.AutoHashMap(ChunkHash, *Chunk).init(self.allocator);
@@ -126,11 +140,21 @@ pub const LevelDBProvider = struct {
 
         if (!chunk.dirty) return;
 
+        const record = try self.encodeChunk(chunk, dimension);
+        // Cleared when the bytes are queued: the record owns them, so a failed
+        // write is retried by the writer thread instead of losing the chunk.
+        chunk.dirty = false;
+        self.dispatch(.subchunks, dimensionIndex(dimension), chunk.x, chunk.z, record);
+    }
+
+    /// Encodes a chunk's dirty subchunks and version marker. Pure read of
+    /// `chunk`, so callers may hold an iterator over the provider's cache.
+    fn encodeChunk(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !persistence.Record {
         const dim_index = dimensionIndex(dimension);
         const offset = chunk_mod.yOffset(dimension.dimension_type);
 
-        var batch = try LevelDB.WriteBatch.init();
-        defer batch.deinit();
+        var record = persistence.Record{};
+        errdefer record.deinit(self.allocator);
 
         for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
             if (chunk.subchunks[i]) |sc| {
@@ -138,60 +162,79 @@ pub const LevelDBProvider = struct {
                 if (sc.isEmpty()) {
                     // The subchunk exists but holds only air now; drop its
                     // persisted copy instead of leaving stale blocks behind.
-                    batch.delete(key.slice());
+                    try record.addDelete(self.allocator, key.slice());
                     continue;
                 }
                 var stream = BinaryStream.init(self.allocator, null, null);
                 defer stream.deinit();
                 try sc.serializePersistence(&stream, self.allocator);
-                batch.put(key.slice(), stream.getBuffer());
+                try record.addPut(self.allocator, key.slice(), stream.getBuffer());
             }
         }
 
         const ver_key = versionKey(chunk.x, chunk.z, dim_index);
-        batch.put(ver_key.slice(), &[_]u8{40});
-
-        try batch.write(&self.db);
-        chunk.dirty = false;
+        try record.addPut(self.allocator, ver_key.slice(), &[_]u8{40});
+        return record;
     }
 
-    pub fn saveAll(self: *LevelDBProvider) void {
-        var batch = LevelDB.WriteBatch.init() catch return;
-        defer batch.deinit();
+    /// Hands an encoded record to the writer thread. Above the backlog cap the
+    /// producer writes it here instead, so back pressure slows the tick down
+    /// rather than dropping the write.
+    fn dispatch(self: *LevelDBProvider, kind: persistence.Kind, dim_index: i32, x: i32, z: i32, record: persistence.Record) void {
+        var pending = record;
+        self.writer.enqueueKeyed(persistence.chunkKey(kind, dim_index, x, z), pending) catch {
+            self.writeRecordSync(&pending);
+            pending.deinit(self.allocator);
+        };
+    }
 
+    fn dispatchOrdered(self: *LevelDBProvider, record: persistence.Record) void {
+        var pending = record;
+        self.writer.enqueueOrdered(pending) catch {
+            self.writeRecordSync(&pending);
+            pending.deinit(self.allocator);
+        };
+    }
+
+    fn writeRecordSync(self: *LevelDBProvider, record: *persistence.Record) void {
+        var batch = LevelDB.WriteBatch.init() catch |err| {
+            std.log.err("Failed to open a LevelDB write batch: {}", .{err});
+            return;
+        };
+        defer batch.deinit();
+        for (record.deletes.items) |key| batch.delete(key);
+        for (record.puts.items) |put| batch.put(put.key, put.value);
+        batch.write(&self.db) catch |err| std.log.err("Failed to flush a storage record: {}", .{err});
+    }
+
+    /// Blocks until the chunk has no encoded-but-unwritten record. Every read
+    /// path calls this, so a reader never sees pre-write state.
+    pub fn awaitChunk(self: *LevelDBProvider, x: i32, z: i32, dim_type: Protocol.DimensionType) void {
+        const dim_index: i32 = switch (dim_type) {
+            .Overworld => 0,
+            .Nether => 1,
+            .End => 2,
+        };
+        self.writer.awaitKey(persistence.chunkKey(.subchunks, dim_index, x, z));
+        self.writer.awaitKey(persistence.chunkKey(.block_entities, dim_index, x, z));
+        self.writer.awaitKey(persistence.chunkKey(.entities, dim_index, x, z));
+    }
+
+    /// Persists every cached dirty chunk and waits for the queue to reach disk.
+    pub fn saveAll(self: *LevelDBProvider) void {
         var dim_iter = self.chunks.iterator();
         while (dim_iter.next()) |dim_entry| {
             const dimension = dim_entry.key_ptr.*;
-            const dim_index = dimensionIndex(dimension);
-            const offset = chunk_mod.yOffset(dimension.dimension_type);
             var chunk_iter = dim_entry.value_ptr.valueIterator();
             while (chunk_iter.next()) |chunk_ptr| {
                 const chunk = chunk_ptr.*;
                 if (!chunk.dirty) continue;
-
-                for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
-                    if (chunk.subchunks[i]) |sc| {
-                        const key = subchunkKey(chunk.x, chunk.z, @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))), dim_index);
-                        if (sc.isEmpty()) {
-                            // See writeChunk: an in-memory subchunk cleared to
-                            // air must remove its persisted copy.
-                            batch.delete(key.slice());
-                            continue;
-                        }
-                        var stream = BinaryStream.init(self.allocator, null, null);
-                        defer stream.deinit();
-                        sc.serializePersistence(&stream, self.allocator) catch continue;
-                        batch.put(key.slice(), stream.getBuffer());
-                    }
-                }
-
-                const ver_key = versionKey(chunk.x, chunk.z, dim_index);
-                batch.put(ver_key.slice(), &[_]u8{40});
+                const record = self.encodeChunk(chunk, dimension) catch continue;
                 chunk.dirty = false;
+                self.dispatch(.subchunks, dimensionIndex(dimension), chunk.x, chunk.z, record);
             }
         }
-
-        batch.write(&self.db) catch {};
+        self.writer.flush();
     }
 
     pub fn writePlayer(self: *LevelDBProvider, uuid: []const u8, player: *Player) !void {
@@ -201,7 +244,10 @@ pub const LevelDBProvider = struct {
         defer self.allocator.free(data);
         var key_buf: [256]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "player_server_{s}", .{uuid}) catch return;
-        try self.db.put(key, data);
+        var record = persistence.Record{};
+        errdefer record.deinit(self.allocator);
+        try record.addPut(self.allocator, key, data);
+        self.dispatchOrdered(record);
     }
 
     pub fn readPlayer(self: *LevelDBProvider, uuid: []const u8, player: *Player) !bool {
@@ -217,6 +263,9 @@ pub const LevelDBProvider = struct {
 
     pub fn writeChunkEntities(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !void {
         const dim_index = dimensionIndex(dimension);
+        var record = persistence.Record{};
+        errdefer record.deinit(self.allocator);
+
         var entities_in_chunk = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
         defer entities_in_chunk.deinit(self.allocator);
 
@@ -231,26 +280,29 @@ pub const LevelDBProvider = struct {
                 const data = serialization.encodeNbt(self.allocator, &tag) catch continue;
                 defer self.allocator.free(data);
                 const actor_key = actorKey(entity.unique_id);
-                self.db.put(actor_key.slice(), data) catch continue;
+                try record.addPut(self.allocator, actor_key.slice(), data);
                 try entities_in_chunk.append(self.allocator, entity.unique_id);
             }
         }
 
         const digp = digpKey(chunk.x, chunk.z, dim_index);
         if (entities_in_chunk.items.len > 0) {
-            const digest_data = self.allocator.alloc(u8, entities_in_chunk.items.len * 8) catch return;
+            const digest_data = try self.allocator.alloc(u8, entities_in_chunk.items.len * 8);
             defer self.allocator.free(digest_data);
             for (entities_in_chunk.items, 0..) |uid, i| {
                 const bytes: [8]u8 = @bitCast(std.mem.nativeToLittle(i64, uid));
                 @memcpy(digest_data[i * 8 .. (i + 1) * 8], &bytes);
             }
-            try self.db.put(digp.slice(), digest_data);
+            try record.addPut(self.allocator, digp.slice(), digest_data);
         } else {
-            self.db.delete(digp.slice()) catch {};
+            try record.addDelete(self.allocator, digp.slice());
         }
+
+        self.dispatch(.entities, dim_index, chunk.x, chunk.z, record);
     }
 
     pub fn readChunkEntities(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !std.ArrayList(CompoundTag) {
+        self.awaitChunk(chunk.x, chunk.z, dimension.dimension_type);
         const dim_index = dimensionIndex(dimension);
         var result = std.ArrayList(CompoundTag){ .items = &.{}, .capacity = 0 };
         const digp = digpKey(chunk.x, chunk.z, dim_index);
@@ -342,8 +394,12 @@ pub const LevelDBProvider = struct {
             };
         }
 
+        var record = persistence.Record{};
+        errdefer record.deinit(self.allocator);
+
         if (tags.items.len == 0) {
-            self.db.delete(key.slice()) catch {};
+            try record.addDelete(self.allocator, key.slice());
+            self.dispatch(.block_entities, dim_index, chunk.x, chunk.z, record);
             return;
         }
 
@@ -360,10 +416,12 @@ pub const LevelDBProvider = struct {
                 else => {},
             }
         }
-        try self.db.put(key.slice(), stream.getBuffer());
+        try record.addPut(self.allocator, key.slice(), stream.getBuffer());
+        self.dispatch(.block_entities, dim_index, chunk.x, chunk.z, record);
     }
 
     pub fn readBlockEntities(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !void {
+        self.awaitChunk(chunk.x, chunk.z, dimension.dimension_type);
         const dim_index = dimensionIndex(dimension);
         const key = blockEntityKey(chunk.x, chunk.z, dim_index);
         const data = self.db.get(key.slice()) orelse {
@@ -581,6 +639,7 @@ pub const LevelDBProvider = struct {
     }
 
     pub fn readChunkDirect(self: *LevelDBProvider, x: i32, z: i32, dim_type: @import("protocol").DimensionType) !*Chunk {
+        self.awaitChunk(x, z, dim_type);
         const dim_index: i32 = switch (dim_type) {
             .Overworld => 0,
             .Nether => 1,
@@ -617,6 +676,7 @@ pub const LevelDBProvider = struct {
     }
 
     pub fn readChunkColumn(self: *LevelDBProvider, x: i32, z: i32, dim_type: Protocol.DimensionType, read_block_entities: bool) !ChunkColumnData {
+        self.awaitChunk(x, z, dim_type);
         const allocator = self.allocator;
         const dim_index: i32 = switch (dim_type) {
             .Overworld => 0,
@@ -744,6 +804,15 @@ pub const LevelDBProvider = struct {
         self.deinit();
     }
 };
+
+fn sinkWrite(ctx: *anyopaque, puts: []const persistence.Put, deletes: []const []u8) anyerror!void {
+    const self: *LevelDBProvider = @ptrCast(@alignCast(ctx));
+    var batch = try LevelDB.WriteBatch.init();
+    defer batch.deinit();
+    for (deletes) |key| batch.delete(key);
+    for (puts) |put| batch.put(put.key, put.value);
+    try batch.write(&self.db);
+}
 
 fn dimensionIndex(dimension: *Dimension) i32 {
     return switch (dimension.dimension_type) {
@@ -905,6 +974,67 @@ test "WriteBatch chunk column round-trip" {
     }
 }
 
+test "a queued chunk write is visible to the next read" {
+    const allocator = std.testing.allocator;
+    const BlockType = @import("../block/block-type.zig").BlockType;
+    const BlockState = @import("../block/block-permutation.zig").BlockState;
+
+    try BlockPermutation.initRegistry(allocator);
+    defer BlockPermutation.deinitRegistry();
+    try BlockType.initRegistry(allocator);
+    defer BlockType.deinitRegistry();
+
+    const air_type = try BlockType.init(allocator, "minecraft:air");
+    try air_type.register();
+    const air_state = BlockState.init(allocator);
+    const air_perm = try BlockPermutation.init(allocator, 0, "minecraft:air", air_state);
+    try air_perm.register();
+    try air_type.addPermutation(air_perm);
+
+    const stone_type = try BlockType.init(allocator, "minecraft:stone");
+    try stone_type.register();
+    const stone_state = BlockState.init(allocator);
+    const stone_perm = try BlockPermutation.init(allocator, 1, "minecraft:stone", stone_state);
+    try stone_perm.register();
+    try stone_type.addPermutation(stone_perm);
+
+    var provider = try LevelDBProvider.init(std.testing.io, allocator, "test_persist2_db\x00");
+    defer {
+        provider.deinit();
+        std.Io.Dir.cwd().deleteTree(std.testing.io, "test_persist2_db") catch {};
+    }
+
+    var dimension = Dimension.init(undefined, allocator, "overworld", .Overworld, null);
+    defer dimension.deinit();
+
+    var chunk = Chunk.init(allocator, 0, 0, .Overworld);
+    defer chunk.deinit();
+
+    // Backlog worth several milliseconds of disk writes, all ahead of the chunk
+    // write in queue order: without the read-side wait the chunk below is
+    // guaranteed to still be unpersisted when it is read back.
+    var payload: [2048]u8 = undefined;
+    @memset(&payload, 0x5a);
+    for (0..256) |i| {
+        var key_buf: [32]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "flood-{d}", .{i});
+        var record = persistence.Record{};
+        try record.addPut(allocator, key, &payload);
+        try provider.writer.enqueueKeyed(persistence.chunkKey(.subchunks, 9, @intCast(i), 0), record);
+    }
+
+    try chunk.setPermutation(1, 64, 1, stone_perm, 0);
+    try provider.writeChunk(&chunk, &dimension);
+
+    const persisted = try provider.readChunkDirect(0, 0, .Overworld);
+    defer {
+        persisted.deinit();
+        allocator.destroy(persisted);
+    }
+    const permutation = try persisted.getPermutation(1, 64, 1, 0);
+    try std.testing.expectEqualStrings("minecraft:stone", permutation.identifier);
+}
+
 test "cleared subchunks are deleted from persisted chunk data" {
     const allocator = std.testing.allocator;
     const BlockType = @import("../block/block-type.zig").BlockType;
@@ -929,7 +1059,7 @@ test "cleared subchunks are deleted from persisted chunk data" {
     try stone_perm.register();
     try stone_type.addPermutation(stone_perm);
 
-    var provider = try LevelDBProvider.init(allocator, "test_prop7_db\x00");
+    var provider = try LevelDBProvider.init(std.testing.io, allocator, "test_prop7_db\x00");
     defer {
         provider.deinit();
         std.Io.Dir.cwd().deleteTree(std.testing.io, "test_prop7_db") catch {};
@@ -1048,7 +1178,7 @@ test "WriteBatch saveAll multi-chunk persistence" {
 }
 
 test "readChunkColumn skips block entities when flag is false" {
-    var provider = try LevelDBProvider.init(std.testing.allocator, "test_prop5_db\x00");
+    var provider = try LevelDBProvider.init(std.testing.io, std.testing.allocator, "test_prop5_db\x00");
     defer {
         provider.deinit();
         std.Io.Dir.cwd().deleteTree(std.testing.io, "test_prop5_db") catch {};

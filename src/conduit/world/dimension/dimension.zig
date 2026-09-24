@@ -437,7 +437,6 @@ pub const Dimension = struct {
     }
 
     /// Sends `data` to spawned players whose current dimension is this one.
-    /// Never call this while holding an outer getPlayerSnapshots() slice.
     pub fn broadcastToViewers(self: *Dimension, data: []const u8) void {
         const conduit = self.world.conduit;
         const snapshots = conduit.getPlayerSnapshots();
