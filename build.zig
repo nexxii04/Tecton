@@ -48,26 +48,7 @@ pub fn build(b: *std.Build) void {
     const is_windows = target.result.os.tag == .windows;
     const is_macos = target.result.os.tag == .macos;
 
-    const leveldb_lib = b.addLibrary(.{
-        .name = "leveldb",
-        .linkage = .static,
-        .root_module = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libcpp = true }),
-    });
-
-    leveldb_lib.root_module.addIncludePath(b.path("libs/leveldb/src"));
-    leveldb_lib.root_module.addIncludePath(b.path("libs/leveldb/src/include"));
-    leveldb_lib.root_module.linkLibrary(zlib_dep.artifact("z"));
-
-    const platform_flags: []const []const u8 = if (is_windows)
-        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_WINDOWS", "-D_UNICODE", "-DUNICODE", "-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX" }
-    else if (is_macos)
-        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FULLFSYNC=1", "-DHAVE_O_CLOEXEC=1" }
-    else
-        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FDATASYNC=1", "-DHAVE_O_CLOEXEC=1" };
-    for (leveldb_sources) |src| leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{src})), .flags = platform_flags });
-    const env_file: []const u8 = if (is_windows) "util/env_windows.cc" else "util/env_posix.cc";
-    leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{env_file})), .flags = platform_flags });
-    b.installArtifact(leveldb_lib);
+    const leveldb_lib = addLevelDb(b, target, zlib_dep, is_windows, is_macos);
 
     const binarystream_dep = b.dependency("BinaryStream", .{ .target = target, .optimize = optimize });
     const binarystream_mod = binarystream_dep.module("BinaryStream");
@@ -137,15 +118,7 @@ pub fn build(b: *std.Build) void {
     const embedded_example_step = b.step("embedded-example", "Build the embedded vanilla server example");
     embedded_example_step.dependOn(&embedded_example.step);
 
-    const native_plugin_target = target;
-    const native_example = b.addLibrary(.{
-        .name = "conduit-c-example",
-        .linkage = .dynamic,
-        .root_module = b.createModule(.{ .target = native_plugin_target, .optimize = optimize, .link_libc = true }),
-    });
-    native_example.root_module.addIncludePath(b.path("include"));
-    native_example.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/minimal_plugin.c"), .flags = &.{"-std=c11"} });
-    b.installArtifact(native_example);
+    const native_example = addPluginExample(b, target, optimize);
     const native_example_step = b.step("plugin-example", "Build the minimal C ABI plugin");
     native_example_step.dependOn(b.getInstallStep());
     native_example_step.dependOn(&native_example.step);
@@ -186,8 +159,8 @@ pub fn build(b: *std.Build) void {
     const plugin_options = b.addOptions();
     const plugin_library_path = if (is_windows) b.pathFromRoot("zig-out/bin/conduit-c-example.dll") else if (is_macos) b.pathFromRoot("zig-out/lib/libconduit-c-example.dylib") else b.pathFromRoot("zig-out/lib/libconduit-c-example.so");
     plugin_options.addOption([]const u8, "path", plugin_library_path);
-    const plugin_test_mod = b.createModule(.{ .root_source_file = b.path("tests/plugins/plugin_test.zig"), .target = native_plugin_target, .optimize = optimize, .link_libc = true });
-    const plugin_loader_mod = b.createModule(.{ .root_source_file = b.path("src/conduit/plugins/dynamic_loader.zig"), .target = native_plugin_target, .optimize = optimize });
+    const plugin_test_mod = b.createModule(.{ .root_source_file = b.path("tests/plugins/plugin_test.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    const plugin_loader_mod = b.createModule(.{ .root_source_file = b.path("src/conduit/plugins/dynamic_loader.zig"), .target = target, .optimize = optimize });
     plugin_test_mod.addImport("conduit-plugin-loader", plugin_loader_mod);
     plugin_test_mod.addOptions("plugin-options", plugin_options);
     const plugin_tests = b.addTest(.{ .root_module = plugin_test_mod });
@@ -195,11 +168,103 @@ pub fn build(b: *std.Build) void {
     run_plugin_tests.step.dependOn(&native_example.step);
     run_plugin_tests.step.dependOn(b.getInstallStep());
 
+    const loadbot_imports = [_]std.Build.Module.Import{
+        .{ .name = "Raknet", .module = raknet_mod },
+        .{ .name = "protocol", .module = protocol_mod },
+        .{ .name = "BinaryStream", .module = binarystream_mod },
+    };
+    const run_loadbot_tests = addLoadbot(b, target, optimize, zlib_dep, &loadbot_imports);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_chest_tests.step);
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_plugin_tests.step);
+    test_step.dependOn(&run_loadbot_tests.step);
     const chest_test_step = b.step("test-chest", "Run chest regression tests");
     chest_test_step.dependOn(&run_chest_tests.step);
+}
+
+fn addLevelDb(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    zlib_dep: *std.Build.Dependency,
+    is_windows: bool,
+    is_macos: bool,
+) *std.Build.Step.Compile {
+    const leveldb_lib = b.addLibrary(.{
+        .name = "leveldb",
+        .linkage = .static,
+        .root_module = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libcpp = true }),
+    });
+
+    leveldb_lib.root_module.addIncludePath(b.path("libs/leveldb/src"));
+    leveldb_lib.root_module.addIncludePath(b.path("libs/leveldb/src/include"));
+    leveldb_lib.root_module.linkLibrary(zlib_dep.artifact("z"));
+
+    const platform_flags: []const []const u8 = if (is_windows)
+        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_WINDOWS", "-D_UNICODE", "-DUNICODE", "-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX" }
+    else if (is_macos)
+        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FULLFSYNC=1", "-DHAVE_O_CLOEXEC=1" }
+    else
+        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FDATASYNC=1", "-DHAVE_O_CLOEXEC=1" };
+    for (leveldb_sources) |src| leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{src})), .flags = platform_flags });
+    const env_file: []const u8 = if (is_windows) "util/env_windows.cc" else "util/env_posix.cc";
+    leveldb_lib.root_module.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{env_file})), .flags = platform_flags });
+    b.installArtifact(leveldb_lib);
+    return leveldb_lib;
+}
+
+fn addPluginExample(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const native_example = b.addLibrary(.{
+        .name = "conduit-c-example",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    native_example.root_module.addIncludePath(b.path("include"));
+    native_example.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/minimal_plugin.c"), .flags = &.{"-std=c11"} });
+    b.installArtifact(native_example);
+    return native_example;
+}
+
+fn addLoadbot(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zlib_dep: *std.Build.Dependency,
+    imports: []const std.Build.Module.Import,
+) *std.Build.Step.Run {
+    const loadbot_mod = b.createModule(.{
+        .root_source_file = b.path("tools/loadbot/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = imports,
+    });
+    loadbot_mod.linkLibrary(zlib_dep.artifact("z"));
+    const loadbot_exe = b.addExecutable(.{ .name = "ConduitLoadBot", .root_module = loadbot_mod });
+    b.installArtifact(loadbot_exe);
+
+    const loadbot_step = b.step("loadbot", "Build the load bot harness");
+    loadbot_step.dependOn(b.getInstallStep());
+    loadbot_step.dependOn(&loadbot_exe.step);
+
+    const loadbot_run_cmd = b.addRunArtifact(loadbot_exe);
+    loadbot_run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| loadbot_run_cmd.addArgs(args);
+    const loadbot_run_step = b.step("loadtest", "Run the load bot harness against a running server");
+    loadbot_run_step.dependOn(&loadbot_run_cmd.step);
+
+    const loadbot_test_mod = b.createModule(.{
+        .root_source_file = b.path("tools/loadbot/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = imports,
+    });
+    loadbot_test_mod.linkLibrary(zlib_dep.artifact("z"));
+    const loadbot_tests = b.addTest(.{ .root_module = loadbot_test_mod });
+    return b.addRunArtifact(loadbot_tests);
 }
