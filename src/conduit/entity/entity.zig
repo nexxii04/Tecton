@@ -32,8 +32,12 @@ pub const Entity = struct {
     name_tag_owned: bool = false,
     nametag_always_visible: bool = false,
 
+    pub fn nextRuntimeId() i64 {
+        return @atomicRmw(i64, &nextUniqueId, .Add, 1, .monotonic);
+    }
+
     pub fn init(allocator: std.mem.Allocator, entity_type: *const EntityType, dimension: ?*Dimension) Entity {
-        const uid = @atomicRmw(i64, &nextUniqueId, .Add, 1, .monotonic);
+        const uid = nextRuntimeId();
         return .{
             .allocator = allocator,
             .entity_type = entity_type,

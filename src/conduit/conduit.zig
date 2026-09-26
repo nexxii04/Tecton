@@ -417,6 +417,7 @@ pub const Conduit = struct {
             @import("./command/list/give.zig"),
             @import("./command/list/weather.zig"),
             @import("./command/list/op.zig"),
+            @import("./command/list/floating-text.zig"),
         };
         inline for (commands) |cmd| {
             try cmd.register(&self.command_registry);
@@ -1337,6 +1338,7 @@ fn on_tick_start_line(source: []const u8, at: usize) usize {
 
 test {
     _ = @import("./command/list/world.zig");
+    _ = @import("./command/list/floating-text.zig");
     _ = @import("./world/provider/leveldb-provider.zig");
     _ = @import("./entity/traits/chunk-loading.zig");
     _ = @import("./player/player-snapshot.zig");

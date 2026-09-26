@@ -205,6 +205,9 @@ pub const Player = struct {
         self.network.conduit.tasks.cancelByOwner("join_startup", self.entity.runtime_id, null);
         self.network.conduit.tasks.cancelByOwner("player_init", self.entity.runtime_id, null);
         self.releaseChunks();
+        if (self.entity.dimension) |dimension| {
+            if (dimension.floating_texts) |manager| manager.forgetViewer(self.entity.runtime_id);
+        }
 
         const allocator = self.entity.allocator;
         const snapshots = self.network.conduit.getPlayerSnapshots();
@@ -348,6 +351,10 @@ pub const Player = struct {
             sendRemoveEntity(self, entry.value_ptr.*);
         }
         self.visible_entities.clearRetainingCapacity();
+
+        if (self.entity.dimension) |dimension| {
+            if (dimension.floating_texts) |manager| manager.despawnForViewer(self);
+        }
 
         const snapshots = conduit.getPlayerSnapshots();
         for (snapshots) |other| {

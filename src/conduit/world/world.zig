@@ -5,6 +5,7 @@ const Dimension = @import("./dimension/dimension.zig").Dimension;
 const WorldProvider = @import("./provider/world-provider.zig").WorldProvider;
 const InternalProvider = @import("./provider/internal-provider.zig").InternalProvider;
 const ThreadedGenerator = @import("./generator/threaded-generator.zig").ThreadedGenerator;
+const FloatingTextManager = @import("../entity/floating-text.zig").FloatingTextManager;
 
 pub const World = struct {
     conduit: *Conduit,
@@ -50,6 +51,7 @@ pub const World = struct {
             dim.deinit();
             self.allocator.destroy(dim);
         }
+        dim.floating_texts = try FloatingTextManager.create(self.allocator, dim);
         if (load_spawn_chunks) try dim.loadSpawnChunks();
         try self.dimensions.put(identifier, dim);
         return dim;

@@ -142,6 +142,10 @@ fn updatePlayerVisibility(player: *Player) void {
     _ = sweepUnseenPlayers(&player.visible_players, epoch, &player.visible_sweep, allocator) catch 0;
 
     updateTrackedEntities(player);
+
+    if (player.entity.dimension) |dimension| {
+        if (dimension.floating_texts) |manager| manager.updateVisibilityForPlayer(player);
+    }
 }
 
 fn sweepUnseenPlayers(

@@ -235,6 +235,7 @@ test "permission manager defaults restrict players to the member group" {
     try std.testing.expect(mgr.hasPermission("alice", "conduit.command.about"));
     try std.testing.expect(!mgr.hasPermission("alice", "conduit.command.kick"));
     try std.testing.expect(!mgr.hasPermission("alice", "conduit.command.op"));
+    try std.testing.expect(!mgr.hasPermission("alice", "conduit.command.floatingtext"));
 
     try mgr.setPlayerGroup("bob", "operator");
     try std.testing.expectEqualStrings("operator", mgr.getPlayerGroup("bob"));

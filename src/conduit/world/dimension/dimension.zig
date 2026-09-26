@@ -5,6 +5,7 @@ const Protocol = @import("protocol");
 
 const EntityType = @import("../../entity/entity-type.zig").EntityType;
 const Entity = @import("../../entity/entity.zig").Entity;
+const FloatingTextManager = @import("../../entity/floating-text.zig").FloatingTextManager;
 const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
 const ItemEntityTrait = @import("../../entity/traits/item-entity.zig").ItemEntityTrait;
 const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
@@ -56,6 +57,7 @@ pub const Dimension = struct {
     generator: ?*ThreadedGenerator,
     instance_id: u32 = 0,
     inflight_batches: usize = 0,
+    floating_texts: ?*FloatingTextManager = null,
 
     pub fn init(
         world: *World,
@@ -91,6 +93,8 @@ pub const Dimension = struct {
     }
 
     pub fn deinit(self: *Dimension) void {
+        if (self.floating_texts) |manager| manager.destroy();
+
         var block_iter = self.blocks.valueIterator();
         while (block_iter.next()) |block| {
             block.*.deinit();
