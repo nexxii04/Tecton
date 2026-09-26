@@ -811,6 +811,8 @@ fn onBatchComplete(ctx: *anyopaque) void {
     const allocator = work.allocator;
     defer {
         if (work.owner_state) |owner| onBatchOwnedComplete(owner);
+        // A batch that never published still owns these and would leak them.
+        releaseCachedPackets(allocator, work.cached_packets);
         allocator.free(work.coords);
         allocator.free(work.hashes);
         allocator.free(work.in_simulation);
@@ -989,6 +991,13 @@ fn freeBlockDataSlice(allocator: std.mem.Allocator, block_data: []ChunkBlockData
     allocator.free(block_data);
 }
 
+// Published packets were cleared from their slot, so this cannot double free.
+fn releaseCachedPackets(allocator: std.mem.Allocator, cached_packets: []const []const u8) void {
+    for (cached_packets) |packet| {
+        if (packet.len > 0) allocator.free(packet);
+    }
+}
+
 fn blockEntityTypeId(block_identifier: []const u8) []const u8 {
     if (std.mem.eql(u8, block_identifier, "minecraft:barrel")) return "Barrel";
     if (std.mem.eql(u8, block_identifier, "minecraft:chest")) return "Chest";
@@ -1097,9 +1106,7 @@ fn cleanupBatchWork(ctx: *anyopaque) void {
     allocator.free(work.hashes);
     allocator.free(work.in_simulation);
     allocator.free(work.packets);
-    for (0..work.count) |i| {
-        if (work.cached_packets[i].len > 0) allocator.free(work.cached_packets[i]);
-    }
+    releaseCachedPackets(allocator, work.cached_packets);
     allocator.free(work.cached_packets);
     allocator.free(work.chunks);
     freeBlockDataSlice(allocator, work.block_data, work.count);
@@ -1614,6 +1621,16 @@ test "render-only chunks with block actors bypass packet cache" {
     var parsed = [_]ParsedBlockEntity{entity};
     const data = ChunkBlockData{ .parsed_entities = &parsed, .trait_positions = &.{} };
     try std.testing.expect(!shouldCacheChunkPacket(false, &data));
+}
+
+test "releasing an abandoned batch's cached packets frees every allocation" {
+    const allocator = std.testing.allocator;
+
+    var cached = [_][]const u8{ &.{}, &.{}, &.{} };
+    cached[0] = try allocator.dupe(u8, "cached-0");
+    cached[2] = try allocator.dupe(u8, "cached-2");
+
+    releaseCachedPackets(allocator, &cached);
 }
 
 test "render-only chunks skip trait-position scan" {
