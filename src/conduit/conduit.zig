@@ -1013,6 +1013,33 @@ pub const Conduit = struct {
         self.broadcastAvailableCommands();
     }
 
+    pub fn refreshFloatingTextCommandEnums(self: *Conduit) void {
+        var names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+        defer names.deinit(self.allocator);
+        var seen = std.StringHashMap(void).init(self.allocator);
+        defer seen.deinit();
+
+        var worlds_it = self.worlds.valueIterator();
+        while (worlds_it.next()) |world| {
+            var dims_it = world.*.dimensions.valueIterator();
+            while (dims_it.next()) |dim| {
+                const manager = dim.*.floating_texts orelse continue;
+                for (manager.items()) |hologram| {
+                    if (seen.contains(hologram.name)) continue;
+                    seen.put(hologram.name, {}) catch return;
+                    names.append(self.allocator, hologram.name) catch return;
+                }
+            }
+        }
+
+        const values = self.allocator.alloc([]const u8, names.items.len) catch return;
+        @memcpy(values, names.items);
+        const updated = self.command_registry.updateEnumValues("FloatingTextName", values) catch false;
+        if (!updated) self.allocator.free(values);
+
+        self.broadcastAvailableCommands();
+    }
+
     /// Plans a save pass over every loaded chunk. The pass keeps its own copy
     /// of the world and dimension names, so a world unloaded mid-pass is
     /// skipped instead of dangling.

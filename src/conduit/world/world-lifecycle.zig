@@ -261,6 +261,7 @@ fn runUnloadTask(state: *WorldLifecycleTask) bool {
             const world = state.world orelse return true;
             world.save();
             state.conduit.destroyWorld(world);
+            state.conduit.refreshFloatingTextCommandEnums();
             state.world = null;
             if (state.abandoned) return true;
             state.stage = .finish;

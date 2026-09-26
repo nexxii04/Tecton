@@ -27,6 +27,7 @@ pub const Command = struct {
     userdata: ?*anyopaque = null,
     subcommand_enum: ?CommandEnum = null,
     subcommand_overload_params: std.ArrayList([]const CommandParameter),
+    subcommand_param_copies: std.ArrayList([]const CommandParameter),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -49,6 +50,7 @@ pub const Command = struct {
             .userdata = null,
             .subcommand_enum = null,
             .subcommand_overload_params = std.ArrayList([]const CommandParameter){ .items = &.{}, .capacity = 0 },
+            .subcommand_param_copies = std.ArrayList([]const CommandParameter){ .items = &.{}, .capacity = 0 },
         };
         return cmd;
     }
@@ -64,6 +66,10 @@ pub const Command = struct {
             self.allocator.free(params);
         }
         if (self.subcommand_overload_params.capacity > 0) self.subcommand_overload_params.deinit(self.allocator);
+        for (self.subcommand_param_copies.items) |params| {
+            self.allocator.free(params);
+        }
+        if (self.subcommand_param_copies.capacity > 0) self.subcommand_param_copies.deinit(self.allocator);
         if (self.subcommand_enum) |se| {
             self.allocator.free(se.name);
             self.allocator.free(se.values);
@@ -92,6 +98,13 @@ pub const Command = struct {
     }
 
     pub fn registerSubCommand(self: *Command, sub: *SubCommand) !void {
+        const owned = try self.allocator.dupe(CommandParameter, sub.params);
+        self.subcommand_param_copies.append(self.allocator, owned) catch |err| {
+            self.allocator.free(owned);
+            return err;
+        };
+        sub.params = owned;
+
         try self.subcommands.put(sub.name, sub);
         for (sub.aliases) |alias| {
             try self.subcommands.put(alias, sub);

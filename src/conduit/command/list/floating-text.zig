@@ -86,6 +86,12 @@ pub fn parseRemoveArgs(args: []const u8) NameError![]const u8 {
 }
 
 pub fn register(registry: *CommandRegistry) !void {
+    const name_enum_idx = try registry.registerEnum(.{
+        .name = "FloatingTextName",
+        .values = &.{},
+        .owned = false,
+    });
+
     const cmd = try Command.init(
         registry.allocator,
         "floatingtext",
@@ -112,7 +118,7 @@ pub fn register(registry: *CommandRegistry) !void {
         .name = "edit",
         .aliases = &.{},
         .params = &.{
-            .{ .name = "name", .param_type = .String, .optional = false },
+            .{ .name = "name", .param_type = .String, .optional = false, .enum_index = name_enum_idx },
             .{ .name = "text", .param_type = .Message, .optional = false },
         },
         .handler = @ptrCast(&handleEdit),
@@ -124,7 +130,7 @@ pub fn register(registry: *CommandRegistry) !void {
         .name = "remove",
         .aliases = &.{},
         .params = &.{
-            .{ .name = "name", .param_type = .String, .optional = false },
+            .{ .name = "name", .param_type = .String, .optional = false, .enum_index = name_enum_idx },
         },
         .handler = @ptrCast(&handleRemove),
     };
@@ -144,7 +150,7 @@ pub fn register(registry: *CommandRegistry) !void {
         .name = "info",
         .aliases = &.{},
         .params = &.{
-            .{ .name = "name", .param_type = .String, .optional = false },
+            .{ .name = "name", .param_type = .String, .optional = false, .enum_index = name_enum_idx },
         },
         .handler = @ptrCast(&handleInfo),
     };
@@ -199,6 +205,7 @@ fn handleAdd(raw: *anyopaque) void {
         }
         return;
     };
+    ctx.network.conduit.refreshFloatingTextCommandEnums();
 
     var msg_buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' created", .{parsed.name}) catch return;
@@ -383,6 +390,7 @@ fn handleRemove(raw: *anyopaque) void {
         ctx.sendOutput(false, "Failed to remove floating text");
         return;
     };
+    conduit.refreshFloatingTextCommandEnums();
 
     var msg_buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' removed", .{name}) catch return;
@@ -459,6 +467,32 @@ test "escaped line breaks become real nametag lines" {
     const name_tag = try Protocol.FloatingText.composeNameTag(allocator, "", decoded);
     defer allocator.free(name_tag);
     try std.testing.expectEqualStrings("Linea 1\nLinea 2", name_tag);
+}
+
+test "register wires the hologram name enum into the name arguments" {
+    const allocator = std.testing.allocator;
+
+    var registry = CommandRegistry.init(allocator);
+    defer registry.deinit();
+
+    try register(&registry);
+
+    try std.testing.expectEqual(@as(usize, 1), registry.enums.items.len);
+    try std.testing.expectEqualStrings("FloatingTextName", registry.enums.items[0].name);
+    try std.testing.expect(!registry.enums.items[0].owned);
+
+    const cmd = registry.findCommand("floatingtext") orelse return error.TestUnexpectedResult;
+    const add = cmd.subcommands.get("add") orelse return error.TestUnexpectedResult;
+    const edit = cmd.subcommands.get("edit") orelse return error.TestUnexpectedResult;
+    const remove = cmd.subcommands.get("remove") orelse return error.TestUnexpectedResult;
+    const info = cmd.subcommands.get("info") orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(@as(usize, 2), edit.params.len);
+    try std.testing.expectEqualStrings("name", edit.params[0].name);
+    try std.testing.expectEqual(@as(?u32, null), add.params[0].enum_index);
+    try std.testing.expectEqual(@as(?u32, 0), edit.params[0].enum_index);
+    try std.testing.expectEqual(@as(?u32, 0), remove.params[0].enum_index);
+    try std.testing.expectEqual(@as(?u32, 0), info.params[0].enum_index);
 }
 
 test "listing line reports name, position and viewers" {
