@@ -21,6 +21,7 @@ pub const FloatingText = struct {
     viewers: std.AutoHashMap(i64, void),
     add_packet: []const u8,
     remove_packet: []const u8,
+    update_packet: []const u8,
 
     pub fn create(
         allocator: std.mem.Allocator,
@@ -58,6 +59,7 @@ pub const FloatingText = struct {
             .viewers = std.AutoHashMap(i64, void).init(allocator),
             .add_packet = &.{},
             .remove_packet = &.{},
+            .update_packet = &.{},
         };
         errdefer hologram.viewers.deinit();
 
@@ -67,8 +69,7 @@ pub const FloatingText = struct {
 
     pub fn destroy(self: *FloatingText) void {
         const allocator = self.allocator;
-        if (self.add_packet.len > 0) allocator.free(self.add_packet);
-        if (self.remove_packet.len > 0) allocator.free(self.remove_packet);
+        self.freePackets();
         self.viewers.deinit();
         allocator.free(self.name_tag);
         allocator.free(self.text);
@@ -78,24 +79,71 @@ pub const FloatingText = struct {
     }
 
     pub fn encode(self: *FloatingText) !void {
-        if (self.add_packet.len > 0) self.allocator.free(self.add_packet);
-        if (self.remove_packet.len > 0) self.allocator.free(self.remove_packet);
-        self.add_packet = &.{};
-        self.remove_packet = &.{};
+        const packets = try self.buildPackets(self.name_tag);
+        self.freePackets();
+        self.add_packet = packets.add;
+        self.remove_packet = packets.remove;
+        self.update_packet = packets.update;
+    }
 
-        const add_packet = try Protocol.FloatingText.encodeAdd(
+    pub fn setText(self: *FloatingText, text: []const u8) !void {
+        const text_copy = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(text_copy);
+
+        const name_tag = try Protocol.FloatingText.composeNameTag(self.allocator, self.title, text_copy);
+        errdefer self.allocator.free(name_tag);
+
+        const packets = try self.buildPackets(name_tag);
+
+        self.allocator.free(self.text);
+        self.allocator.free(self.name_tag);
+        self.freePackets();
+
+        self.text = text_copy;
+        self.name_tag = name_tag;
+        self.add_packet = packets.add;
+        self.remove_packet = packets.remove;
+        self.update_packet = packets.update;
+    }
+
+    const Packets = struct {
+        add: []const u8,
+        remove: []const u8,
+        update: []const u8,
+    };
+
+    fn buildPackets(self: *const FloatingText, name_tag: []const u8) !Packets {
+        const add = try Protocol.FloatingText.encodeAdd(
             self.allocator,
             self.unique_id,
             self.runtime_id,
             self.position,
-            self.name_tag,
+            name_tag,
             self.block_runtime_id,
         );
-        errdefer self.allocator.free(add_packet);
+        errdefer self.allocator.free(add);
 
-        const remove_packet = try Protocol.FloatingText.encodeRemove(self.allocator, self.unique_id);
-        self.add_packet = add_packet;
-        self.remove_packet = remove_packet;
+        const remove = try Protocol.FloatingText.encodeRemove(self.allocator, self.unique_id);
+        errdefer self.allocator.free(remove);
+
+        const update = try Protocol.FloatingText.encodeUpdate(
+            self.allocator,
+            self.unique_id,
+            self.runtime_id,
+            self.position,
+            name_tag,
+            self.block_runtime_id,
+        );
+        return .{ .add = add, .remove = remove, .update = update };
+    }
+
+    fn freePackets(self: *FloatingText) void {
+        if (self.add_packet.len > 0) self.allocator.free(self.add_packet);
+        if (self.remove_packet.len > 0) self.allocator.free(self.remove_packet);
+        if (self.update_packet.len > 0) self.allocator.free(self.update_packet);
+        self.add_packet = &.{};
+        self.remove_packet = &.{};
+        self.update_packet = &.{};
     }
 };
 
@@ -165,6 +213,13 @@ pub const FloatingTextManager = struct {
         return hologram;
     }
 
+    pub fn edit(self: *FloatingTextManager, name: []const u8, text: []const u8) !*FloatingText {
+        const hologram = self.by_name.get(name) orelse return error.FloatingTextNotFound;
+        try hologram.setText(text);
+        self.refreshViewers(hologram);
+        return hologram;
+    }
+
     pub fn remove(self: *FloatingTextManager, name: []const u8) !void {
         const hologram = self.by_name.get(name) orelse return error.FloatingTextNotFound;
         self.despawn(hologram);
@@ -202,6 +257,15 @@ pub const FloatingTextManager = struct {
         if (player.pending_removal.load(.acquire)) return false;
         if (player.entity.dimension != self.dimension) return false;
         return player.entity.instance_id == self.dimension.instance_id;
+    }
+
+    fn refreshViewers(self: *FloatingTextManager, hologram: *FloatingText) void {
+        const conduit = self.dimension.world.conduit;
+        var viewer_it = hologram.viewers.keyIterator();
+        while (viewer_it.next()) |runtime_id| {
+            const player = conduit.players.get(runtime_id.*) orelse continue;
+            conduit.network.sendPacket(player.connection, hologram.update_packet) catch {};
+        }
     }
 
     fn showToNearbyPlayers(self: *FloatingTextManager, hologram: *FloatingText) void {
@@ -265,4 +329,39 @@ fn isInRange(hologram: *const FloatingText, player: *const Player) bool {
 fn resolveAirBlockRuntimeId(allocator: std.mem.Allocator) i32 {
     const air = BlockPermutation.resolve(allocator, "minecraft:air", null) catch return 0;
     return air.network_id;
+}
+
+test "setText refreshes the name tag and update packet" {
+    const allocator = std.testing.allocator;
+
+    const hologram = try FloatingText.create(allocator, undefined, "shop", "", "Hola", Protocol.Vector3f.init(1, 2, 3), 7, 0);
+    defer hologram.destroy();
+
+    try std.testing.expectEqualStrings("Hola", hologram.name_tag);
+
+    try hologram.setText("Adios\nLinea 2");
+
+    try std.testing.expectEqualStrings("Adios\nLinea 2", hologram.text);
+    try std.testing.expectEqualStrings("Adios\nLinea 2", hologram.name_tag);
+    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), hologram.add_packet[0]);
+    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.RemoveActor)), hologram.remove_packet[0]);
+    try std.testing.expectEqual(hologram.remove_packet.len + hologram.add_packet.len, hologram.update_packet.len);
+    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.RemoveActor)), hologram.update_packet[0]);
+    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), hologram.update_packet[hologram.remove_packet.len]);
+}
+
+test "setText keeps tracked viewers across repeated edits" {
+    const allocator = std.testing.allocator;
+
+    const hologram = try FloatingText.create(allocator, undefined, "shop", "", "Uno", Protocol.Vector3f.init(0, 0, 0), 9, 0);
+    defer hologram.destroy();
+
+    try hologram.viewers.put(11, {});
+    try hologram.viewers.put(22, {});
+
+    try hologram.setText("Dos");
+    try hologram.setText("Tres");
+
+    try std.testing.expectEqualStrings("Tres", hologram.name_tag);
+    try std.testing.expectEqual(@as(usize, 2), hologram.viewers.count());
 }

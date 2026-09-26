@@ -106,6 +106,18 @@ pub fn register(registry: *CommandRegistry) !void {
     };
     try cmd.registerSubCommand(add_sub);
 
+    const edit_sub = try registry.allocator.create(SubCommand);
+    edit_sub.* = .{
+        .name = "edit",
+        .aliases = &.{},
+        .params = &.{
+            .{ .name = "name", .param_type = .String, .optional = false },
+            .{ .name = "text", .param_type = .Message, .optional = false },
+        },
+        .handler = @ptrCast(&handleEdit),
+    };
+    try cmd.registerSubCommand(edit_sub);
+
     const remove_sub = try registry.allocator.create(SubCommand);
     remove_sub.* = .{
         .name = "remove",
@@ -122,7 +134,7 @@ pub fn register(registry: *CommandRegistry) !void {
 
 fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    ctx.sendOutput(false, "Usage: /floatingtext add <name> <text> | /floatingtext remove <name>");
+    ctx.sendOutput(false, "Usage: /floatingtext add <name> <text> | /floatingtext edit <name> <text> | /floatingtext remove <name>");
 }
 
 fn handleAdd(raw: *anyopaque) void {
@@ -142,7 +154,7 @@ fn handleAdd(raw: *anyopaque) void {
     };
 
     const parsed = parseAddArgs(ctx.args) catch |err| {
-        sendAddError(ctx, err);
+        sendTextArgsError(ctx, err, "Usage: /floatingtext add <name> <text>");
         return;
     };
 
@@ -153,10 +165,7 @@ fn handleAdd(raw: *anyopaque) void {
     defer ctx.allocator.free(text);
 
     validateText(text) catch |err| {
-        switch (err) {
-            error.EmptyText => ctx.sendOutput(false, "Floating text cannot be empty"),
-            error.InvalidText => ctx.sendOutput(false, "Floating text contains invalid characters"),
-        }
+        sendTextError(ctx, err);
         return;
     };
 
@@ -174,14 +183,61 @@ fn handleAdd(raw: *anyopaque) void {
     ctx.sendOutput(true, msg);
 }
 
-fn sendAddError(ctx: *CommandContext, err: AddArgsError) void {
+fn sendTextArgsError(ctx: *CommandContext, err: AddArgsError, usage: []const u8) void {
     switch (err) {
-        error.MissingName => ctx.sendOutput(false, "Usage: /floatingtext add <name> <text>"),
+        error.MissingName => ctx.sendOutput(false, usage),
         error.InvalidName => ctx.sendOutput(false, "Name may only contain letters, numbers, '_', '-' and '.'"),
         error.NameTooLong => ctx.sendOutput(false, "Name must be 32 characters or less"),
         error.MissingText => ctx.sendOutput(false, "Floating text cannot be empty"),
         error.TextTooLong => ctx.sendOutput(false, "Floating text is too long"),
     }
+}
+
+fn sendTextError(ctx: *CommandContext, err: TextError) void {
+    switch (err) {
+        error.EmptyText => ctx.sendOutput(false, "Floating text cannot be empty"),
+        error.InvalidText => ctx.sendOutput(false, "Floating text contains invalid characters"),
+    }
+}
+
+fn handleEdit(raw: *anyopaque) void {
+    const ctx: *CommandContext = @ptrCast(@alignCast(raw));
+
+    const parsed = parseAddArgs(ctx.args) catch |err| {
+        sendTextArgsError(ctx, err, "Usage: /floatingtext edit <name> <text>");
+        return;
+    };
+
+    const text = Protocol.FloatingText.decodeEscapes(ctx.allocator, parsed.text) catch {
+        ctx.sendOutput(false, "Failed to update floating text");
+        return;
+    };
+    defer ctx.allocator.free(text);
+
+    validateText(text) catch |err| {
+        sendTextError(ctx, err);
+        return;
+    };
+
+    const manager = findManager(ctx.network.conduit, ctx.player, parsed.name) orelse {
+        reportNotFound(ctx, parsed.name);
+        return;
+    };
+
+    _ = manager.edit(parsed.name, text) catch {
+        ctx.sendOutput(false, "Failed to update floating text");
+        return;
+    };
+
+    var msg_buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' updated", .{parsed.name}) catch return;
+    ctx.sendOutput(true, msg);
+}
+
+fn reportNotFound(ctx: *CommandContext, name: []const u8) void {
+    var msg_buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' not found", .{name}) catch return;
+    ctx.sendOutput(false, msg);
 }
 
 fn handleRemove(raw: *anyopaque) void {
@@ -198,9 +254,7 @@ fn handleRemove(raw: *anyopaque) void {
 
     const conduit = ctx.network.conduit;
     const manager = findManager(conduit, ctx.player, name) orelse {
-        var not_found_buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&not_found_buf, "Floating text '{s}' not found", .{name}) catch return;
-        ctx.sendOutput(false, msg);
+        reportNotFound(ctx, name);
         return;
     };
 
@@ -284,4 +338,12 @@ test "escaped line breaks become real nametag lines" {
     const name_tag = try Protocol.FloatingText.composeNameTag(allocator, "", decoded);
     defer allocator.free(name_tag);
     try std.testing.expectEqualStrings("Linea 1\nLinea 2", name_tag);
+}
+
+test "edit rejects text that decodes to blank lines" {
+    const allocator = std.testing.allocator;
+
+    const decoded = try Protocol.FloatingText.decodeEscapes(allocator, "\\n\\n");
+    defer allocator.free(decoded);
+    try std.testing.expectError(error.EmptyText, validateText(decoded));
 }
