@@ -183,7 +183,7 @@ Hermetic tests, no network:
   keys — anchored chains yield their identity, a chain that only verifies
   against itself is refused as not anchored, swapped links are refused, expired
   chains and wrong issuers are refused, an anchored chain without an xuid is a
-  mismatch, and a single self-signed link is only ever an offline identity.
+  mismatch, and a single self-signed link is refused as unanchored.
 - `network/auth/service.zig`: an unknown `kid` refetches the keys at most once
   per interval, and a guest login neither verifies nor touches the network.
 - `network/handlers/login.zig`: a verified identity replaces every claim the
@@ -195,7 +195,7 @@ Hermetic tests, no network:
 End to end (`online-mode=true`, once the service is reachable):
 
 ```
-INFO: Online mode: logins are verified against https://authorization.franchise.minecraft-services.net/ (3 signing key(s))
+INFO: Online mode enabled
 WARN: Rejected login: NothingToVerify                     # forged login, no fallback
 WARN: Unverified login let in as an offline identity: ... # same login with the fallback on
 INFO: Player LoadBot0000 joined (offline identity, not verified).

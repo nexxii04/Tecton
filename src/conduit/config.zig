@@ -11,7 +11,8 @@ pub const ServerProperties = struct {
     port: u16 = 19132,
     motd: []const u8 = "Conduit Server",
     max_players: u32 = 120,
-    online_mode: bool = true,
+    online_mode: bool = false,
+    online_mode_offline_fallback: bool = false,
     max_tps: u32 = 20,
     worker_threads: u32 = 0,
     max_view_distance: u32 = 16,
@@ -36,7 +37,8 @@ pub const ServerProperties = struct {
         .port = "What port should the server run on",
         .motd = "What motd should server display in the server list",
         .max_players = "Max Player count on the server",
-        .online_mode = "Whether to use online mode (WIP)",
+        .online_mode = "Verify logins against the Minecraft authorization service; an unverifiable login is refused (see online-mode-offline-fallback)",
+        .online_mode_offline_fallback = "With online-mode=true, let unverified logins in as offline identities instead of refusing them",
         .max_tps = "Max tps",
         .worker_threads = "Conduit worker threads (0 = auto, higher values are clamped)",
         .max_view_distance = "Max view distance in chunks",
@@ -107,7 +109,12 @@ pub const ServerProperties = struct {
                     try self._allocated_strings.append(self.allocator, duped);
                     @field(self, field.name) = duped;
                 } else if (field.type == bool) {
-                    @field(self, field.name) = std.mem.eql(u8, value, "true");
+                    @field(self, field.name) = if (std.mem.eql(u8, value, "true"))
+                        true
+                    else if (std.mem.eql(u8, value, "false"))
+                        false
+                    else
+                        return error.InvalidValue;
                 } else if (@typeInfo(field.type) == .int) {
                     @field(self, field.name) = std.fmt.parseInt(field.type, value, 10) catch return error.InvalidValue;
                 }
@@ -252,6 +259,58 @@ test "a saved properties file carries max-mtu and loads it back" {
     defer loaded.deinit();
     try std.testing.expectEqual(@as(u16, 1188), loaded.max_mtu);
     try std.testing.expectEqual(@as(u16, 19132), loaded.port);
+}
+
+test "online mode defaults to off and only accepts true or false" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try std.testing.expect(!properties.online_mode);
+
+    try properties.setField("online-mode", "true");
+    try std.testing.expect(properties.online_mode);
+
+    try properties.setField("online-mode", "false");
+    try std.testing.expect(!properties.online_mode);
+
+    try std.testing.expectError(error.InvalidValue, properties.setField("online-mode", "yes"));
+    try std.testing.expect(!properties.online_mode);
+}
+
+test "unverified online logins are refused unless the fallback is switched on" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try std.testing.expect(!properties.online_mode_offline_fallback);
+
+    try properties.setField("online-mode-offline-fallback", "true");
+    try std.testing.expect(properties.online_mode_offline_fallback);
+
+    try properties.setField("online-mode-offline-fallback", "false");
+    try std.testing.expect(!properties.online_mode_offline_fallback);
+
+    try std.testing.expectError(error.InvalidValue, properties.setField("online-mode-offline-fallback", "maybe"));
+}
+
+test "a saved properties file carries online-mode and loads it back" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const path = "test-online-mode.properties";
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var properties = ServerProperties{ .allocator = allocator };
+    defer properties.deinit();
+    try properties.save(io, path);
+
+    var content: [8192]u8 = undefined;
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var read_buf: [512]u8 = undefined;
+    var reader = file.reader(io, &read_buf);
+    const bytes = try reader.interface.readSliceShort(&content);
+    try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nonline-mode=false\n") != null);
+
+    var loaded = try ServerProperties.load(io, allocator, path);
+    defer loaded.deinit();
+    try std.testing.expect(!loaded.online_mode);
 }
 
 test "verbose startup logs are disabled in release modes" {

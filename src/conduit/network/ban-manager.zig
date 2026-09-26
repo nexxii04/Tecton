@@ -48,9 +48,12 @@ pub const BanManager = struct {
         return false;
     }
 
-    pub fn isBannedByXuid(self: *const BanManager, uuid: []const u8) bool {
+    /// Offline sessions carry no xuid, so an empty value never matches.
+    pub fn isBannedByXuid(self: *const BanManager, xuid: []const u8) bool {
+        if (xuid.len == 0) return false;
+
         for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, entry.uuid, uuid)) return true;
+            if (std.mem.eql(u8, entry.uuid, xuid)) return true;
         }
         return false;
     }
@@ -170,3 +173,27 @@ pub const BanManager = struct {
         };
     }
 };
+
+test "an empty xuid never matches a ban entry" {
+    const allocator = std.testing.allocator;
+
+    var manager = BanManager{
+        .io = std.testing.io,
+        .allocator = allocator,
+        .entries = .empty,
+        .path = "test-bans.json",
+    };
+    defer manager.deinit();
+
+    try manager.entries.append(allocator, .{
+        .uuid = try allocator.dupe(u8, ""),
+        .name = try allocator.dupe(u8, "Griefer"),
+        .created = try allocator.dupe(u8, "unknown"),
+        .source = try allocator.dupe(u8, "console"),
+        .expires = try allocator.dupe(u8, "forever"),
+        .reason = try allocator.dupe(u8, "testing"),
+    });
+
+    try std.testing.expect(!manager.isBannedByXuid(""));
+    try std.testing.expect(manager.isBanned("griefer"));
+}

@@ -1,8 +1,12 @@
 const std = @import("std");
 const Raknet = @import("Raknet");
 
-pub fn formatJoinMessage(buf: []u8, username: []const u8) ![]const u8 {
-    return std.fmt.bufPrint(buf, "Player {s} joined.", .{username});
+pub fn formatJoinMessage(buf: []u8, username: []const u8, verified: bool) ![]const u8 {
+    return std.fmt.bufPrint(
+        buf,
+        "Player {s} joined ({s}).",
+        .{ username, if (verified) "verified identity" else "offline identity, not verified" },
+    );
 }
 
 pub fn formatChatMessage(buf: []u8, username: []const u8, message: []const u8) ![]const u8 {
@@ -13,9 +17,9 @@ pub fn formatDisconnectMessage(buf: []u8, username: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, "Player {s} left.", .{username});
 }
 
-pub fn logJoin(username: []const u8) void {
+pub fn logJoin(username: []const u8, verified: bool) void {
     var buf: [256]u8 = undefined;
-    const msg = formatJoinMessage(&buf, username) catch "Player joined.";
+    const msg = formatJoinMessage(&buf, username, verified) catch "Player joined.";
     Raknet.Logger.INFO("{s}", .{msg});
 }
 
@@ -31,10 +35,16 @@ pub fn logDisconnect(username: []const u8) void {
     Raknet.Logger.INFO("{s}", .{msg});
 }
 
-test "formats join log message" {
+test "formats a verified join log message" {
     var buf: [128]u8 = undefined;
-    const msg = try formatJoinMessage(&buf, "Steve");
-    try std.testing.expectEqualStrings("Player Steve joined.", msg);
+    const msg = try formatJoinMessage(&buf, "Steve", true);
+    try std.testing.expectEqualStrings("Player Steve joined (verified identity).", msg);
+}
+
+test "formats an offline join log message" {
+    var buf: [128]u8 = undefined;
+    const msg = try formatJoinMessage(&buf, "Steve", false);
+    try std.testing.expectEqualStrings("Player Steve joined (offline identity, not verified).", msg);
 }
 
 test "formats chat log message" {

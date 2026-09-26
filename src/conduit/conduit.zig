@@ -19,6 +19,7 @@ const HealthTrait = EntityTraits.HealthTrait;
 const VillagerTradeTrait = EntityTraits.VillagerTradeTrait;
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
 const ItemPalette = @import("./items/item-palette.zig");
+const AuthService = @import("./network/auth/root.zig").AuthService;
 const BanManager = @import("./network/ban-manager.zig").BanManager;
 const MovementBroadcast = @import("./network/movement-broadcast.zig");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
@@ -155,6 +156,7 @@ pub const Conduit = struct {
     prepared: bool = false,
     started: bool = false,
     stopped: bool = false,
+    auth_service: ?AuthService = null,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
     player_locations: PlayerLocations,
@@ -181,6 +183,27 @@ pub const Conduit = struct {
         Raknet.Logger.init(allocator);
         var owned_config = config;
         errdefer owned_config.deinit();
+
+        var auth_service: ?AuthService = null;
+        errdefer if (auth_service) |*service| service.deinit();
+        if (owned_config.online_mode) {
+            auth_service = AuthService.init(io, allocator, .{}) catch |err| {
+                Raknet.Logger.ERROR(
+                    "Online mode: cannot reach the authorization service ({s}), refusing to start",
+                    .{@errorName(err)},
+                );
+                return error.OnlineModeUnavailable;
+            };
+            Raknet.Logger.INFO("Online mode enabled", .{});
+        } else {
+            Raknet.Logger.INFO("Online mode disabled", .{});
+        }
+        if ((!owned_config.online_mode or owned_config.online_mode_offline_fallback) and
+            std.mem.eql(u8, owned_config.default_group, "operator"))
+        {
+            Raknet.Logger.WARN("default-group=operator without verified identities: any client becomes an operator by claiming an operator name", .{});
+        }
+
         const max_mtu = ServerProperties.clampMaxMtu(owned_config.max_mtu);
         if (max_mtu != owned_config.max_mtu) {
             Raknet.Logger.WARN("max-mtu={d} is outside the supported range {d}-{d}, using {d}", .{
@@ -255,6 +278,7 @@ pub const Conduit = struct {
             .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
             .console = undefined,
+            .auth_service = auth_service,
             .ban_manager = BanManager.init(io, allocator, options.paths.banned_players),
             .permission_manager = PermissionManager.init(io, allocator, options.paths.permissions, owned_config.default_group),
             .player_locations = PlayerLocations.init(io, allocator, options.paths.player_locations),
@@ -1156,6 +1180,7 @@ pub const Conduit = struct {
         self.permission_manager.deinit();
         self.player_locations.flush();
         self.player_locations.deinit();
+        if (self.auth_service) |*service| service.deinit();
     }
 };
 
