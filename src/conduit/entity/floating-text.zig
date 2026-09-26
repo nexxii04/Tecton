@@ -3,6 +3,8 @@ const std = @import("std");
 const Protocol = @import("protocol");
 
 const BlockPermutation = @import("../world/block/block-permutation.zig").BlockPermutation;
+const Compression = @import("../network/compression/compression.zig").Compression;
+const CompressionOptions = @import("../network/compression/options.zig").CompressionOptions;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const Entity = @import("./entity.zig").Entity;
 const Player = @import("../player/player.zig").Player;
@@ -21,7 +23,6 @@ pub const FloatingText = struct {
     viewers: std.AutoHashMap(i64, void),
     add_packet: []const u8,
     remove_packet: []const u8,
-    update_packet: []const u8,
 
     pub fn create(
         allocator: std.mem.Allocator,
@@ -59,7 +60,6 @@ pub const FloatingText = struct {
             .viewers = std.AutoHashMap(i64, void).init(allocator),
             .add_packet = &.{},
             .remove_packet = &.{},
-            .update_packet = &.{},
         };
         errdefer hologram.viewers.deinit();
 
@@ -83,7 +83,6 @@ pub const FloatingText = struct {
         self.freePackets();
         self.add_packet = packets.add;
         self.remove_packet = packets.remove;
-        self.update_packet = packets.update;
     }
 
     pub fn setText(self: *FloatingText, text: []const u8) !void {
@@ -103,13 +102,11 @@ pub const FloatingText = struct {
         self.name_tag = name_tag;
         self.add_packet = packets.add;
         self.remove_packet = packets.remove;
-        self.update_packet = packets.update;
     }
 
     const Packets = struct {
         add: []const u8,
         remove: []const u8,
-        update: []const u8,
     };
 
     fn buildPackets(self: *const FloatingText, name_tag: []const u8) !Packets {
@@ -126,24 +123,14 @@ pub const FloatingText = struct {
         const remove = try Protocol.FloatingText.encodeRemove(self.allocator, self.unique_id);
         errdefer self.allocator.free(remove);
 
-        const update = try Protocol.FloatingText.encodeUpdate(
-            self.allocator,
-            self.unique_id,
-            self.runtime_id,
-            self.position,
-            name_tag,
-            self.block_runtime_id,
-        );
-        return .{ .add = add, .remove = remove, .update = update };
+        return .{ .add = add, .remove = remove };
     }
 
     fn freePackets(self: *FloatingText) void {
         if (self.add_packet.len > 0) self.allocator.free(self.add_packet);
         if (self.remove_packet.len > 0) self.allocator.free(self.remove_packet);
-        if (self.update_packet.len > 0) self.allocator.free(self.update_packet);
         self.add_packet = &.{};
         self.remove_packet = &.{};
-        self.update_packet = &.{};
     }
 };
 
@@ -265,10 +252,11 @@ pub const FloatingTextManager = struct {
 
     fn refreshViewers(self: *FloatingTextManager, hologram: *FloatingText) void {
         const conduit = self.dimension.world.conduit;
+        const packets = [_][]const u8{ hologram.remove_packet, hologram.add_packet };
         var viewer_it = hologram.viewers.keyIterator();
         while (viewer_it.next()) |runtime_id| {
             const player = conduit.players.get(runtime_id.*) orelse continue;
-            conduit.network.sendPacket(player.connection, hologram.update_packet) catch {};
+            conduit.network.sendPackets(player.connection, &packets) catch {};
         }
     }
 
@@ -335,7 +323,7 @@ fn resolveAirBlockRuntimeId(allocator: std.mem.Allocator) i32 {
     return air.network_id;
 }
 
-test "setText refreshes the name tag and update packet" {
+test "setText refreshes the name tag and the actor packets" {
     const allocator = std.testing.allocator;
 
     const hologram = try FloatingText.create(allocator, undefined, "shop", "", "Hola", Protocol.Vector3f.init(1, 2, 3), 7, 0);
@@ -347,11 +335,32 @@ test "setText refreshes the name tag and update packet" {
 
     try std.testing.expectEqualStrings("Adios\nLinea 2", hologram.text);
     try std.testing.expectEqualStrings("Adios\nLinea 2", hologram.name_tag);
-    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), hologram.add_packet[0]);
     try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.RemoveActor)), hologram.remove_packet[0]);
-    try std.testing.expectEqual(hologram.remove_packet.len + hologram.add_packet.len, hologram.update_packet.len);
-    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.RemoveActor)), hologram.update_packet[0]);
-    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), hologram.update_packet[hologram.remove_packet.len]);
+    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), hologram.add_packet[0]);
+    try std.testing.expectEqual(@as(usize, 2), hologram.remove_packet.len);
+}
+
+test "the refresh travels as two batch entries" {
+    const allocator = std.testing.allocator;
+
+    const hologram = try FloatingText.create(allocator, undefined, "shop", "", "Hola", Protocol.Vector3f.init(1, 2, 3), 7, 0);
+    defer hologram.destroy();
+
+    try hologram.setText("Adios");
+
+    try std.testing.expect(std.mem.indexOf(u8, hologram.add_packet, "Adios") != null);
+
+    const entries = [_][]const u8{ hologram.remove_packet, hologram.add_packet };
+    const options = CompressionOptions{ .compression_method = .Zlib, .compression_threshold = 0 };
+    const batch = try Compression.compress(&entries, options, allocator);
+    defer allocator.free(batch);
+
+    const result = try Compression.decompress(batch, options, allocator);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.packets.len);
+    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.RemoveActor)), result.packets[0][0]);
+    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), result.packets[1][0]);
 }
 
 test "setText keeps tracked viewers across repeated edits" {
