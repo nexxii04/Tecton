@@ -4,6 +4,7 @@ const Protocol = @import("protocol");
 
 const Conduit = @import("../../conduit.zig").Conduit;
 const Player = @import("../../player/player.zig").Player;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const FloatingTextManager = @import("../../entity/floating-text.zig").FloatingTextManager;
 const Command = @import("../command.zig").Command;
 const SubCommand = @import("../command.zig").SubCommand;
@@ -129,12 +130,33 @@ pub fn register(registry: *CommandRegistry) !void {
     };
     try cmd.registerSubCommand(remove_sub);
 
+    const list_sub = try registry.allocator.create(SubCommand);
+    list_sub.* = .{
+        .name = "list",
+        .aliases = &.{},
+        .params = &.{},
+        .handler = @ptrCast(&handleList),
+    };
+    try cmd.registerSubCommand(list_sub);
+
+    const info_sub = try registry.allocator.create(SubCommand);
+    info_sub.* = .{
+        .name = "info",
+        .aliases = &.{},
+        .params = &.{
+            .{ .name = "name", .param_type = .String, .optional = false },
+        },
+        .handler = @ptrCast(&handleInfo),
+    };
+    try cmd.registerSubCommand(info_sub);
+
     try registry.registerCommand(cmd);
 }
 
 fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    ctx.sendOutput(false, "Usage: /floatingtext add <name> <text> | /floatingtext edit <name> <text> | /floatingtext remove <name>");
+    ctx.sendOutput(false, "Usage: /floatingtext add <name> <text> | /floatingtext edit <name> <text> | " ++
+        "/floatingtext remove <name> | /floatingtext list | /floatingtext info <name>");
 }
 
 fn handleAdd(raw: *anyopaque) void {
@@ -240,15 +262,114 @@ fn reportNotFound(ctx: *CommandContext, name: []const u8) void {
     ctx.sendOutput(false, msg);
 }
 
+fn sendNameError(ctx: *CommandContext, err: NameError, usage: []const u8) void {
+    switch (err) {
+        error.MissingName => ctx.sendOutput(false, usage),
+        error.InvalidName => ctx.sendOutput(false, "Name may only contain letters, numbers, '_', '-' and '.'"),
+        error.NameTooLong => ctx.sendOutput(false, "Name must be 32 characters or less"),
+    }
+}
+
+fn handleList(raw: *anyopaque) void {
+    const ctx: *CommandContext = @ptrCast(@alignCast(raw));
+
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    defer out.deinit();
+
+    if (ctx.player) |player| {
+        const dimension = player.entity.dimension orelse {
+            ctx.sendOutput(false, "Player is not in a dimension");
+            return;
+        };
+        std.Io.Writer.print(&out.writer, "Floating texts in §b{s}§7:", .{dimension.identifier}) catch return;
+        writeDimensionHolograms(&out.writer, dimension) catch return;
+        ctx.sendOutput(true, out.written());
+        return;
+    }
+
+    const conduit = ctx.network.conduit;
+    std.Io.Writer.writeAll(&out.writer, "Floating texts:") catch return;
+    var world_it = conduit.worlds.valueIterator();
+    while (world_it.next()) |world| {
+        var dimension_it = world.*.dimensions.valueIterator();
+        while (dimension_it.next()) |dimension| {
+            const manager = dimension.*.floating_texts orelse continue;
+            if (manager.items().len == 0) continue;
+            std.Io.Writer.print(&out.writer, "\n§f{s} §8[§7{s}§8]§7:", .{ world.*.identifier, dimension.*.identifier }) catch return;
+            writeDimensionHolograms(&out.writer, dimension.*) catch return;
+        }
+    }
+    ctx.sendOutput(true, out.written());
+}
+
+fn handleInfo(raw: *anyopaque) void {
+    const ctx: *CommandContext = @ptrCast(@alignCast(raw));
+
+    const name = parseRemoveArgs(ctx.args) catch |err| {
+        sendNameError(ctx, err, "Usage: /floatingtext info <name>");
+        return;
+    };
+
+    const manager = findManager(ctx.network.conduit, ctx.player, name) orelse {
+        reportNotFound(ctx, name);
+        return;
+    };
+    const hologram = manager.find(name) orelse {
+        reportNotFound(ctx, name);
+        return;
+    };
+
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    defer out.deinit();
+
+    std.Io.Writer.print(
+        &out.writer,
+        "§6Floating text §f{s}\n§7World: §f{s} §8[§7{s}§8]\n§7Position: §a{d:.1}§7,§a{d:.1}§7,§a{d:.1}\n§7Runtime Id: §f{d} §7Viewers: §f{d}\n§7Text:\n§f{s}",
+        .{
+            hologram.name,
+            hologram.dimension.world.identifier,
+            hologram.dimension.identifier,
+            hologram.position.x,
+            hologram.position.y,
+            hologram.position.z,
+            hologram.runtime_id,
+            hologram.viewers.count(),
+            hologram.text,
+        },
+    ) catch return;
+
+    ctx.sendOutput(true, out.written());
+}
+
+fn writeDimensionHolograms(writer: *std.Io.Writer, dimension: *const Dimension) !void {
+    const manager = dimension.floating_texts orelse {
+        try std.Io.Writer.writeAll(writer, " §7(none)");
+        return;
+    };
+    if (manager.items().len == 0) {
+        try std.Io.Writer.writeAll(writer, " §7(none)");
+        return;
+    }
+    for (manager.items()) |hologram| {
+        try writeHologramLine(writer, hologram.name, hologram.position, hologram.viewers.count());
+    }
+}
+
+fn writeHologramLine(writer: *std.Io.Writer, name: []const u8, position: Protocol.Vector3f, viewers: usize) !void {
+    try std.Io.Writer.print(writer, "\n  §b{s}§r §8- §a{d:.1}§7,§a{d:.1}§7,§a{d:.1}§r §8(§7viewers: §f{d}§8)", .{
+        name,
+        position.x,
+        position.y,
+        position.z,
+        viewers,
+    });
+}
+
 fn handleRemove(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
 
     const name = parseRemoveArgs(ctx.args) catch |err| {
-        switch (err) {
-            error.MissingName => ctx.sendOutput(false, "Usage: /floatingtext remove <name>"),
-            error.InvalidName => ctx.sendOutput(false, "Name may only contain letters, numbers, '_', '-' and '.'"),
-            error.NameTooLong => ctx.sendOutput(false, "Name must be 32 characters or less"),
-        }
+        sendNameError(ctx, err, "Usage: /floatingtext remove <name>");
         return;
     };
 
@@ -340,7 +461,18 @@ test "escaped line breaks become real nametag lines" {
     try std.testing.expectEqualStrings("Linea 1\nLinea 2", name_tag);
 }
 
-test "edit rejects text that decodes to blank lines" {
+test "listing line reports name, position and viewers" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+
+    try writeHologramLine(&writer, "shop", Protocol.Vector3f.init(10.5, 64.0, -3.5), 2);
+    try std.testing.expectEqualStrings(
+        "\n  §bshop§r §8- §a10.5§7,§a64.0§7,§a-3.5§r §8(§7viewers: §f2§8)",
+        writer.buffered(),
+    );
+}
+
+test "edit rejects text that decodes into blank lines" {
     const allocator = std.testing.allocator;
 
     const decoded = try Protocol.FloatingText.decodeEscapes(allocator, "\\n\\n");

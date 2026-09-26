@@ -183,6 +183,10 @@ pub const FloatingTextManager = struct {
         return self.by_name.get(name);
     }
 
+    pub fn items(self: *const FloatingTextManager) []const *FloatingText {
+        return self.texts.items;
+    }
+
     pub fn add(self: *FloatingTextManager, name: []const u8, text: []const u8, position: Protocol.Vector3f) !*FloatingText {
         if (self.by_name.contains(name)) return error.FloatingTextAlreadyExists;
         if (self.texts.items.len >= MAX_FLOATING_TEXTS) return error.FloatingTextLimitReached;
