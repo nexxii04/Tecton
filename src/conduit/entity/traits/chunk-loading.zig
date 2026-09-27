@@ -232,12 +232,13 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
             .walk_speed = 0.0,
         }};
 
+        const size = target.pose.size();
         const metadata = [_]Protocol.DataItem{
             Protocol.DataItem.init(Protocol.ActorDataId.Flags, .Long, .{ .Long = target.entity.flags.flags_one }),
             Protocol.DataItem.init(Protocol.ActorDataId.FlagsTwo, .Long, .{ .Long = target.entity.flags.flags_two }),
             Protocol.DataItem.initFloat(Protocol.ActorDataId.Scale, 1.0),
-            Protocol.DataItem.initFloat(Protocol.ActorDataId.Width, 0.6),
-            Protocol.DataItem.initFloat(Protocol.ActorDataId.Height, 1.8),
+            Protocol.DataItem.initFloat(Protocol.ActorDataId.Width, size.width),
+            Protocol.DataItem.initFloat(Protocol.ActorDataId.Height, size.height),
         };
 
         const packet = Protocol.AddPlayerPacket{
@@ -274,7 +275,7 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
     {
         var stream = BinaryStream.init(allocator, null, null);
         defer stream.deinit();
-        const flags_data = target.entity.flags.buildDataItems(allocator) catch return;
+        const flags_data = target.entity.flags.buildDataItems(allocator, target.pose.size()) catch return;
         var packet = Protocol.SetActorDataPacket.init(allocator, target.entity.runtime_id, 0, flags_data);
         defer packet.deinit();
         const serialized = packet.serialize(&stream) catch return;

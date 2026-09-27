@@ -392,7 +392,7 @@ fn sendEntityDataBatch(state: *JoinStartupTask) !void {
         var str = BinaryStream.init(state.network.allocator, null, null);
         defer str.deinit();
 
-        const data = try state.player.entity.flags.buildDataItems(state.network.allocator);
+        const data = try state.player.entity.flags.buildDataItems(state.network.allocator, state.player.pose.size());
         var packet = Protocol.SetActorDataPacket.init(state.network.allocator, state.player.entity.runtime_id, 0, data);
         defer packet.deinit();
         try appendOwnedPacket(state.network, &batched_packets, &owned_packets, try packet.serialize(&str));

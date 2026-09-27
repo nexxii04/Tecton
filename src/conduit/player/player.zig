@@ -17,6 +17,7 @@ const TradeWindowTrait = @import("../entity/traits/trade-window.zig").TradeWindo
 pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const MoveDelta = @import("move-delta.zig");
+const Pose = @import("pose.zig").Pose;
 
 pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
 pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;
@@ -72,6 +73,10 @@ pub const Player = struct {
     last_broadcast: MoveDelta.LastBroadcast = .{},
     on_ground: bool = true,
     pending_move: ?MoveDelta.State = null,
+    gliding: bool = false,
+    swimming: bool = false,
+    crawling: bool = false,
+    pose: Pose = .standing,
 
     pub fn init(
         self: *Player,
@@ -392,11 +397,26 @@ pub const Player = struct {
         }
     }
 
+    pub fn updatePose(self: *Player) !void {
+        const pose = Pose.next(
+            self.pose,
+            self.gliding,
+            self.swimming,
+            self.crawling,
+            self.entity.flags.getFlag(.Sneaking),
+        ) orelse return;
+
+        self.pose = pose;
+        self.entity.flags.setFlag(.Gliding, pose == .gliding);
+        self.entity.flags.setFlag(.Swimming, pose == .swimming);
+        try self.broadcastActorFlags();
+    }
+
     pub fn broadcastActorFlags(self: *Player) !void {
         var str = BinaryStream.init(self.entity.allocator, null, null);
         defer str.deinit();
 
-        const data = try self.entity.flags.buildDataItems(self.entity.allocator);
+        const data = try self.entity.flags.buildDataItems(self.entity.allocator, self.pose.size());
         var packet = Protocol.SetActorDataPacket.init(self.entity.allocator, self.entity.runtime_id, 0, data);
         defer packet.deinit();
         const serialized = try packet.serialize(&str);

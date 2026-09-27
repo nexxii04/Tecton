@@ -525,7 +525,7 @@ pub const Dimension = struct {
     }
 
     fn serializeAddEntity(self: *Dimension, entity: *Entity, stream: *BinaryStream) ![]const u8 {
-        const flags_data = try entity.flags.buildDataItems(self.allocator);
+        const flags_data = try entity.flags.buildDataItems(self.allocator, null);
         defer self.allocator.free(flags_data);
 
         var metadata = std.ArrayList(Protocol.DataItem){ .items = &.{}, .capacity = 0 };

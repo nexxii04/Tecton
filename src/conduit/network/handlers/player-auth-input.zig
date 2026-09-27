@@ -50,16 +50,22 @@ pub fn handlePlayerAuthInput(
     network.conduit.syncEcsEntity(&player.entity);
 
     {
-        var flags_changed = false;
-        if (packet.input_data.hasFlag(.StartSneaking)) {
+        const input = packet.input_data;
+        var pose_input = false;
+
+        if (input.hasFlag(.StartSneaking)) {
             player.entity.flags.setFlag(.Sneaking, true);
-            flags_changed = true;
+            pose_input = true;
         }
-        if (packet.input_data.hasFlag(.StopSneaking)) {
+        if (input.hasFlag(.StopSneaking)) {
             player.entity.flags.setFlag(.Sneaking, false);
-            flags_changed = true;
+            pose_input = true;
         }
-        if (flags_changed) try player.broadcastActorFlags();
+        if (applyPoseTransition(input.hasFlag(.StartGliding), input.hasFlag(.StopGliding), &player.gliding)) pose_input = true;
+        if (applyPoseTransition(input.hasFlag(.StartSwimming), input.hasFlag(.StopSwimming), &player.swimming)) pose_input = true;
+        if (applyPoseTransition(input.hasFlag(.StartCrawling), input.hasFlag(.StopCrawling), &player.crawling)) pose_input = true;
+
+        if (pose_input) try player.updatePose();
     }
 
     if (packet.input_data.hasFlag(.PerformItemInteraction)) {
@@ -83,6 +89,18 @@ pub fn handlePlayerAuthInput(
         .rotation = .{ player.entity.rotation.x, player.entity.rotation.y, player.entity.head_yaw },
         .on_ground = player.on_ground,
     };
+}
+
+fn applyPoseTransition(start: bool, stop: bool, state: *bool) bool {
+    if (start) {
+        state.* = true;
+        return true;
+    }
+    if (stop) {
+        state.* = false;
+        return true;
+    }
+    return false;
 }
 
 fn handleItemUseTransaction(
