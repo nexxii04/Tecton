@@ -32,7 +32,8 @@ pub fn handlePlayerAuthInput(
     stream: *BinaryStream,
 ) !void {
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
-    const packet = try Protocol.PlayerAuthInputPacket.deserialize(stream, network.allocator);
+    var packet = try Protocol.PlayerAuthInputPacket.deserialize(stream, network.allocator);
+    defer packet.deinit(network.allocator);
 
     const previous_position = player.entity.position;
     var move_event = Events.PlayerMoveEvent{
