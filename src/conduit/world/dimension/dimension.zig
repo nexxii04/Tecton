@@ -95,18 +95,17 @@ pub const Dimension = struct {
     pub fn deinit(self: *Dimension) void {
         if (self.floating_texts) |manager| manager.destroy();
 
-        var block_iter = self.blocks.valueIterator();
-        while (block_iter.next()) |block| {
-            block.*.deinit();
-            self.allocator.destroy(block.*);
-        }
-        self.blocks.deinit();
-
         var bbc_iter = self.blocks_by_chunk.valueIterator();
         while (bbc_iter.next()) |list| {
+            for (list.items) |block| {
+                _ = self.blocks.remove(blockPosHash(block.position));
+                block.deinit();
+                self.allocator.destroy(block);
+            }
             list.deinit(self.allocator);
         }
         self.blocks_by_chunk.deinit();
+        self.blocks.deinit();
 
         var entity_iter = self.entities.valueIterator();
         while (entity_iter.next()) |entity| {
@@ -1126,4 +1125,17 @@ test "stale cache detected after generation change" {
         const current_gen = generations.get(hash).?;
         try std.testing.expect(cached.generation != current_gen);
     }
+}
+
+test "deinit retires a block before detaching its traits" {
+    const source = @embedFile("dimension.zig");
+    const deinit_start = std.mem.indexOf(u8, source, "pub fn deinit(self: *Dimension) void {") orelse
+        return error.TestUnexpectedResult;
+    const remove = std.mem.indexOfPos(u8, source, deinit_start, "self.blocks.remove(blockPosHash(block.position));") orelse {
+        std.debug.print("dimension.zig: deinit detaches blocks whose neighbours still resolve them\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    const detach = std.mem.indexOfPos(u8, source, deinit_start, "block.deinit();") orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(remove < detach);
 }

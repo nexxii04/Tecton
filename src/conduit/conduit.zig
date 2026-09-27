@@ -156,6 +156,7 @@ pub const Conduit = struct {
     prepared: bool = false,
     started: bool = false,
     stopped: bool = false,
+    shutting_down: bool = false,
     auth_service: ?AuthService = null,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
@@ -712,6 +713,7 @@ pub const Conduit = struct {
     }
 
     pub fn getPlayerSnapshots(self: *Conduit) []const *Player {
+        if (self.shutting_down) return &.{};
         return self.players_snapshot.items();
     }
 
@@ -1163,6 +1165,7 @@ pub const Conduit = struct {
         self.saveAllWorlds();
         self.freeSavePlan();
         self.threaded_tasks.deinit();
+        self.shutting_down = true;
 
         var it = self.players.valueIterator();
         while (it.next()) |player| {
@@ -1357,6 +1360,24 @@ test "onTick broadcasts movement and no path skips the flush" {
         );
         return error.TestUnexpectedResult;
     }
+}
+
+test "the player snapshot goes quiet before the players are freed" {
+    const source = @embedFile("conduit.zig");
+    const silenced = std.mem.indexOf(u8, source, "if (self.shutting_down) return &.{};") orelse {
+        std.debug.print("conduit.zig: getPlayerSnapshots hands out a list that teardown frees\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    const deinit_start = std.mem.indexOf(u8, source, "pub fn deinit(self: *Conduit) void {") orelse
+        return error.TestUnexpectedResult;
+    const guard = std.mem.indexOfPos(u8, source, deinit_start, "self.shutting_down = true;") orelse {
+        std.debug.print("conduit.zig: deinit frees the players while block traits can still broadcast\n", .{});
+        return error.TestUnexpectedResult;
+    };
+    const players_freed = std.mem.indexOfPos(u8, source, guard, "self.players.valueIterator()") orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(silenced < deinit_start);
+    try std.testing.expect(guard < players_freed);
 }
 
 fn on_tick_start_line(source: []const u8, at: usize) usize {
