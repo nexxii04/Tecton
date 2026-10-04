@@ -95,7 +95,8 @@ pub fn queueChunkStreaming(player: *Player) !void {
         .upgrade_idx = 0,
     };
 
-    errdefer freeStreamState(state);
+    // The two slice errdefers above stay the sole owners of the state's slices.
+    errdefer allocator.destroy(state);
     try tecton.tasks.enqueue(.{
         .func = chunkStreamStep,
         .ctx = @ptrCast(state),

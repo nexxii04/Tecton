@@ -605,7 +605,20 @@ pub const Tecton = struct {
         }
     }
 
+    /// The RakNet tick callback runs on its own thread and touches Tecton state.
+    /// Cancel and join it first so no in-flight tick outlives the teardown
+    /// below. `Future.cancel` is the same stop-and-join `Raknet.Server.deinit`
+    /// performs later, just moved ahead of the state it would race against.
+    fn stopRaknetTickThread(self: *Tecton) void {
+        self.raknet.running.store(false, .release);
+        if (self.raknet.tick_thread) |*tick_thread| {
+            _ = tick_thread.cancel(self.io);
+            self.raknet.tick_thread = null;
+        }
+    }
+
     pub fn deinit(self: *Tecton) void {
+        self.stopRaknetTickThread();
         self.profiler.writeReport(self.io, "dump/tick-profile.txt");
 
         self.threaded_tasks.clearPending();

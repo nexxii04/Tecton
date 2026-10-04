@@ -191,17 +191,15 @@ pub fn readChunkColumn(provider: *LevelDBProvider, allocator: std.mem.Allocator,
         iter.next();
     }
 
-    if (!result.has_version) {
-        result.deinit(allocator);
-        return error.ChunkNotFound;
-    }
+    if (!result.has_version) return error.ChunkNotFound;
 
     return result;
 }
 
-/// Raw block-entity blob for a chunk, caller-owned; call it after awaiting the
-/// `.block_entities` record.
+/// Raw block-entity blob for a chunk, caller-owned; waits for the pending
+/// `.block_entities` record before reading.
 pub fn readBlockEntityBytes(provider: *LevelDBProvider, allocator: std.mem.Allocator, x: i32, z: i32, dim_type: Protocol.DimensionType) !?[]const u8 {
+    provider.awaitChunkRecords(x, z, dim_type, &.{.block_entities});
     const dim_index: i32 = switch (dim_type) {
         .Overworld => 0,
         .Nether => 1,

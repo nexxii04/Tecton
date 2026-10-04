@@ -152,10 +152,10 @@ pub const Entity = struct {
         self.nametag_always_visible = visible;
     }
 
-    pub fn despawn(self: *Entity) void {
+    pub fn despawn(self: *Entity) !void {
         self.fireEvent(.Despawn, .{self});
         if (self.dimension) |dim| {
-            entities.removeEntity(dim, self);
+            try entities.removeEntity(dim, self);
         }
     }
 };

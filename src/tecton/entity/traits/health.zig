@@ -4,6 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Entity = @import("../entity.zig").Entity;
 const EntityType = @import("../entity-type.zig").EntityType;
 const EntityTrait = @import("./trait.zig").EntityTrait;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const entities = @import("../../world/dimension/entities.zig");
 const broadcast = @import("../../world/dimension/broadcast.zig");
 
@@ -68,37 +69,8 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
     const tecton = dimension.world.tecton;
     markInvulnerable(state, tecton.tick_count);
 
-    {
-        var stream = BinaryStream.init(tecton.allocator, null, null);
-        defer stream.deinit();
-
-        const packet = Protocol.ActorEventPacket{
-            .runtime_entity_id = @bitCast(entity.runtime_id),
-            .event = .HurtAnimation,
-            .data = 0,
-        };
-        const serialized = packet.serialize(&stream) catch return;
-
-        broadcast.broadcastToEntityViewers(dimension, entity, serialized);
-    }
-
-    {
-        var attrs = entity.attributes.collectDirty(tecton.allocator) catch return;
-        defer attrs.deinit(tecton.allocator);
-        if (attrs.items.len == 0) return;
-
-        var stream = BinaryStream.init(tecton.allocator, null, null);
-        defer stream.deinit();
-
-        var attr_packet = Protocol.UpdateAttributesPacket{
-            .runtime_actor_id = entity.runtime_id,
-            .attributes = attrs,
-            .tick = 0,
-        };
-        const serialized = attr_packet.serialize(&stream) catch return;
-
-        broadcast.broadcastToEntityViewers(dimension, entity, serialized);
-    }
+    broadcastHurtAnimation(tecton.allocator, dimension, entity);
+    broadcastDirtyAttributes(tecton.allocator, dimension, entity);
 
     if (!isDead(state.current)) return;
 
@@ -125,6 +97,40 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
         _ = tecton.ecs.queueEntityDrop(@bitCast(entity.ecs_id), entity.position);
     }
     entities.removeEntity(dimension, entity) catch {};
+}
+
+/// A failed hurt-animation packet must not skip the death branch in `onDamage`.
+fn broadcastHurtAnimation(allocator: std.mem.Allocator, dimension: *Dimension, entity: *Entity) void {
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
+
+    const packet = Protocol.ActorEventPacket{
+        .runtime_entity_id = @bitCast(entity.runtime_id),
+        .event = .HurtAnimation,
+        .data = 0,
+    };
+    const serialized = packet.serialize(&stream) catch return;
+
+    broadcast.broadcastToEntityViewers(dimension, entity, serialized);
+}
+
+/// A failed attribute packet or an empty dirty set must not skip the death branch in `onDamage`.
+fn broadcastDirtyAttributes(allocator: std.mem.Allocator, dimension: *Dimension, entity: *Entity) void {
+    var attrs = entity.attributes.collectDirty(allocator) catch return;
+    defer attrs.deinit(allocator);
+    if (attrs.items.len == 0) return;
+
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
+
+    var attr_packet = Protocol.UpdateAttributesPacket{
+        .runtime_actor_id = entity.runtime_id,
+        .attributes = attrs,
+        .tick = 0,
+    };
+    const serialized = attr_packet.serialize(&stream) catch return;
+
+    broadcast.broadcastToEntityViewers(dimension, entity, serialized);
 }
 
 const testing = std.testing;

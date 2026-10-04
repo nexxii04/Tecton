@@ -553,10 +553,11 @@ pub const Bot = struct {
 
     /// Fills the hotbar through the real command channel, one command per `SETUP_PERIOD_NS`.
     fn pumpSetup(self: *Bot, now: std.Io.Timestamp) void {
-        const total = if (self.config.curse_binding)
-            CURSE_STEPS
-        else if (self.config.duel)
+        // Duel wins over curse over give-items: the same order sendSetupCommand uses.
+        const total = if (self.config.duel)
             duelSetupSteps(self.config, duelRole(self.config, self.index))
+        else if (self.config.curse_binding)
+            CURSE_STEPS
         else if (self.config.give_items)
             setupSteps(self.config.enchant_items)
         else

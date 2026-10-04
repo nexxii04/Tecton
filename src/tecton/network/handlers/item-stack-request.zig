@@ -171,13 +171,28 @@ fn sameContainer(a: FullContainerName, b: FullContainerName) bool {
 }
 
 fn armorRemovalBlocked(ctx: *const HandlerContext, action: StackRequestAction) bool {
-    const info = switch (action) {
-        .take, .place => |t| t.source,
-        .swap => |s| s.source,
-        .drop => |d| d.source,
-        .destroy, .consume => |d| d.source,
-        else => return false,
-    };
+    // take/place/swap touch two slots; either end can pull armor that must stay on.
+    switch (action) {
+        .take, .place => |t| {
+            if (armorSlotBlocksRemoval(ctx, t.source)) return true;
+            if (armorSlotBlocksRemoval(ctx, t.destination)) return true;
+        },
+        .swap => |s| {
+            if (armorSlotBlocksRemoval(ctx, s.source)) return true;
+            if (armorSlotBlocksRemoval(ctx, s.destination)) return true;
+        },
+        .drop => |d| {
+            if (armorSlotBlocksRemoval(ctx, d.source)) return true;
+        },
+        .destroy, .consume => |d| {
+            if (armorSlotBlocksRemoval(ctx, d.source)) return true;
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn armorSlotBlocksRemoval(ctx: *const HandlerContext, info: StackRequestSlotInfo) bool {
     if (info.container.identifier != .Armor) return false;
 
     const armor = ctx.inv.armor orelse return false;

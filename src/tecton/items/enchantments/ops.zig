@@ -339,9 +339,9 @@ fn absorbInto(
                 continue;
             }
             const combined: u8 = @intCast(@min(@as(u32, current) + entry.level, @as(u32, definition.max_level)));
-            if (landed) |ids| ids.add(entry.id);
             if (combined != current) {
                 _ = stack.enchantments.set(entry.id, combined);
+                if (landed) |ids| ids.add(entry.id);
                 changed = true;
                 report.merged += 1;
             } else {

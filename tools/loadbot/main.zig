@@ -506,7 +506,6 @@ fn parseArgs(args: []const [:0]const u8) ?Options {
             if (options.duel_level == 0) return null;
         } else if (std.mem.eql(u8, arg, "--duel-thorns")) {
             options.duel_thorns = std.fmt.parseInt(u8, value, 10) catch return null;
-            if (options.duel_thorns > options.duel_pieces) return null;
         } else if (std.mem.eql(u8, arg, "--duel-swings")) {
             options.duel_swings = std.fmt.parseInt(u32, value, 10) catch return null;
             if (options.duel_swings == 0) return null;
@@ -521,6 +520,14 @@ fn parseArgs(args: []const [:0]const u8) ?Options {
         }
     }
 
+    // Scenarios drive mutually exclusive setup flows; mixing them would leave
+    // one pump accounting for steps another sends.
+    if (options.duel and options.curse_binding) return null;
+    if (options.duel and options.inventory) return null;
+    if (options.curse_binding and options.inventory) return null;
+
+    // Checked once both values are final, so flag order does not matter.
+    if (options.duel_thorns > options.duel_pieces) return null;
     if (options.report_seconds == 0) return null;
     return options;
 }
@@ -650,6 +657,25 @@ test "the duel flags describe both sides of the ladder" {
 
     const no_swings = [_][:0]const u8{ "tecton-loadbot", "--duel-swings", "0" };
     try testing.expect(parseArgs(&no_swings) == null);
+
+    // Thorns may arrive before pieces; the budget check runs once both are final.
+    const reversed = [_][:0]const u8{ "tecton-loadbot", "--duel-thorns", "1", "--duel-pieces", "0" };
+    try testing.expect(parseArgs(&reversed) == null);
+}
+
+test "overlapping scenarios are rejected instead of silently picking one" {
+    const duel_curse = [_][:0]const u8{ "tecton-loadbot", "--duel", "--curse-binding" };
+    try testing.expect(parseArgs(&duel_curse) == null);
+
+    const duel_inventory = [_][:0]const u8{ "tecton-loadbot", "--duel", "--inventory" };
+    try testing.expect(parseArgs(&duel_inventory) == null);
+
+    const curse_inventory = [_][:0]const u8{ "tecton-loadbot", "--curse-binding", "--inventory" };
+    try testing.expect(parseArgs(&curse_inventory) == null);
+
+    // `--inventory-hz` implies `--inventory`, so it conflicts the same way.
+    const duel_hz = [_][:0]const u8{ "tecton-loadbot", "--duel", "--inventory-hz", "5" };
+    try testing.expect(parseArgs(&duel_hz) == null);
 }
 
 test "the inventory drag rate is opt in and stays under the input tick rate" {

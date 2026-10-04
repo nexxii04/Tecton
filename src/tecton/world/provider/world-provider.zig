@@ -18,6 +18,7 @@ pub const ChunkColumnData = struct {
             }
         }
         if (self.block_entity_data) |d| allocator.free(d);
+        self.block_entity_data = null;
     }
 };
 
