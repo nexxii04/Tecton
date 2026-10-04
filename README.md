@@ -7,7 +7,7 @@
 **Zero GC. Manual memory control. Deterministic 20 TPS.**
 
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-F7A41D?style=for-the-badge&logo=zig&logoColor=white)](https://ziglang.org/)
-[![MCBE](https://img.shields.io/badge/Minecraft-Bedrock%201.26.45-62B47A?style=for-the-badge&logo=minecraft&logoColor=white)](https://www.minecraft.net/)
+[![MCBE](https://img.shields.io/badge/Minecraft-Bedrock%201.26.50-62B47A?style=for-the-badge&logo=minecraft&logoColor=white)](https://www.minecraft.net/)
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-4C566A?style=for-the-badge)](#-quick-start)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](./LICENSE)
 
