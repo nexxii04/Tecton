@@ -66,8 +66,7 @@ pub fn decode(data: []const u8, allocator: std.mem.Allocator) !Decoded {
         return .{ .packets = packets, .buffer = owned, .allocator = allocator };
     }
 
-    // A method byte exists only for 0x00/0x01/0xFF; any other byte is already
-    // the first byte of the frame.
+    // The method byte exists only for 0x00/0x01/0xFF; any other byte starts the frame.
     const method: u8 = if (data.len > 1) data[1] else METHOD_NOT_PRESENT;
     const has_method_byte = method == METHOD_ZLIB or method == METHOD_SNAPPY or method == METHOD_NONE;
     const payload = if (has_method_byte) data[2..] else data[1..];
