@@ -1,5 +1,5 @@
 const std = @import("std");
-const loader = @import("conduit-plugin-loader");
+const loader = @import("tecton-plugin-loader");
 const abi = loader.abi;
 const options = @import("plugin-options");
 

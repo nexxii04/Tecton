@@ -1,7 +1,7 @@
 .{
-    .name = .Conduit,
+    .name = .Tecton,
     .version = "0.3.0",
-    .fingerprint = 0x32066b1dbd1df1eb,
+    .fingerprint = 0x450bb029679e1fba,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zlib = .{

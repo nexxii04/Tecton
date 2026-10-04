@@ -64,27 +64,27 @@ pub fn build(b: *std.Build) void {
     protocol_mod.addImport("BinaryStream", binarystream_mod);
 
     const leveldb_mod = b.addModule("leveldb", .{ .root_source_file = b.path("libs/leveldb/leveldb.zig"), .target = target });
-    const conduit_mod = b.addModule("conduit", .{ .root_source_file = b.path("src/conduit/root.zig"), .target = target });
-    conduit_mod.addImport("BinaryStream", binarystream_mod);
-    conduit_mod.addImport("Raknet", raknet_mod);
-    conduit_mod.addImport("protocol", protocol_mod);
-    conduit_mod.addImport("nbt", nbt_mod);
-    conduit_mod.addImport("leveldb", leveldb_mod);
-    conduit_mod.linkLibrary(zlib_dep.artifact("z"));
+    const tecton_mod = b.addModule("tecton", .{ .root_source_file = b.path("src/tecton/root.zig"), .target = target });
+    tecton_mod.addImport("BinaryStream", binarystream_mod);
+    tecton_mod.addImport("Raknet", raknet_mod);
+    tecton_mod.addImport("protocol", protocol_mod);
+    tecton_mod.addImport("nbt", nbt_mod);
+    tecton_mod.addImport("leveldb", leveldb_mod);
+    tecton_mod.linkLibrary(zlib_dep.artifact("z"));
     if (is_windows) {
-        conduit_mod.linkSystemLibrary("psapi", .{});
-        conduit_mod.linkSystemLibrary("ws2_32", .{});
+        tecton_mod.linkSystemLibrary("psapi", .{});
+        tecton_mod.linkSystemLibrary("ws2_32", .{});
     }
 
     const exe = b.addExecutable(.{
-        .name = "Conduit",
+        .name = "Tecton",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libcpp = true,
             .imports = &.{
-                .{ .name = "conduit", .module = conduit_mod },
+                .{ .name = "tecton", .module = tecton_mod },
                 .{ .name = "protocol", .module = protocol_mod },
                 .{ .name = "nbt", .module = nbt_mod },
                 .{ .name = "leveldb", .module = leveldb_mod },
@@ -98,14 +98,14 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     const embedded_example = b.addExecutable(.{
-        .name = "ConduitEmbeddedExample",
+        .name = "TectonEmbeddedExample",
         .root_module = b.createModule(.{
             .root_source_file = b.path("examples/embedded_server.zig"),
             .target = target,
             .optimize = optimize,
             .link_libcpp = true,
             .imports = &.{
-                .{ .name = "conduit", .module = conduit_mod },
+                .{ .name = "tecton", .module = tecton_mod },
                 .{ .name = "protocol", .module = protocol_mod },
                 .{ .name = "nbt", .module = nbt_mod },
                 .{ .name = "leveldb", .module = leveldb_mod },
@@ -132,7 +132,7 @@ pub fn build(b: *std.Build) void {
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
     const chest_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/conduit/chest-test-root.zig"),
+        .root_source_file = b.path("src/tecton/chest-test-root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libcpp = true,
@@ -149,7 +149,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/library/embedded_api_test.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "conduit", .module = conduit_mod }},
+        .imports = &.{.{ .name = "tecton", .module = tecton_mod }},
     });
     const library_tests = b.addTest(.{ .root_module = library_test_mod });
     library_tests.root_module.linkLibrary(leveldb_lib);
@@ -157,11 +157,11 @@ pub fn build(b: *std.Build) void {
     const run_library_tests = b.addRunArtifact(library_tests);
 
     const plugin_options = b.addOptions();
-    const plugin_library_path = if (is_windows) b.pathFromRoot("zig-out/bin/conduit-c-example.dll") else if (is_macos) b.pathFromRoot("zig-out/lib/libconduit-c-example.dylib") else b.pathFromRoot("zig-out/lib/libconduit-c-example.so");
+    const plugin_library_path = if (is_windows) b.pathFromRoot("zig-out/bin/tecton-c-example.dll") else if (is_macos) b.pathFromRoot("zig-out/lib/libtecton-c-example.dylib") else b.pathFromRoot("zig-out/lib/libtecton-c-example.so");
     plugin_options.addOption([]const u8, "path", plugin_library_path);
     const plugin_test_mod = b.createModule(.{ .root_source_file = b.path("tests/plugins/plugin_test.zig"), .target = target, .optimize = optimize, .link_libc = true });
-    const plugin_loader_mod = b.createModule(.{ .root_source_file = b.path("src/conduit/plugins/dynamic_loader.zig"), .target = target, .optimize = optimize });
-    plugin_test_mod.addImport("conduit-plugin-loader", plugin_loader_mod);
+    const plugin_loader_mod = b.createModule(.{ .root_source_file = b.path("src/tecton/plugins/dynamic_loader.zig"), .target = target, .optimize = optimize });
+    plugin_test_mod.addImport("tecton-plugin-loader", plugin_loader_mod);
     plugin_test_mod.addOptions("plugin-options", plugin_options);
     const plugin_tests = b.addTest(.{ .root_module = plugin_test_mod });
     const run_plugin_tests = b.addRunArtifact(plugin_tests);
@@ -221,7 +221,7 @@ fn addPluginExample(
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
     const native_example = b.addLibrary(.{
-        .name = "conduit-c-example",
+        .name = "tecton-c-example",
         .linkage = .dynamic,
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
     });
@@ -245,7 +245,7 @@ fn addLoadbot(
         .imports = imports,
     });
     loadbot_mod.linkLibrary(zlib_dep.artifact("z"));
-    const loadbot_exe = b.addExecutable(.{ .name = "ConduitLoadBot", .root_module = loadbot_mod });
+    const loadbot_exe = b.addExecutable(.{ .name = "TectonLoadBot", .root_module = loadbot_mod });
     b.installArtifact(loadbot_exe);
 
     const loadbot_step = b.step("loadbot", "Build the load bot harness");

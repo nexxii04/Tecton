@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Server = @import("conduit").Server;
+const Server = @import("tecton").Server;
 
 const winmm = if (builtin.os.tag == .windows) struct {
     extern "winmm" fn timeBeginPeriod(uPeriod: c_uint) callconv(.winapi) c_uint;

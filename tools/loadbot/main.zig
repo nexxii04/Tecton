@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 
 const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
@@ -9,7 +10,7 @@ const Counters = bot_mod.Counters;
 const Layout = bot_mod.Layout;
 
 const usage =
-    \\Usage: conduit-loadbot [options]
+    \\Usage: tecton-loadbot [options]
     \\
     \\Drives fake Bedrock clients against a running server so the player ceiling
     \\can be measured without real clients. Reports the traffic it generates; the
@@ -28,6 +29,33 @@ const usage =
     \\                        grid: one bot per spacing (default); cluster:
     \\                        everyone in one chunk, worst-case movement fan-out
     \\  --spacing <blocks>    grid spacing and walking patrol length (default 16)
+    \\  --spawn-y <blocks>    height the bots report (default 100; they never
+    \\                        fall, so a ground-level visual check sets it)
+    \\  --inventory           after spawning, drag a stack between two hotbar
+    \\                        slots with real ItemStackRequest packets
+    \\  --inventory-hz <n>    drags per bot per second (default 10, max 20)
+    \\  --give-items          fill the hotbar through /give before the hold
+    \\  --enchant-items       also /enchant every hotbar slot (implies
+    \\                        --give-items); the inventories persist on disk,
+    \\                        so a later run with the same names starts seeded
+    \\  --curse-binding       run the armor scenario instead (implies
+    \\                        --give-items): give boots, curse them, equip them
+    \\                        through an ItemStackRequest, take an empty armor
+    \\                        slot off as a control and then try to take the
+    \\                        cursed piece off, which the server must refuse
+    \\  --duel                run the two-bot protection/thorns scenario
+    \\                        (requires --bots 2): bot 0 swings, bot 1 wears
+    \\                        the armor and reports its own health. Flags:
+    \\    --duel-pieces <0-4>   armor pieces the victim wears (default 4)
+    \\    --duel-enchant <name> enchantment on them; "none" skips it and measures
+    \\                          bare diamond (default protection)
+    \\    --duel-level <n>      level for that enchantment (default 4)
+    \\    --duel-thorns <0-4>   pieces that also carry Thorns III (default 0)
+    \\    --duel-swings <n>     hits the attacker throws (default 20)
+    \\    --duel-weapon <none|item>
+    \\                          item in the attacker's hand; "none" swings the
+    \\                          fist (1 damage), which stretches a Thorns sample
+    \\                          (default diamond_sword)
     \\  --no-compress         send uncompressed datagrams (less bot CPU)
     \\  --report <seconds>    interval between progress lines (default 5)
     \\  --mtu <bytes>         RakNet MTU to offer (default 1492)
@@ -48,6 +76,19 @@ const Options = struct {
     speed: f32 = 4.3,
     layout: Layout = .grid,
     spacing: f32 = 16.0,
+    spawn_y: f32 = 100.0,
+    inventory: bool = false,
+    inventory_hz: u32 = 10,
+    give_items: bool = false,
+    enchant_items: bool = false,
+    curse_binding: bool = false,
+    duel: bool = false,
+    duel_pieces: u8 = 4,
+    duel_enchant: []const u8 = "protection",
+    duel_level: u8 = 4,
+    duel_thorns: u8 = 0,
+    duel_swings: u32 = 20,
+    duel_weapon: []const u8 = "diamond_sword",
     compress: bool = true,
     report_seconds: u64 = 5,
     mtu_size: u16 = 1492,
@@ -61,6 +102,21 @@ const Snapshot = struct {
     bytes_received: u64,
     move_packets: u64,
     chunk_packets: u64,
+    inv_requests: u64,
+    inv_responses: u64,
+    inv_errors: u64,
+    inv_content_packets: u64,
+    inv_content_bytes: u64,
+    inv_slot_packets: u64,
+    inv_slot_bytes: u64,
+    commands_sent: u64,
+    command_outputs: u64,
+    command_failures: u64,
+    curse_held: u64,
+    curse_leaks: u64,
+    curse_control: u64,
+    duel_ready: u64,
+    duel_swings: u64,
 
     fn take(counters: *const Counters) Snapshot {
         return .{
@@ -70,6 +126,21 @@ const Snapshot = struct {
             .bytes_received = counters.bytes_received.load(.monotonic),
             .move_packets = counters.move_packets.load(.monotonic),
             .chunk_packets = counters.chunk_packets.load(.monotonic),
+            .inv_requests = counters.inv_requests.load(.monotonic),
+            .inv_responses = counters.inv_responses.load(.monotonic),
+            .inv_errors = counters.inv_errors.load(.monotonic),
+            .inv_content_packets = counters.inv_content_packets.load(.monotonic),
+            .inv_content_bytes = counters.inv_content_bytes.load(.monotonic),
+            .inv_slot_packets = counters.inv_slot_packets.load(.monotonic),
+            .inv_slot_bytes = counters.inv_slot_bytes.load(.monotonic),
+            .commands_sent = counters.commands_sent.load(.monotonic),
+            .command_outputs = counters.command_outputs.load(.monotonic),
+            .command_failures = counters.command_failures.load(.monotonic),
+            .curse_held = counters.curse_held.load(.monotonic),
+            .curse_leaks = counters.curse_leaks.load(.monotonic),
+            .curse_control = counters.curse_control.load(.monotonic),
+            .duel_ready = counters.duel_ready.load(.monotonic),
+            .duel_swings = counters.duel_swings.load(.monotonic),
         };
     }
 };
@@ -93,6 +164,11 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     }
 
+    if (options.duel and options.bots != 2) {
+        print(io, "the duel scenario is two bots: bot 0 swings, bot 1 wears (--bots 2)\n", .{});
+        std.process.exit(2);
+    }
+
     // ZigNet panics if its logger was never initialised.
     Raknet.Logger.init(allocator);
 
@@ -111,6 +187,19 @@ pub fn main(init: std.process.Init) !void {
         .speed = options.speed,
         .layout = options.layout,
         .spacing = options.spacing,
+        .spawn_y = options.spawn_y,
+        .inventory = options.inventory,
+        .inventory_hz = options.inventory_hz,
+        .give_items = options.give_items,
+        .enchant_items = options.enchant_items,
+        .curse_binding = options.curse_binding,
+        .duel = options.duel,
+        .duel_pieces = options.duel_pieces,
+        .duel_enchant = options.duel_enchant,
+        .duel_level = options.duel_level,
+        .duel_thorns = options.duel_thorns,
+        .duel_swings = options.duel_swings,
+        .duel_weapon = options.duel_weapon,
         .frame_options = .{ .compress = options.compress },
         .server_address = server_address,
         .game_version = Protocol.MINECRAFT_VERSION,
@@ -120,7 +209,7 @@ pub fn main(init: std.process.Init) !void {
 
     print(
         io,
-        "conduit-loadbot -> {s}  bots={d} ramp={d}/s hold={d}s layout={s} walk={} compress={}\n",
+        "tecton-loadbot -> {s}  bots={d} ramp={d}/s hold={d}s layout={s} walk={} compress={} inventory={} give={} enchant={} curse={} duel={}\n",
         .{
             server_address,
             options.bots,
@@ -129,6 +218,11 @@ pub fn main(init: std.process.Init) !void {
             @tagName(options.layout),
             options.walk,
             options.compress,
+            options.inventory,
+            options.give_items,
+            options.enchant_items,
+            options.curse_binding,
+            options.duel,
         },
     );
 
@@ -198,6 +292,56 @@ pub fn main(init: std.process.Init) !void {
             },
         );
 
+        if (options.inventory) {
+            print(
+                io,
+                "           inventory: drag {d:>7.0}/s resp {d:>7.0}/s err {d:>7.0}/s content {d:>6.0}/s slot {d:>6.0}/s\n",
+                .{
+                    rate(current.inv_requests - previous.inv_requests, seconds),
+                    rate(current.inv_responses - previous.inv_responses, seconds),
+                    rate(current.inv_errors - previous.inv_errors, seconds),
+                    rate(current.inv_content_packets - previous.inv_content_packets, seconds),
+                    rate(current.inv_slot_packets - previous.inv_slot_packets, seconds),
+                },
+            );
+            print(
+                io,
+                "           container bytes: content {d:.1} B/packet, slot {d:.1} B/packet\n",
+                .{
+                    perPacket(current.inv_content_bytes, current.inv_content_packets),
+                    perPacket(current.inv_slot_bytes, current.inv_slot_packets),
+                },
+            );
+        }
+
+        if (options.give_items) {
+            print(
+                io,
+                "           setup: {d} commands sent, {d} answered, {d} refused\n",
+                .{
+                    current.commands_sent,
+                    current.command_outputs,
+                    current.command_failures,
+                },
+            );
+        }
+
+        if (options.curse_binding) {
+            print(
+                io,
+                "           curse of binding: {d} refusals, {d} leaks, {d} refused controls\n",
+                .{ current.curse_held, current.curse_leaks, current.curse_control },
+            );
+        }
+
+        if (options.duel) {
+            print(
+                io,
+                "           duel: ready {d}, swings thrown {d}\n",
+                .{ current.duel_ready, current.duel_swings },
+            );
+        }
+
         previous = current;
     }
 
@@ -226,6 +370,57 @@ pub fn main(init: std.process.Init) !void {
             final.move_packets,
         },
     );
+
+    if (options.inventory) {
+        print(
+            io,
+            "         inventory: {d} drags, {d} responses, {d} errors, {d} content packets, {d} slot packets\n" ++
+                "         container bytes: content {d:.1} B/packet, slot {d:.1} B/packet\n",
+            .{
+                final.inv_requests,
+                final.inv_responses,
+                final.inv_errors,
+                final.inv_content_packets,
+                final.inv_slot_packets,
+                perPacket(final.inv_content_bytes, final.inv_content_packets),
+                perPacket(final.inv_slot_bytes, final.inv_slot_packets),
+            },
+        );
+    }
+
+    if (options.give_items) {
+        print(
+            io,
+            "         setup: {d} commands sent, {d} answered, {d} refused\n",
+            .{ final.commands_sent, final.command_outputs, final.command_failures },
+        );
+    }
+
+    if (options.curse_binding) {
+        print(
+            io,
+            "         curse of binding: {d} refusals, {d} leaks, {d} refused controls ({d} armor requests)\n",
+            .{ final.curse_held, final.curse_leaks, final.curse_control, final.inv_requests },
+        );
+        if (final.inv_requests == 0) {
+            print(io, "         the scenario sent no armor request: nothing was proven\n", .{});
+        } else if (final.curse_held == 0) {
+            print(io, "         no bot ever saw the removal refused: nothing was proven\n", .{});
+        }
+    }
+
+    if (options.duel) {
+        print(
+            io,
+            "         duel: ready {d}, swings thrown {d}\n",
+            .{ final.duel_ready, final.duel_swings },
+        );
+        if (final.duel_swings == 0) {
+            print(io, "         the attacker threw no swing: nothing was proven\n", .{});
+        } else if (final.duel_swings < options.duel_swings) {
+            print(io, "         the swing budget was not used up; see the bot verdicts\n", .{});
+        }
+    }
 }
 
 fn parseArgs(args: []const [:0]const u8) ?Options {
@@ -246,6 +441,28 @@ fn parseArgs(args: []const [:0]const u8) ?Options {
         }
         if (std.mem.eql(u8, arg, "--verbose")) {
             options.verbose = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--inventory")) {
+            options.inventory = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--give-items")) {
+            options.give_items = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--enchant-items")) {
+            options.give_items = true;
+            options.enchant_items = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--curse-binding")) {
+            options.give_items = true;
+            options.curse_binding = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--duel")) {
+            options.duel = true;
             continue;
         }
 
@@ -273,6 +490,27 @@ fn parseArgs(args: []const [:0]const u8) ?Options {
             options.layout = std.meta.stringToEnum(Layout, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--spacing")) {
             options.spacing = std.fmt.parseFloat(f32, value) catch return null;
+        } else if (std.mem.eql(u8, arg, "--spawn-y")) {
+            options.spawn_y = std.fmt.parseFloat(f32, value) catch return null;
+        } else if (std.mem.eql(u8, arg, "--inventory-hz")) {
+            options.inventory_hz = std.fmt.parseInt(u32, value, 10) catch return null;
+            if (options.inventory_hz == 0 or options.inventory_hz > 20) return null;
+            options.inventory = true;
+        } else if (std.mem.eql(u8, arg, "--duel-pieces")) {
+            options.duel_pieces = std.fmt.parseInt(u8, value, 10) catch return null;
+            if (options.duel_pieces > 4) return null;
+        } else if (std.mem.eql(u8, arg, "--duel-enchant")) {
+            options.duel_enchant = value;
+        } else if (std.mem.eql(u8, arg, "--duel-level")) {
+            options.duel_level = std.fmt.parseInt(u8, value, 10) catch return null;
+            if (options.duel_level == 0) return null;
+        } else if (std.mem.eql(u8, arg, "--duel-thorns")) {
+            options.duel_thorns = std.fmt.parseInt(u8, value, 10) catch return null;
+        } else if (std.mem.eql(u8, arg, "--duel-swings")) {
+            options.duel_swings = std.fmt.parseInt(u32, value, 10) catch return null;
+            if (options.duel_swings == 0) return null;
+        } else if (std.mem.eql(u8, arg, "--duel-weapon")) {
+            options.duel_weapon = value;
         } else if (std.mem.eql(u8, arg, "--report")) {
             options.report_seconds = std.fmt.parseInt(u64, value, 10) catch return null;
         } else if (std.mem.eql(u8, arg, "--mtu")) {
@@ -282,12 +520,25 @@ fn parseArgs(args: []const [:0]const u8) ?Options {
         }
     }
 
+    // Scenarios drive mutually exclusive setup flows; mixing them would leave
+    // one pump accounting for steps another sends.
+    if (options.duel and options.curse_binding) return null;
+    if (options.duel and options.inventory) return null;
+    if (options.curse_binding and options.inventory) return null;
+
+    // Checked once both values are final, so flag order does not matter.
+    if (options.duel_thorns > options.duel_pieces) return null;
     if (options.report_seconds == 0) return null;
     return options;
 }
 
 fn rate(delta: u64, seconds: f64) f64 {
     return @as(f64, @floatFromInt(delta)) / seconds;
+}
+
+fn perPacket(bytes: u64, packets: u64) f64 {
+    if (packets == 0) return 0;
+    return @as(f64, @floatFromInt(bytes)) / @as(f64, @floatFromInt(packets));
 }
 
 fn formatBytes(out: []u8, delta: u64, seconds: f64) []const u8 {
@@ -301,8 +552,7 @@ fn formatBytes(out: []u8, delta: u64, seconds: f64) []const u8 {
     return std.fmt.bufPrint(out, "{d:.1} {s}", .{ value, units[unit] }) catch "?";
 }
 
-/// Movement updates per bot per second; a walking bot fans out to every bot
-/// that can see it.
+/// Movement updates per bot per second.
 fn movementPerBot(out: []u8, spawned: u64, move_delta: u64, seconds: f64) []const u8 {
     if (spawned == 0) return "";
 
@@ -316,11 +566,9 @@ fn print(io: std.Io, comptime format: []const u8, args: anytype) void {
     std.Io.File.stdout().writeStreamingAll(io, text) catch {};
 }
 
-const testing = std.testing;
-
 test "parseArgs reads every option" {
     const argv = [_][:0]const u8{
-        "conduit-loadbot",
+        "tecton-loadbot",
         "--host",
         "10.0.0.5",
         "--port",
@@ -336,7 +584,11 @@ test "parseArgs reads every option" {
         "cluster",
         "--spacing",
         "8",
+        "--spawn-y",
+        "-57",
         "--no-compress",
+        "--inventory-hz",
+        "5",
     };
 
     const options = parseArgs(&argv) orelse return error.TestUnexpectedResult;
@@ -348,16 +600,103 @@ test "parseArgs reads every option" {
     try testing.expect(options.walk);
     try testing.expectEqual(Layout.cluster, options.layout);
     try testing.expectEqual(@as(f32, 8), options.spacing);
+    try testing.expectEqual(@as(f32, -57), options.spawn_y);
     try testing.expect(!options.compress);
+    try testing.expect(options.inventory);
+    try testing.expectEqual(@as(u32, 5), options.inventory_hz);
+    try testing.expect(!options.give_items);
+}
+
+test "enchanting the items implies giving them first" {
+    const enchant = [_][:0]const u8{ "tecton-loadbot", "--enchant-items" };
+    const options = parseArgs(&enchant) orelse return error.TestUnexpectedResult;
+    try testing.expect(options.give_items);
+    try testing.expect(options.enchant_items);
+}
+
+test "the curse scenario implies giving the item it wears" {
+    const curse = [_][:0]const u8{ "tecton-loadbot", "--curse-binding" };
+    const options = parseArgs(&curse) orelse return error.TestUnexpectedResult;
+    try testing.expect(options.curse_binding);
+    try testing.expect(options.give_items);
+    try testing.expect(!options.enchant_items);
+    try testing.expect(!options.inventory);
+}
+
+test "the duel flags describe both sides of the ladder" {
+    const ladder = [_][:0]const u8{
+        "tecton-loadbot", "--duel",     "--bots",        "2",
+        "--duel-pieces",  "2",          "--duel-thorns", "1",
+        "--duel-enchant", "protection", "--duel-level",  "4",
+        "--duel-swings",  "8",          "--duel-weapon", "none",
+    };
+
+    const options = parseArgs(&ladder) orelse return error.TestUnexpectedResult;
+    try testing.expect(options.duel);
+    try testing.expectEqual(@as(u8, 2), options.duel_pieces);
+    try testing.expectEqual(@as(u8, 1), options.duel_thorns);
+    try testing.expectEqualStrings("protection", options.duel_enchant);
+    try testing.expectEqual(@as(u8, 4), options.duel_level);
+    try testing.expectEqual(@as(u32, 8), options.duel_swings);
+    try testing.expectEqualStrings("none", options.duel_weapon);
+
+    const braceless = [_][:0]const u8{ "tecton-loadbot", "--duel" };
+    const defaults = parseArgs(&braceless) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u8, 4), defaults.duel_pieces);
+    try testing.expectEqual(@as(u8, 0), defaults.duel_thorns);
+    try testing.expectEqual(@as(u8, 4), defaults.duel_level);
+    try testing.expectEqual(@as(u32, 20), defaults.duel_swings);
+    try testing.expectEqualStrings("protection", defaults.duel_enchant);
+    try testing.expectEqualStrings("diamond_sword", defaults.duel_weapon);
+
+    const too_many = [_][:0]const u8{ "tecton-loadbot", "--duel-pieces", "5" };
+    try testing.expect(parseArgs(&too_many) == null);
+
+    const no_piece = [_][:0]const u8{ "tecton-loadbot", "--duel-pieces", "0", "--duel-thorns", "1" };
+    try testing.expect(parseArgs(&no_piece) == null);
+
+    const no_swings = [_][:0]const u8{ "tecton-loadbot", "--duel-swings", "0" };
+    try testing.expect(parseArgs(&no_swings) == null);
+
+    // Thorns may arrive before pieces; the budget check runs once both are final.
+    const reversed = [_][:0]const u8{ "tecton-loadbot", "--duel-thorns", "1", "--duel-pieces", "0" };
+    try testing.expect(parseArgs(&reversed) == null);
+}
+
+test "overlapping scenarios are rejected instead of silently picking one" {
+    const duel_curse = [_][:0]const u8{ "tecton-loadbot", "--duel", "--curse-binding" };
+    try testing.expect(parseArgs(&duel_curse) == null);
+
+    const duel_inventory = [_][:0]const u8{ "tecton-loadbot", "--duel", "--inventory" };
+    try testing.expect(parseArgs(&duel_inventory) == null);
+
+    const curse_inventory = [_][:0]const u8{ "tecton-loadbot", "--curse-binding", "--inventory" };
+    try testing.expect(parseArgs(&curse_inventory) == null);
+
+    // `--inventory-hz` implies `--inventory`, so it conflicts the same way.
+    const duel_hz = [_][:0]const u8{ "tecton-loadbot", "--duel", "--inventory-hz", "5" };
+    try testing.expect(parseArgs(&duel_hz) == null);
+}
+
+test "the inventory drag rate is opt in and stays under the input tick rate" {
+    const off = [_][:0]const u8{"tecton-loadbot"};
+    const default_options = parseArgs(&off) orelse return error.TestUnexpectedResult;
+    try testing.expect(!default_options.inventory);
+
+    const too_fast = [_][:0]const u8{ "tecton-loadbot", "--inventory-hz", "21" };
+    try testing.expect(parseArgs(&too_fast) == null);
+
+    const zero = [_][:0]const u8{ "tecton-loadbot", "--inventory-hz", "0" };
+    try testing.expect(parseArgs(&zero) == null);
 }
 
 test "parseArgs rejects unknown flags and missing values" {
-    const unknown = [_][:0]const u8{ "conduit-loadbot", "--wat" };
+    const unknown = [_][:0]const u8{ "tecton-loadbot", "--wat" };
     try testing.expect(parseArgs(&unknown) == null);
 
-    const missing_value = [_][:0]const u8{ "conduit-loadbot", "--bots" };
+    const missing_value = [_][:0]const u8{ "tecton-loadbot", "--bots" };
     try testing.expect(parseArgs(&missing_value) == null);
 
-    const bad_layout = [_][:0]const u8{ "conduit-loadbot", "--layout", "spiral" };
+    const bad_layout = [_][:0]const u8{ "tecton-loadbot", "--layout", "spiral" };
     try testing.expect(parseArgs(&bad_layout) == null);
 }

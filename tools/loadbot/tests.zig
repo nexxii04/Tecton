@@ -34,6 +34,12 @@ test "the forged login chain is accepted by the decoder the server uses" {
     try std.testing.expectEqualStrings("25350000000001", data.identity_data.xuid);
     try std.testing.expectEqual(@as(usize, 36), data.identity_data.identity.len);
     try std.testing.expectEqualStrings("Standard_Custom", data.client_data.skin_id);
+    // 1.26.40+ clients drop the session when a peer's skin image is 0x0.
+    try std.testing.expectEqual(@as(i64, 64), data.client_data.skin_image_width);
+    try std.testing.expectEqual(@as(i64, 64), data.client_data.skin_image_height);
+    const pixels = try data.client_data.decodeSkinPixels(allocator);
+    defer allocator.free(pixels);
+    try std.testing.expectEqual(@as(usize, 64 * 64 * 4), pixels.len);
     try std.testing.expectEqual(@as(i64, 7), data.client_data.device_os);
     try std.testing.expectEqual(@as(i64, -1), data.client_data.gui_scale);
     try std.testing.expectEqualStrings("127.0.0.1:19132", data.client_data.server_address);

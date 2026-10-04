@@ -1,13 +1,46 @@
-//! Mints the login chain of a fake client: offline mode only decodes it, while
-//! online mode refuses a chain not anchored at Mojang's root key.
+//! Builds the login chain of a fake client for offline mode.
 const std = @import("std");
 
 pub const Params = struct {
     server_address: []const u8,
     game_version: []const u8,
-    device_model: []const u8 = "Conduit LoadBot",
+    device_model: []const u8 = "Tecton LoadBot",
     device_os: i64 = 7,
 };
+
+/// 1.26.40+ clients close the session on a zero-sized skin image, so the token
+/// must declare real dimensions.
+const skin_edge: usize = 64;
+const skin_pixel_bytes = skin_edge * skin_edge * 4;
+
+const skin_palette = [_][3]u8{
+    .{ 62, 138, 214 },
+    .{ 214, 92, 84 },
+    .{ 96, 196, 122 },
+    .{ 226, 178, 64 },
+};
+
+fn skinPixels(index: usize, out: *[skin_pixel_bytes]u8) void {
+    const base = skin_palette[index % skin_palette.len];
+    var offset: usize = 0;
+    for (0..skin_edge) |y| {
+        for (0..skin_edge) |x| {
+            const dim: usize = if ((x / 8 + y / 8) % 2 == 0) 100 else 72;
+            out[offset] = @intCast(base[0] * dim / 100);
+            out[offset + 1] = @intCast(base[1] * dim / 100);
+            out[offset + 2] = @intCast(base[2] * dim / 100);
+            out[offset + 3] = 255;
+            offset += 4;
+        }
+    }
+}
+
+fn base64(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    const encoder = std.base64.standard.Encoder;
+    const out = try allocator.alloc(u8, encoder.calcSize(bytes.len));
+    _ = encoder.encode(out, bytes);
+    return out;
+}
 
 pub const Credentials = struct {
     identity: []u8,
@@ -55,21 +88,46 @@ pub fn forge(
     const self_signed_id = try std.fmt.allocPrint(allocator, "00000000-0000-4000-8000-{d:0>12}", .{index});
     defer allocator.free(self_signed_id);
 
+    var pixels: [skin_pixel_bytes]u8 = undefined;
+    skinPixels(index, &pixels);
+
+    const skin_data = try base64(allocator, &pixels);
+    defer allocator.free(skin_data);
+
+    const skin_resource_patch = try base64(
+        allocator,
+        "{\"geometry\":{\"default\":\"geometry.humanoid.custom\"}}",
+    );
+    defer allocator.free(skin_resource_patch);
+
+    const skin_geometry_data = try base64(
+        allocator,
+        "{\"format_version\":\"1.12.0\",\"minecraft:geometry\":[{\"description\":{" ++
+            "\"identifier\":\"geometry.humanoid.custom\",\"texture_width\":64," ++
+            "\"texture_height\":64,\"visible_bounds_width\":2.0," ++
+            "\"visible_bounds_height\":3.0,\"visible_bounds_offset\":[0.0,1.5,0.0]}," ++
+            "\"bones\":[]}]}",
+    );
+    defer allocator.free(skin_geometry_data);
+
+    const skin_geometry_engine_version = try base64(allocator, "1.14.0");
+    defer allocator.free(skin_geometry_engine_version);
+
     const client_payload = try std.fmt.allocPrint(
         allocator,
         "{{" ++
             "\"SkinId\":\"Standard_Custom\"," ++
             "\"PlayFabId\":\"\"," ++
-            "\"SkinResourcePatch\":\"\"," ++
-            "\"SkinImageHeight\":0," ++
-            "\"SkinImageWidth\":0," ++
-            "\"SkinData\":\"\"," ++
+            "\"SkinResourcePatch\":\"{s}\"," ++
+            "\"SkinImageHeight\":64," ++
+            "\"SkinImageWidth\":64," ++
+            "\"SkinData\":\"{s}\"," ++
             "\"CapeImageHeight\":0," ++
             "\"CapeImageWidth\":0," ++
             "\"CapeData\":\"\"," ++
             "\"CapeId\":\"\"," ++
-            "\"SkinGeometryData\":\"\"," ++
-            "\"SkinGeometryDataEngineVersion\":\"\"," ++
+            "\"SkinGeometryData\":\"{s}\"," ++
+            "\"SkinGeometryDataEngineVersion\":\"{s}\"," ++
             "\"SkinAnimationData\":\"\"," ++
             "\"AnimatedImageData\":[]," ++
             "\"PersonaSkin\":false," ++
@@ -95,6 +153,10 @@ pub fn forge(
             "\"GuiScale\":-1" ++
             "}}",
         .{
+            skin_resource_patch,
+            skin_data,
+            skin_geometry_data,
+            skin_geometry_engine_version,
             params.device_model,
             params.device_os,
             self_signed_id,
