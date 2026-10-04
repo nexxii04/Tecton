@@ -1,0 +1,219 @@
+const std = @import("std");
+const Protocol = @import("protocol");
+const BinaryStream = @import("BinaryStream").BinaryStream;
+const Entity = @import("../entity.zig").Entity;
+const EntityTrait = @import("./trait.zig").EntityTrait;
+const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
+const MoveDelta = @import("../../player/move-delta.zig");
+const broadcast = @import("../../world/dimension/broadcast.zig");
+
+pub const State = struct {
+    force: f32,
+    drag: f32,
+    apply_drag_before_gravity: bool,
+    falling_distance: f32,
+    falling_ticks: u32,
+    on_ground: bool,
+    // Airborne broadcasts are skipped, so a falling mob pays nothing per tick.
+    broadcast_cooldown: u8 = 0,
+};
+
+const AirBroadcast = struct { cooldown: u8, send: bool };
+
+/// One tick of the in-air broadcast cadence; physics noise below the position
+/// epsilon does not restart it.
+fn tickAirBroadcast(cooldown: u8, moved: bool, interval: u8) AirBroadcast {
+    if (cooldown > 0) return .{ .cooldown = cooldown - 1, .send = false };
+    if (!moved) return .{ .cooldown = 0, .send = false };
+    return .{ .cooldown = if (interval <= 1) 0 else interval - 1, .send = true };
+}
+
+fn isAirAt(dimension: *Dimension, x: i32, y: i32, z: i32) bool {
+    const pos = Protocol.BlockPosition{ .x = x, .y = y, .z = z };
+    const perm = dimension.getPermutation(pos, 0) catch return true;
+    return std.mem.eql(u8, perm.identifier, "minecraft:air");
+}
+
+fn hasMotion(entity: *Entity) bool {
+    return @abs(entity.motion.x) > 0.001 or @abs(entity.motion.y) > 0.001 or @abs(entity.motion.z) > 0.001;
+}
+
+fn applyAirPhysics(motion: *Protocol.Vector3f, drag: f32, gravity: f32, apply_drag_before_gravity: bool) void {
+    if (apply_drag_before_gravity and drag > 0) {
+        motion.x *= 1.0 - drag;
+        motion.y *= 1.0 - drag;
+        motion.z *= 1.0 - drag;
+    }
+
+    motion.y += gravity;
+
+    if (!apply_drag_before_gravity and drag > 0) {
+        motion.x *= 1.0 - drag;
+        motion.y *= 1.0 - drag;
+        motion.z *= 1.0 - drag;
+    }
+}
+
+fn onTick(state: *State, entity: *Entity) void {
+    const dimension = entity.dimension orelse return;
+    const previous_position = entity.position;
+
+    applyAirPhysics(&entity.motion, state.drag, state.force, state.apply_drag_before_gravity);
+
+    const new_pos = entity.position.add(entity.motion);
+    entity.position = Protocol.Vector3f.init(new_pos.x, new_pos.y, new_pos.z);
+
+    const bx = @as(i32, @intFromFloat(@floor(entity.position.x)));
+    const by = @as(i32, @intFromFloat(@floor(entity.position.y - 0.01)));
+    const bz = @as(i32, @intFromFloat(@floor(entity.position.z)));
+
+    const ground = !isAirAt(dimension, bx, by, bz);
+
+    if (ground) {
+        const land_y: f32 = @floatFromInt(by + 1);
+        if (entity.position.y < land_y) {
+            entity.position.y = land_y;
+        }
+
+        if (entity.motion.y < 0) {
+            entity.motion.y = 0;
+        }
+
+        entity.motion.x *= 0.6;
+        entity.motion.z *= 0.6;
+        if (@abs(entity.motion.x) < 0.001) entity.motion.x = 0;
+        if (@abs(entity.motion.z) < 0.001) entity.motion.z = 0;
+
+        if (!state.on_ground and state.falling_distance > 0) {
+            broadcastMove(entity, dimension, true);
+            state.falling_distance = 0;
+            state.falling_ticks = 0;
+        }
+        state.on_ground = true;
+    } else {
+        state.on_ground = false;
+        if (entity.motion.y < 0) {
+            state.falling_distance += @abs(entity.motion.y);
+            state.falling_ticks += 1;
+        }
+        const moved = MoveDelta.movedEnough(entity.position.x, previous_position.x) or
+            MoveDelta.movedEnough(entity.position.y, previous_position.y) or
+            MoveDelta.movedEnough(entity.position.z, previous_position.z);
+        const air = tickAirBroadcast(
+            state.broadcast_cooldown,
+            moved,
+            dimension.world.tecton.mob_broadcast_interval,
+        );
+        state.broadcast_cooldown = air.cooldown;
+        if (air.send) broadcastMove(entity, dimension, false);
+    }
+}
+
+fn broadcastMove(entity: *Entity, dimension: *Dimension, on_ground: bool) void {
+    const tecton = dimension.world.tecton;
+    const allocator = tecton.allocator;
+
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
+
+    var packet = Protocol.MoveActorDeltaPacket.init(@bitCast(entity.runtime_id));
+    packet.x = entity.position.x;
+    packet.y = entity.position.y;
+    packet.z = entity.position.z;
+    packet.on_ground = on_ground;
+
+    const serialized = packet.serialize(&stream) catch return;
+
+    broadcast.broadcastToEntityViewers(dimension, entity, serialized);
+}
+
+pub const GravityTrait = EntityTrait(State, .{
+    .identifier = "gravity",
+    .entities = &.{
+        "minecraft:zombie",
+        "minecraft:skeleton",
+        "minecraft:creeper",
+        "minecraft:spider",
+        "minecraft:cow",
+        "minecraft:pig",
+        "minecraft:sheep",
+        "minecraft:chicken",
+        "minecraft:wolf",
+        "minecraft:villager",
+        "minecraft:enderman",
+        "minecraft:slime",
+        "minecraft:silverfish",
+        "minecraft:blaze",
+        "minecraft:witch",
+        "minecraft:bat",
+        "minecraft:iron_golem",
+        "minecraft:snow_golem",
+        "minecraft:ocelot",
+        "minecraft:horse",
+        "minecraft:rabbit",
+        "minecraft:polar_bear",
+        "minecraft:llama",
+        "minecraft:parrot",
+        "minecraft:dolphin",
+        "minecraft:drowned",
+        "minecraft:phantom",
+        "minecraft:cat",
+        "minecraft:panda",
+        "minecraft:fox",
+        "minecraft:bee",
+        "minecraft:hoglin",
+        "minecraft:piglin",
+        "minecraft:strider",
+        "minecraft:zoglin",
+        "minecraft:goat",
+        "minecraft:axolotl",
+        "minecraft:glow_squid",
+        "minecraft:warden",
+        "minecraft:allay",
+        "minecraft:frog",
+        "minecraft:camel",
+        "minecraft:sniffer",
+        "minecraft:armadillo",
+        "minecraft:bogged",
+        "minecraft:breeze",
+        "minecraft:item",
+    },
+    .default_state = .{
+        .force = -0.08,
+        .drag = 0.0,
+        .apply_drag_before_gravity = false,
+        .falling_distance = 0,
+        .falling_ticks = 0,
+        .on_ground = false,
+        .broadcast_cooldown = 0,
+    },
+    .on_tick = onTick,
+});
+
+test "an in-air mob only broadcasts on its interval" {
+    const first = tickAirBroadcast(0, true, 2);
+    try std.testing.expect(first.send);
+    try std.testing.expectEqual(@as(u8, 1), first.cooldown);
+
+    const waiting = tickAirBroadcast(first.cooldown, true, 2);
+    try std.testing.expect(!waiting.send);
+    try std.testing.expectEqual(@as(u8, 0), waiting.cooldown);
+
+    try std.testing.expect(tickAirBroadcast(waiting.cooldown, true, 2).send);
+
+    // Interval 1 keeps the every-tick behavior.
+    try std.testing.expect(tickAirBroadcast(0, true, 1).send);
+    // Below the position epsilon: not worth a packet.
+    try std.testing.expect(!tickAirBroadcast(0, false, 2).send);
+    try std.testing.expect(!tickAirBroadcast(3, true, 4).send);
+    try std.testing.expectEqual(@as(u8, 2), tickAirBroadcast(3, true, 4).cooldown);
+}
+
+test "item air physics matches pocketmine order" {
+    var motion = Protocol.Vector3f.init(0.4, 0.0, 0.4);
+    applyAirPhysics(&motion, 0.02, -0.04, true);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.392), motion.x, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.04), motion.y, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.392), motion.z, 0.0001);
+}

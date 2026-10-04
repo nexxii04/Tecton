@@ -1,0 +1,16 @@
+pub const ItemComponentMap = @import("./component.zig").ItemComponentMap;
+pub const components = @import("./components/root.zig");
+pub const enchantments = @import("./enchantments/root.zig");
+pub const CreativeContentData = @import("./creative-content-loader.zig").CreativeContentData;
+pub const loadCreativeContent = @import("./creative-content-loader.zig").loadCreativeContent;
+pub const loadItemTypes = @import("./item-palette.zig").loadItemTypes;
+pub const getItemRegistry = @import("./item-palette.zig").getItemRegistry;
+pub const initRegistry = @import("./item-palette.zig").initRegistry;
+pub const deinitRegistry = @import("./item-palette.zig").deinitRegistry;
+pub const ItemStack = @import("./item-stack.zig").ItemStack;
+pub const ItemType = @import("./item-type.zig").ItemType;
+pub const trait = @import("./trait.zig");
+pub const ItemStackTrait = trait.ItemStackTrait;
+pub const ItemStackTraitVTable = trait.ItemStackTraitVTable;
+pub const ItemStackTraitInstance = trait.ItemStackTraitInstance;
+pub const traits = @import("./traits/root.zig");

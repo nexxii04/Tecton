@@ -30,14 +30,14 @@ plugins/*.dll
 plugins/*.dylib
 plugins/*.h
 
-# Local native plugin implementations stay outside version control.
-src/conduit/plugins/
-!src/conduit/plugins/
-src/conduit/plugins/*
-!src/conduit/plugins/root.zig
-!src/conduit/plugins/abi.zig
-!src/conduit/plugins/dynamic_loader.zig
-!src/conduit/plugins/runtime.zig
+# Local native plugin implementations
+src/tecton/plugins/
+!src/tecton/plugins/
+src/tecton/plugins/*
+!src/tecton/plugins/root.zig
+!src/tecton/plugins/abi.zig
+!src/tecton/plugins/dynamic_loader.zig
+!src/tecton/plugins/runtime.zig
 
 # Local Pi runtime state
 .atl/
