@@ -28,8 +28,8 @@ pub fn validateDisplayName(display_name: []const u8) Error!void {
 
 pub fn uuidForDisplayName(allocator: std.mem.Allocator, display_name: []const u8) ![]u8 {
     var md5 = std.crypto.hash.Md5.init(.{});
-    // Keep the pre-rebrand namespace: stored player data is keyed by this uuid.
-    md5.update("conduit-offline:");
+    // Namespaced to Tecton; changing this reassigns every offline identity.
+    md5.update("tecton-offline:");
     md5.update(display_name);
     var digest: [16]u8 = undefined;
     md5.final(&digest);
