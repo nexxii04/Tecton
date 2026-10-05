@@ -16,13 +16,13 @@
             .url = "git+https://github.com/VantStudios/BinaryStream.git#b0953025800d6069ceccaad2315a1c8a818105b1",
             .hash = "BinaryStream-0.0.0-gn8mmkJfAQB7hx3EiIoUs228mEqfXMqE78Fjf_Bdq7We",
         },
-        .ZigNet = .{
-            .url = "git+https://github.com/VantStudios/ZigNet.git#33ca52bd5a2ac6f7e841e12490fe1f7f762d3165",
-            .hash = "ZigNet-0.0.0-C9ZCIjWBAwBD9mFHhDtVjeMJN_A43YsZia1V_BKKafvJ",
-        },
         .protocol = .{
             .url = "git+https://github.com/VantStudios/Protocol.git#abab937464e3d8b2e992d924920181819b69a1d9",
             .hash = "protocol-0.0.0-129wXi7ccwCxPyAkaEQEK5CMF1YCY4bYX7KjPmOp4vNf",
+        },
+        .ZigNet = .{
+            .url = "git+https://github.com/VantStudios/ZigNet.git#33ca52bd5a2ac6f7e841e12490fe1f7f762d3165",
+            .hash = "ZigNet-0.0.0-C9ZCIjWBAwBD9mFHhDtVjeMJN_A43YsZia1V_BKKafvJ",
         },
     },
     .paths = .{
