@@ -4,10 +4,13 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const NBT = @import("nbt");
 const Protocol = @import("protocol");
 
+const Raknet = @import("Raknet");
+
 const Tecton = @import("../../tecton.zig").Tecton;
 const Player = @import("../../player/player.zig").Player;
 const Chunk = @import("../../world/chunk/chunk.zig").Chunk;
-const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
+const DimensionModule = @import("../../world/dimension/dimension.zig");
+const Dimension = DimensionModule.Dimension;
 const generation = @import("./chunk-generation.zig");
 
 const ChunkStreamState = struct {
@@ -121,6 +124,11 @@ fn freeStreamState(state: *ChunkStreamState) void {
     state.allocator.destroy(state);
 }
 
+// The connection duplicates the payload, so `cached` stays owned by the dimension.
+fn sendCachedChunkPacket(conn: *Raknet.Connection, cached: []const u8) void {
+    conn.sendReliableMessage(cached, .Normal);
+}
+
 fn onBatchComplete(ctx: *anyopaque) void {
     const work: *generation.ChunkBatchWork = @ptrCast(@alignCast(ctx));
     std.debug.assert(work.dimension.inflight_batches > 0);
@@ -219,6 +227,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
             if (compressed.len == 0) continue;
             player.connection.sendReliableMessage(compressed, .Normal);
             allocator.free(compressed);
+            work.packets[i] = &.{};
         }
 
         for (0..work.count) |i| {
@@ -501,6 +510,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
                 .callback = onBatchComplete,
                 .cleanup = cleanupBatchWork,
                 .ctx = @ptrCast(work),
+                .kind = .world,
             }) catch {
                 cleanupBatchWork(@ptrCast(work));
             };
@@ -522,7 +532,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
                 if (!player.sent_chunks.contains(chunk_hash) and !player.pending_chunks.contains(chunk_hash)) {
                     if (sim_dist <= 0) {
                         if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
-                            player.connection.sendReliableMessage(cached, .Normal);
+                            sendCachedChunkPacket(player.connection, cached);
                             player.sent_chunks.put(chunk_hash, {}) catch {};
                             continue;
                         }
@@ -556,7 +566,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             const in_simulation = dx * dx + dz * dz <= sim_dist * sim_dist;
             if (!in_simulation) {
                 if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
-                    player.connection.sendReliableMessage(cached, .Normal);
+                    sendCachedChunkPacket(player.connection, cached);
                     player.sent_chunks.put(chunk_hash, {}) catch {};
                     continue;
                 }
@@ -667,6 +677,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             .callback = onBatchComplete,
             .cleanup = cleanupBatchWork,
             .ctx = @ptrCast(work),
+            .kind = .world,
         }) catch {
             cleanupBatchWork(@ptrCast(work));
             continue;

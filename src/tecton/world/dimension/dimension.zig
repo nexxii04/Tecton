@@ -139,6 +139,7 @@ pub const Dimension = struct {
         return cached.data;
     }
 
+    /// Takes ownership of `data`.
     pub fn putCachedChunkPacket(self: *Dimension, hash: ChunkHash, data: []const u8) void {
         const gen = self.chunk_generations.get(hash) orelse 0;
         if (self.chunk_packet_cache.fetchPut(hash, .{ .data = data, .generation = gen }) catch null) |old| {

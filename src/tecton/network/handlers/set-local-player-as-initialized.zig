@@ -5,6 +5,7 @@ const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const Compression = @import("../compression/compression.zig").Compression;
+const SharedBroadcast = @import("../shared-broadcast.zig").SharedBroadcast;
 
 const Player = @import("../../player/player.zig").Player;
 const buildAbilities = @import("./abilities.zig").buildAbilities;
@@ -68,7 +69,7 @@ fn runPlayerInitTask(ctx: *anyopaque) bool {
 
 fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
     const player = state.player;
-    if (!player.connection.active or state.tecton.getPlayerByConnection(player.connection) == null) {
+    if (!player.connection.isActive() or state.tecton.getPlayerByConnection(player.connection) == null) {
         return true;
     }
 
@@ -164,13 +165,17 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
     };
     const serialized = try packet.serialize(&stream, temp_allocator);
 
-    const packets = [_][]const u8{serialized};
-    const compressed = try Compression.compress(&packets, state.network.options, state.network.allocator);
-    defer state.network.allocator.free(compressed);
+    // One packed buffer per recipient: a join storm costs O(N) copies, not O(N^2).
+    var broadcast = try SharedBroadcast.begin(
+        state.network.allocator,
+        serialized,
+        state.network.options,
+    );
+    defer broadcast.deinit();
 
     for (snapshots) |other| {
         if (other.entity.runtime_id == state.player.entity.runtime_id) continue;
         if (!other.spawned) continue;
-        other.connection.sendReliableMessage(compressed, .Normal);
+        broadcast.send(other.connection, .normal);
     }
 }
