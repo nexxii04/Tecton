@@ -220,7 +220,7 @@ pub const Player = struct {
 
     fn beginRemoval(self: *Player) bool {
         if (self.pending_removal.swap(true, .acq_rel)) return false;
-        self.connection.active = false;
+        self.connection.deactivate();
         self.tecton.removeConnectionMapping(self.connection);
         return true;
     }

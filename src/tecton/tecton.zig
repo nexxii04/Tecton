@@ -427,7 +427,7 @@ pub const Tecton = struct {
             };
             const serialized = try disconnect.serialize(&str);
             try self.network.sendImmediate(player.connection, serialized);
-            player.connection.active = false;
+            player.connection.deactivate();
         }
     }
 
