@@ -7,6 +7,7 @@ const c = @cImport({
 });
 
 threadlocal var tl_stream: ?*c.z_stream = null;
+threadlocal var tl_inflate_stream: ?*c.z_stream = null;
 
 fn acquireThreadLocal() !*c.z_stream {
     if (tl_stream) |s| {
@@ -27,6 +28,26 @@ fn acquireThreadLocal() !*c.z_stream {
     return s;
 }
 
+/// Thread-local stream reused across packets: `inflateInit2` allocates internal state that the zalloc=null counters cannot see.
+fn acquireInflateStream() !*c.z_stream {
+    if (tl_inflate_stream) |s| {
+        if (c.inflateReset(s) == c.Z_OK) return s;
+        _ = c.inflateEnd(s);
+        std.heap.c_allocator.destroy(s);
+        tl_inflate_stream = null;
+    }
+    const s = try std.heap.c_allocator.create(c.z_stream);
+    s.zalloc = null;
+    s.zfree = null;
+    s.@"opaque" = null;
+    if (c.inflateInit2(s, -15) != c.Z_OK) {
+        std.heap.c_allocator.destroy(s);
+        return error.ZlibInitFailed;
+    }
+    tl_inflate_stream = s;
+    return s;
+}
+
 pub const DecompressResult = struct {
     packets: [][]const u8,
     buffer: []const u8,
@@ -36,6 +57,11 @@ pub const DecompressResult = struct {
         self.allocator.free(self.buffer);
         self.allocator.free(self.packets);
     }
+};
+
+/// Slices live in the caller's arena, or borrow `data` when the framing is not zlib, so `data` must outlive the packets.
+pub const ArenaDecompressResult = struct {
+    packets: [][]const u8,
 };
 
 pub const Compression = struct {
@@ -107,6 +133,48 @@ pub const Compression = struct {
         }
     }
 
+    pub fn decompressInto(
+        data: []const u8,
+        options: CompressionOptions,
+        arena_allocator: std.mem.Allocator,
+    ) !ArenaDecompressResult {
+        _ = options;
+        if (data.len == 0 or data[0] != 254) {
+            const packets = try arena_allocator.alloc([]const u8, 1);
+            packets[0] = data;
+            return .{ .packets = packets };
+        }
+
+        const method: CompressionMethod = if (data.len > 1) switch (data[1]) {
+            @as(u8, @intFromEnum(CompressionMethod.Zlib)) => .Zlib,
+            @as(u8, @intFromEnum(CompressionMethod.NotPresent)) => .NotPresent,
+            @as(u8, @intFromEnum(CompressionMethod.Snappy)) => .Snappy,
+            @as(u8, @intFromEnum(CompressionMethod.None)) => .None,
+            else => .NotPresent,
+        } else .NotPresent;
+
+        var payload = data;
+        if (method != .NotPresent and data.len > 1) {
+            payload = payload[2..];
+        } else {
+            payload = payload[1..];
+        }
+
+        if (method == .Zlib) {
+            const decompressed = try zlibInflateInto(payload, arena_allocator);
+            const packets = try unframe(decompressed, arena_allocator);
+            return .{ .packets = packets };
+        }
+
+        if (method == .Snappy) {
+            const packets = try arena_allocator.alloc([]const u8, 0);
+            return .{ .packets = packets };
+        }
+
+        const packets = try unframe(payload, arena_allocator);
+        return .{ .packets = packets };
+    }
+
     pub fn decompress(
         data: []const u8,
         options: CompressionOptions,
@@ -153,6 +221,44 @@ pub const Compression = struct {
         errdefer allocator.free(owned);
         const packets = try unframe(owned, allocator);
         return .{ .packets = packets, .buffer = owned, .allocator = allocator };
+    }
+
+    /// The returned slice may own more capacity than its length: arenas reset wholesale, so the slack is intentional.
+    fn zlibInflateInto(input: []const u8, allocator: std.mem.Allocator) ![]const u8 {
+        const stream = try acquireInflateStream();
+        stream.next_in = @constCast(input.ptr);
+        stream.avail_in = @as(c_uint, @intCast(input.len));
+
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+
+        try out.ensureTotalCapacityPrecise(allocator, @max(input.len * 4, 256));
+        const grow_step: usize = 64 * 1024;
+
+        while (true) {
+            var destination = out.unusedCapacitySlice();
+            if (destination.len == 0) {
+                try out.ensureUnusedCapacity(allocator, grow_step);
+                destination = out.unusedCapacitySlice();
+            }
+
+            stream.next_out = destination.ptr;
+            stream.avail_out = @intCast(@min(destination.len, std.math.maxInt(c_uint)));
+            const before = stream.avail_out;
+
+            const ret = c.inflate(stream, c.Z_NO_FLUSH);
+            out.items.len += before - stream.avail_out;
+
+            if (ret == c.Z_STREAM_END) break;
+            if (ret == c.Z_OK) continue;
+            if (ret == c.Z_BUF_ERROR and stream.avail_out == 0) {
+                try out.ensureUnusedCapacity(allocator, grow_step);
+                continue;
+            }
+            return error.ZlibInflateFailed;
+        }
+
+        return out.items;
     }
 
     fn zlibInflate(input: []const u8, allocator: std.mem.Allocator) ![]const u8 {
@@ -363,4 +469,91 @@ test "unframe accepts valid framing" {
     try std.testing.expectEqualSlices(u8, &.{ 0xAA, 0xBB }, packets[0]);
     try std.testing.expectEqual(@as(usize, 0), packets[1].len);
     try std.testing.expectEqualSlices(u8, &.{ 0xCC, 0xDD, 0xEE }, packets[2]);
+}
+
+test "decompressInto round-trips without owning the input" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x5eed1234);
+    const random = rng.random();
+
+    const options = CompressionOptions{
+        .compression_method = .Zlib,
+        .compression_threshold = 1,
+    };
+
+    for (0..100) |_| {
+        const pkt_count = random.intRangeAtMost(usize, 1, 8);
+        var pkts: [8][]u8 = undefined;
+        var pkt_slices: [8][]const u8 = undefined;
+        for (0..pkt_count) |i| {
+            const len = random.intRangeAtMost(usize, 16, 512);
+            pkts[i] = try allocator.alloc(u8, len);
+            random.bytes(pkts[i]);
+            pkt_slices[i] = pkts[i];
+        }
+        defer for (0..pkt_count) |i| allocator.free(pkts[i]);
+
+        const compressed = try Compression.compress(pkt_slices[0..pkt_count], options, allocator);
+        defer allocator.free(compressed);
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const result = try Compression.decompressInto(compressed, options, arena.allocator());
+
+        try std.testing.expectEqual(pkt_count, result.packets.len);
+        for (0..pkt_count) |i| {
+            try std.testing.expectEqualSlices(u8, pkts[i], result.packets[i]);
+        }
+    }
+}
+
+test "decompressInto borrows the input for uncompressed framing" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const options = CompressionOptions{
+        .compression_method = .Zlib,
+        .compression_threshold = 255,
+    };
+
+    const packet = [_]u8{ 1, 2, 3, 4, 5 };
+    const packets = [_][]const u8{&packet};
+    const compressed = try Compression.compress(&packets, options, allocator);
+    defer allocator.free(compressed);
+    try std.testing.expect(compressed[1] != 0xFE);
+
+    const result = try Compression.decompressInto(compressed, options, arena.allocator());
+    try std.testing.expectEqual(@as(usize, 1), result.packets.len);
+    try std.testing.expectEqualSlices(u8, &packet, result.packets[0]);
+    const payload_ptr = @intFromPtr(result.packets[0].ptr);
+    try std.testing.expect(payload_ptr >= @intFromPtr(compressed.ptr));
+    try std.testing.expect(payload_ptr + result.packets[0].len <= @intFromPtr(compressed.ptr) + compressed.len);
+}
+
+test "decompressInto survives many back-to-back uses of the pooled inflate stream" {
+    const allocator = std.testing.allocator;
+    const options = CompressionOptions{
+        .compression_method = .Zlib,
+        .compression_threshold = 1,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var rng = std.Random.DefaultPrng.init(0xf00d9876);
+    const random = rng.random();
+    for (0..200) |_| {
+        var payload: [1024]u8 = undefined;
+        const len = random.intRangeAtMost(usize, 256, payload.len);
+        random.bytes(payload[0..len]);
+
+        const slices = [_][]const u8{payload[0..len]};
+        const compressed = try Compression.compress(&slices, options, allocator);
+        defer allocator.free(compressed);
+
+        const result = try Compression.decompressInto(compressed, options, arena.allocator());
+        try std.testing.expectEqualSlices(u8, payload[0..len], result.packets[0]);
+        _ = arena.reset(.retain_capacity);
+    }
 }
