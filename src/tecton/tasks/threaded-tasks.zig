@@ -253,7 +253,7 @@ fn MpmcRing(comptime T: type) type {
     };
 }
 
-/// The mutex only guards the sleep handshake, never the hot path.
+/// The mutex synchronizes task publication with the worker's sleep handshake.
 const TaskShard = struct {
     queue: SpscRing(ThreadedTask),
     kind: Kind,
@@ -415,14 +415,10 @@ pub const ThreadedTaskQueue = struct {
         if (self.shards.len == 0 or !self.running) return error.QueueNotStarted;
         const shard = &self.shards[self.shardIndexFor(task)];
         if (!shard.queue.push(task)) return error.QueueFull;
-        if (shard.idle.load(.acquire)) {
-            shard.mutex.lock(self.io) catch |err| {
-                std.log.err("failed to acquire lock: {}", .{err});
-                return;
-            };
-            shard.cond.signal(self.io);
-            shard.mutex.unlock(self.io);
-        }
+
+        shard.mutex.lockUncancelable(self.io);
+        if (shard.idle.load(.acquire)) shard.cond.signal(self.io);
+        shard.mutex.unlock(self.io);
     }
 
     /// Input completions drain before world ones: their handlers mutate player state.
