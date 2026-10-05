@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Raknet = @import("Raknet");
+const WorkerLayout = @import("tasks/threaded-tasks.zig").WorkerLayout;
 
 pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
     return mode == .Debug;
@@ -20,11 +21,16 @@ pub const ServerProperties = struct {
     online_mode_offline_fallback: bool = false,
     max_tps: u32 = 20,
     worker_threads: u32 = 0,
+    worker_layout: WorkerLayout = .split,
+    parallel_visibility: bool = true,
     max_view_distance: u32 = 16,
     simulation_distance: u32 = 4,
     max_mtu: u16 = max_max_mtu,
     movement_send_priority: []const u8 = "immediate",
     movement_distance_bands: bool = true,
+    network_inbound_ring: bool = true,
+    inbound_ring_slots: u32 = 8192,
+    inbound_ring_slot_size: u32 = 1536,
     mob_broadcast_interval: u8 = 2,
     default_group: []const u8 = "member",
 
@@ -37,6 +43,19 @@ pub const ServerProperties = struct {
 
     pub fn clampMaxMtu(requested: u16) u16 {
         return @min(@max(requested, min_max_mtu), max_max_mtu);
+    }
+
+    pub const min_inbound_ring_slots: u32 = 64;
+    pub const max_inbound_ring_slots: u32 = 1 << 20;
+    pub const min_inbound_ring_slot_size: u32 = 512;
+    pub const max_inbound_ring_slot_size: u32 = 64 * 1024;
+
+    pub fn clampInboundRingSlots(requested: u32) u32 {
+        return @min(@max(requested, min_inbound_ring_slots), max_inbound_ring_slots);
+    }
+
+    pub fn clampInboundRingSlotSize(requested: u32) u32 {
+        return @min(@max(requested, min_inbound_ring_slot_size), max_inbound_ring_slot_size);
     }
 
     pub const min_mob_broadcast_interval: u8 = 1;
@@ -55,11 +74,16 @@ pub const ServerProperties = struct {
         .online_mode_offline_fallback = "With online-mode=true, let unverified logins in as offline identities instead of refusing them",
         .max_tps = "Max tps",
         .worker_threads = "Tecton worker threads (0 = auto, higher values are clamped)",
+        .worker_layout = "Worker layout: split dedicates max(1, cpu/4) workers to input and the rest to world; shared restores the single queue",
+        .parallel_visibility = "Run the per-viewer player visibility pass on the world workers instead of inline in the player tick (false restores the serial pass)",
         .max_view_distance = "Max view distance in chunks",
         .simulation_distance = "Simulation distance in chunks (chunks within this range are kept loaded)",
         .max_mtu = "Max RakNet MTU (clamped to 576-1400; clients still negotiate the minimum with this cap)",
         .movement_send_priority = "Movement broadcast priority: immediate or normal",
         .movement_distance_bands = "Rate-limit player movement updates by distance to the nearest viewer (false restores a delta every tick)",
+        .network_inbound_ring = "Use the zero-alloc SPSC inbound ring instead of the per-packet heap queue (false restores the legacy path)",
+        .inbound_ring_slots = "Inbound ring slots (clamped to 64-1048576 and rounded up to a power of two)",
+        .inbound_ring_slot_size = "Bytes per inbound ring slot (clamped to 512-65536; larger datagrams use a heap fallback)",
         .mob_broadcast_interval = "Ticks between in-air mob movement broadcasts (clamped to 1-20; 1 is the old every-tick behavior)",
         .default_group = "Default permission group for new players",
     };
@@ -131,6 +155,8 @@ pub const ServerProperties = struct {
                         false
                     else
                         return error.InvalidValue;
+                } else if (@typeInfo(field.type) == .@"enum") {
+                    @field(self, field.name) = std.meta.stringToEnum(field.type, value) orelse return error.InvalidValue;
                 } else if (@typeInfo(field.type) == .int) {
                     @field(self, field.name) = std.fmt.parseInt(field.type, value, 10) catch return error.InvalidValue;
                 }
@@ -165,6 +191,8 @@ pub const ServerProperties = struct {
                 std.fmt.bufPrint(buf[pos..], "{s}={s}\n", .{ file_key, val }) catch return error.BufferOverflow
             else if (field.type == bool)
                 std.fmt.bufPrint(buf[pos..], "{s}={s}\n", .{ file_key, if (val) "true" else "false" }) catch return error.BufferOverflow
+            else if (@typeInfo(field.type) == .@"enum")
+                std.fmt.bufPrint(buf[pos..], "{s}={s}\n", .{ file_key, @tagName(val) }) catch return error.BufferOverflow
             else if (@typeInfo(field.type) == .int)
                 std.fmt.bufPrint(buf[pos..], "{s}={d}\n", .{ file_key, val }) catch return error.BufferOverflow
             else
@@ -247,6 +275,44 @@ test "movement distance bands default on and only accept true or false" {
     try std.testing.expect(properties.movement_distance_bands);
 
     try std.testing.expectError(error.InvalidValue, properties.setField("movement-distance-bands", "maybe"));
+}
+
+test "worker layout parses split and shared and rejects garbage" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try std.testing.expectEqual(WorkerLayout.split, properties.worker_layout);
+
+    try properties.setField("worker-layout", "shared");
+    try std.testing.expectEqual(WorkerLayout.shared, properties.worker_layout);
+    try properties.setField("worker-layout", "split");
+    try std.testing.expectEqual(WorkerLayout.split, properties.worker_layout);
+
+    try std.testing.expectError(error.InvalidValue, properties.setField("worker-layout", "chunky"));
+    try std.testing.expectError(error.UnknownProperty, properties.setField("worker-layouts", "split"));
+}
+
+test "inbound ring properties parse and clamp" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try std.testing.expect(properties.network_inbound_ring);
+    try std.testing.expectEqual(@as(u32, 8192), properties.inbound_ring_slots);
+    try std.testing.expectEqual(@as(u32, 1536), properties.inbound_ring_slot_size);
+
+    try properties.setField("network-inbound-ring", "false");
+    try std.testing.expect(!properties.network_inbound_ring);
+    try properties.setField("network-inbound-ring", "true");
+    try std.testing.expect(properties.network_inbound_ring);
+    try std.testing.expectError(error.InvalidValue, properties.setField("network-inbound-ring", "maybe"));
+
+    try properties.setField("inbound-ring-slots", "16384");
+    try std.testing.expectEqual(@as(u32, 16384), properties.inbound_ring_slots);
+    try properties.setField("inbound-ring-slot-size", "2048");
+    try std.testing.expectEqual(@as(u32, 2048), properties.inbound_ring_slot_size);
+
+    try std.testing.expectEqual(ServerProperties.min_inbound_ring_slots, ServerProperties.clampInboundRingSlots(0));
+    try std.testing.expectEqual(ServerProperties.max_inbound_ring_slots, ServerProperties.clampInboundRingSlots(std.math.maxInt(u32)));
+    try std.testing.expectEqual(ServerProperties.min_inbound_ring_slot_size, ServerProperties.clampInboundRingSlotSize(1));
+    try std.testing.expectEqual(ServerProperties.max_inbound_ring_slot_size, ServerProperties.clampInboundRingSlotSize(std.math.maxInt(u32)));
 }
 
 test "the mob broadcast interval clamps to the supported range" {

@@ -29,8 +29,10 @@ const PlayerLocation = @import("./player/player-locations.zig").Location;
 const PlayerSnapshot = @import("./player/player-snapshot.zig").PlayerSnapshot;
 const Player = @import("./player/player.zig").Player;
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
-const ThreadedTaskQueue = @import("./tasks/threaded-tasks.zig").ThreadedTaskQueue;
+const threaded_tasks = @import("./tasks/threaded-tasks.zig");
+const ThreadedTaskQueue = threaded_tasks.ThreadedTaskQueue;
 const WorkerCountResolution = @import("./tasks/threaded-tasks.zig").WorkerCountResolution;
+const visibility_mod = @import("./entity/traits/visibility.zig");
 const resolveWorkerCount = @import("./tasks/threaded-tasks.zig").resolveWorkerCount;
 const totalServerThreadCount = @import("./tasks/threaded-tasks.zig").totalServerThreadCount;
 const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
@@ -112,6 +114,9 @@ pub const Tecton = struct {
     plugin_runtime: PluginRuntime,
     instances: GameInstanceRegistry,
     ecs: EcsWorld,
+    /// Players whose visibility pass is due this tick, plus the reusable blocking job that runs it.
+    visibility_batch: std.ArrayList(*Player) = .empty,
+    visibility_job: threaded_tasks.ParallelJob = .{},
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) !Tecton {
         Raknet.Logger.init(allocator);
@@ -309,10 +314,10 @@ pub const Tecton = struct {
         self.raknet.setConnectCallback(NetworkHandler.onConnect, self.network);
         self.raknet.setDisconnectCallback(NetworkHandler.onDisconnect, self.network);
         self.network_initialized = true;
-
         self.tick_thread_id.store(0, .release);
         self.raknet.setTickCallback(tick_mod.onTick, self);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
+        self.threaded_tasks.setLayout(self.config.worker_layout);
         try self.threaded_tasks.start();
         if (!worker_resolution.auto_selected and worker_resolution.resolved_count < worker_resolution.requested_count) {
             Raknet.Logger.WARN(
@@ -326,10 +331,57 @@ pub const Tecton = struct {
         }
         Raknet.Logger.INFO("RakNet MTU cap: {d}", .{self.raknet.options.max_mtu});
         Raknet.Logger.INFO("Mob broadcast interval: {d} ticks", .{self.mob_broadcast_interval});
+        if (self.config.parallel_visibility and self.threaded_tasks.worldWorkerCount() > 1) {
+            Raknet.Logger.INFO("Visibility pass: {d} world workers (parallel-visibility=true)", .{
+                self.threaded_tasks.worldWorkerCount(),
+            });
+        } else {
+            Raknet.Logger.INFO("Visibility pass: inline on the tick thread (parallel-visibility=false)", .{});
+        }
+        const pump_threads: usize = if (self.threaded_tasks.layoutResolution().layout == .split) 1 else 0;
         Raknet.Logger.INFO("Loaded {d} threads, {d} worker threads available", .{
-            totalServerThreadCount(self.threaded_tasks.workerCount()),
+            totalServerThreadCount(self.threaded_tasks.workerCount()) + pump_threads,
             self.threaded_tasks.workerCount(),
         });
+        const pool_layout = self.threaded_tasks.layoutResolution();
+        if (pool_layout.layout == .split) {
+            Raknet.Logger.INFO("Worker pool: split layout, {d} input + {d} world workers ({d} CPUs)", .{
+                pool_layout.input_worker_count,
+                pool_layout.world_worker_count,
+                pool_layout.cpu_count,
+            });
+        } else {
+            Raknet.Logger.INFO("Worker pool: shared layout, {d} workers ({d} CPUs)", .{
+                pool_layout.worker_count,
+                pool_layout.cpu_count,
+            });
+        }
+        if (self.config.network_inbound_ring) {
+            self.network.enableInboundRing(
+                ServerProperties.clampInboundRingSlots(self.config.inbound_ring_slots),
+                ServerProperties.clampInboundRingSlotSize(self.config.inbound_ring_slot_size),
+            ) catch |err| {
+                Raknet.Logger.WARN("network-inbound-ring could not be enabled ({s}); using the legacy packet queue", .{@errorName(err)});
+            };
+        }
+        if (self.network.inbound_ring) |ring| {
+            const slab_mib = (ring.capacity() * ring.slot_size) / (1024 * 1024);
+            Raknet.Logger.INFO("Inbound ring: {d} slots x {d} bytes ({d} MiB slab)", .{
+                ring.capacity(),
+                ring.slot_size,
+                slab_mib,
+            });
+        } else {
+            Raknet.Logger.INFO("Inbound ring disabled; using the legacy packet queue", .{});
+        }
+        // The pump is the input ring's single consumer and the input shards' single producer, so it only runs with dedicated input workers.
+        if (self.threaded_tasks.layoutResolution().layout == .split) {
+            try self.network.startInputPump();
+            Raknet.Logger.INFO("Input pump: dedicated thread draining the input queue", .{});
+        } else {
+            Raknet.Logger.INFO("Input pump: disabled (shared layout drains input from the tick)", .{});
+        }
+
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
@@ -432,11 +484,40 @@ pub const Tecton = struct {
         movement_mod.flush(self);
     }
 
+    /// A disjoint viewer per worker is race-free: the pass mutates only the viewer's maps and reads other players read-only.
+    pub fn runVisibilityPass(self: *Tecton) void {
+        const snapshots = self.getPlayerSnapshots();
+        self.visibility_batch.clearRetainingCapacity();
+        for (snapshots) |player| {
+            if (!player.visibility_due) continue;
+            player.visibility_due = false;
+            self.visibility_batch.append(self.allocator, player) catch {};
+        }
+
+        const due = self.visibility_batch.items;
+        if (due.len == 0) return;
+
+        const parallel = self.config.parallel_visibility and self.threaded_tasks.worldWorkerCount() > 1;
+        if (!parallel) {
+            for (due) |player| visibility_mod.updatePlayerVisibility(player);
+            return;
+        }
+
+        self.visibility_job.item_count = due.len;
+        self.visibility_job.ctx = self;
+        self.visibility_job.body = struct {
+            fn run(index: usize, ctx: *anyopaque) void {
+                const tecton: *Tecton = @ptrCast(@alignCast(ctx));
+                visibility_mod.updatePlayerVisibility(tecton.visibility_batch.items[index]);
+            }
+        }.run;
+        self.threaded_tasks.runParallel(&self.visibility_job, self.threaded_tasks.worldWorkerCount());
+    }
+
     pub fn rebuildPlayerSnapshot(self: *Tecton) void {
         self.players.rebuild();
     }
 
-    /// Resolves a player by the runtime id of its entity; player entities live in the registry.
     pub fn findPlayerByRuntimeId(self: *Tecton, runtime_id: i64) ?*Player {
         return self.players.byRuntimeId(runtime_id);
     }
@@ -605,10 +686,7 @@ pub const Tecton = struct {
         }
     }
 
-    /// The RakNet tick callback runs on its own thread and touches Tecton state.
-    /// Cancel and join it first so no in-flight tick outlives the teardown
-    /// below. `Future.cancel` is the same stop-and-join `Raknet.Server.deinit`
-    /// performs later, just moved ahead of the state it would race against.
+    /// The RakNet tick thread touches Tecton state, so cancel and join it before the teardown below races it.
     fn stopRaknetTickThread(self: *Tecton) void {
         self.raknet.running.store(false, .release);
         if (self.raknet.tick_thread) |*tick_thread| {
@@ -619,9 +697,11 @@ pub const Tecton = struct {
 
     pub fn deinit(self: *Tecton) void {
         self.stopRaknetTickThread();
+        // The input pump feeds the worker pool, so it must be joined before the pool stops accepting tasks.
+        if (self.network_initialized) self.network.stopInputPump();
+        // Workers may still be finishing tasks, but every counter is an atomic RMW, so the report reads whole values without pausing them.
         self.profiler.writeReport(self.io, "dump/tick-profile.txt");
 
-        self.threaded_tasks.clearPending();
         self.threaded_tasks.stop();
         self.threaded_tasks.drainCompleted(std.math.maxInt(u64));
         self.drainPendingPlayerRemovals();
@@ -633,6 +713,7 @@ pub const Tecton = struct {
         self.players.silence();
         self.players.destroyPlayers();
         self.players.deinit();
+        self.visibility_batch.deinit(self.allocator);
         self.plugin_runtime.deinit();
 
         self.worlds.deinit();

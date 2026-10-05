@@ -40,19 +40,24 @@ pub fn onTick(context: ?*anyopaque) void {
     tecton.raknet_time_accumulator += raknet_ns;
     tecton.profiler.record(.raknet_tick, raknet_ns);
 
-    const packet_drain_budget = tick_budget_ns * packet_drain_budget_pct / 100;
+    // Fallback for the shared layout and the pump-less tick: four waves per tick bound the gap between drains to roughly a quarter of the tick.
+    const tick_drains_input = !tecton.network.inputPumpActive();
+    const packet_drain_budget = (tick_budget_ns * packet_drain_budget_pct / 100) / 4;
     const packet_drain_cap: usize = @max(256, tecton.getPlayerCount() * 8);
-    const pd_start = Timestamp.now(tecton.io, .awake);
-    const drain_result = tecton.network.drainPackets(packet_drain_budget, packet_drain_cap);
-    const pd_end = pd_start.durationTo(.now(tecton.io, .awake));
-    tecton.profiler.record(.packet_drain, @intCast(@max(0, pd_end.nanoseconds)));
+
+    var packet_drain_ns: u64 = 0;
+    if (tick_drains_input) {
+        const pd_start = Timestamp.now(tecton.io, .awake);
+        _ = tecton.network.drainPackets(packet_drain_budget, packet_drain_cap);
+        packet_drain_ns += @intCast(@max(0, pd_start.durationTo(.now(tecton.io, .awake)).nanoseconds));
+    }
 
     const decompress_pending = tecton.network.decompress_pending.load(.monotonic);
     const dropped_packets = tecton.network.dropped_packets.load(.monotonic);
     if ((decompress_pending > 256 or dropped_packets > 0) and tecton.tick_count % target_tps_u64 == 0) {
         Raknet.Logger.WARN("Network packet backlog: pending={d} queued={d} dropped={d}", .{
             decompress_pending,
-            drain_result.remaining,
+            tecton.network.queuedInputDepth(),
             dropped_packets,
         });
     }
@@ -66,8 +71,16 @@ pub fn onTick(context: ?*anyopaque) void {
         if (!player.spawned) continue;
         player.entity.fireEvent(.Tick, .{&player.entity});
     }
+    // The chunk-loading trait only flags that the pass is due; it runs here and must finish before the movement flush reads `visible_players`.
+    tecton.runVisibilityPass();
     var phase_end = phase_start.durationTo(.now(tecton.io, .awake));
     tecton.profiler.record(.player_tick, @intCast(@max(0, phase_end.nanoseconds)));
+
+    if (tick_drains_input) {
+        phase_start = Timestamp.now(tecton.io, .awake);
+        _ = tecton.network.drainPackets(packet_drain_budget, packet_drain_cap);
+        packet_drain_ns += @intCast(@max(0, phase_start.durationTo(.now(tecton.io, .awake)).nanoseconds));
+    }
 
     phase_start = Timestamp.now(tecton.io, .awake);
     var worlds_it = tecton.worlds.valueIterator();
@@ -87,8 +100,9 @@ pub fn onTick(context: ?*anyopaque) void {
 
     const drain_budget = tick_budget_ns * drain_completed_budget_pct / 100;
 
+    // Input completions drain first: their handlers mutate player state and must not wait behind a chunk batch callback.
     phase_start = Timestamp.now(tecton.io, .awake);
-    tecton.threaded_tasks.drainCompleted(drain_budget);
+    tecton.threaded_tasks.drainCompletedInput(drain_budget);
     phase_end = phase_start.durationTo(.now(tecton.io, .awake));
     tecton.profiler.record(.drain_completed_1, @intCast(@max(0, phase_end.nanoseconds)));
 
@@ -99,8 +113,15 @@ pub fn onTick(context: ?*anyopaque) void {
     tecton.tasks_time_accumulator += tasks_ns;
     tecton.profiler.record(.main_tasks, tasks_ns);
 
+    if (tick_drains_input) {
+        phase_start = Timestamp.now(tecton.io, .awake);
+        _ = tecton.network.drainPackets(packet_drain_budget, packet_drain_cap);
+        packet_drain_ns += @intCast(@max(0, phase_start.durationTo(.now(tecton.io, .awake)).nanoseconds));
+    }
+
     phase_start = Timestamp.now(tecton.io, .awake);
-    tecton.threaded_tasks.drainCompleted(drain_budget);
+    tecton.threaded_tasks.drainCompletedInput(drain_budget);
+    tecton.threaded_tasks.drainCompletedWorld(drain_budget);
     phase_end = phase_start.durationTo(.now(tecton.io, .awake));
     tecton.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end.nanoseconds)));
 
@@ -108,6 +129,13 @@ pub fn onTick(context: ?*anyopaque) void {
     if (tecton.tick_callback) |callback| callback(tecton.tick_userdata);
 
     tecton.flushMovementBroadcasts();
+
+    if (tick_drains_input) {
+        phase_start = Timestamp.now(tecton.io, .awake);
+        _ = tecton.network.drainPackets(packet_drain_budget, packet_drain_cap);
+        packet_drain_ns += @intCast(@max(0, phase_start.durationTo(.now(tecton.io, .awake)).nanoseconds));
+        tecton.profiler.record(.packet_drain, packet_drain_ns);
+    }
 
     const work_end = work_start.durationTo(.now(tecton.io, .awake));
     const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
