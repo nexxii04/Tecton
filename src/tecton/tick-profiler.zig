@@ -3,6 +3,9 @@ const std = @import("std");
 pub const Phase = enum {
     raknet_tick,
     player_tick,
+    /// Timed as its own phase, not folded into player_tick: the per-viewer pass runs after the player tick loop.
+    visibility_pass,
+    visibility_tracked,
     world_tick,
     drain_completed_1,
     main_tasks,
@@ -22,7 +25,6 @@ pub const Phase = enum {
 
 const PHASE_COUNT = @typeInfo(Phase).@"enum".fields.len;
 
-/// Derived rates the report uses to explain a phase.
 pub const Counter = enum {
     movement_emitters,
     movement_skipped,
@@ -32,6 +34,7 @@ pub const Counter = enum {
 
 const COUNTER_COUNT = @typeInfo(Counter).@"enum".fields.len;
 
+/// Worker threads record concurrently with the tick thread, so every field is updated with atomic RMWs.
 const Stats = struct {
     total_ns: u64 = 0,
     count: u64 = 0,
@@ -47,33 +50,40 @@ pub const TickProfiler = struct {
     tick_budget_ns: u64 = 50_000_000,
 
     pub fn record(self: *TickProfiler, phase: Phase, ns: u64) void {
-        const idx = @intFromEnum(phase);
-        self.phases[idx].total_ns += ns;
-        self.phases[idx].count += 1;
-        if (ns < self.phases[idx].min_ns) self.phases[idx].min_ns = ns;
-        if (ns > self.phases[idx].max_ns) self.phases[idx].max_ns = ns;
+        const stats = &self.phases[@intFromEnum(phase)];
+        _ = @atomicRmw(u64, &stats.total_ns, .Add, ns, .monotonic);
+        _ = @atomicRmw(u64, &stats.count, .Add, 1, .monotonic);
+        _ = @atomicRmw(u64, &stats.min_ns, .Min, ns, .monotonic);
+        _ = @atomicRmw(u64, &stats.max_ns, .Max, ns, .monotonic);
     }
 
     pub fn count(self: *TickProfiler, counter: Counter, total: usize) void {
-        self.counters[@intFromEnum(counter)] += total;
+        _ = @atomicRmw(u64, &self.counters[@intFromEnum(counter)], .Add, @intCast(total), .monotonic);
     }
 
     pub fn recordTick(self: *TickProfiler, total_ns: u64) void {
-        self.total_ticks += 1;
-        if (total_ns > self.tick_budget_ns) self.slow_ticks += 1;
+        _ = @atomicRmw(u64, &self.total_ticks, .Add, 1, .monotonic);
+        if (total_ns > self.tick_budget_ns) {
+            _ = @atomicRmw(u64, &self.slow_ticks, .Add, 1, .monotonic);
+        }
         self.record(.total, total_ns);
     }
 
     pub fn avgTickMs(self: *const TickProfiler) f64 {
-        const s = self.phases[@intFromEnum(Phase.total)];
-        if (s.count == 0) return 0.0;
-        return @as(f64, @floatFromInt(s.total_ns / s.count)) / 1_000_000.0;
+        const stats = &self.phases[@intFromEnum(Phase.total)];
+        const sample_count = @atomicLoad(u64, &stats.count, .monotonic);
+        if (sample_count == 0) return 0.0;
+        const total_ns = @atomicLoad(u64, &stats.total_ns, .monotonic);
+        return @as(f64, @floatFromInt(total_ns / sample_count)) / 1_000_000.0;
     }
 
     pub fn slowTickPct(self: *const TickProfiler) f64 {
-        if (self.total_ticks == 0) return 0.0;
-        return @as(f64, @floatFromInt(self.slow_ticks)) / @as(f64, @floatFromInt(self.total_ticks)) * 100.0;
+        const total_ticks = @atomicLoad(u64, &self.total_ticks, .monotonic);
+        if (total_ticks == 0) return 0.0;
+        const slow_ticks = @atomicLoad(u64, &self.slow_ticks, .monotonic);
+        return @as(f64, @floatFromInt(slow_ticks)) / @as(f64, @floatFromInt(total_ticks)) * 100.0;
     }
+
     pub fn writeReport(self: *const TickProfiler, io: std.Io, path: []const u8) void {
         std.Io.Dir.cwd().createDir(io, "dump", .default_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
@@ -95,17 +105,19 @@ pub const TickProfiler = struct {
 
         writer.interface.writeAll("=== Tick Profiler Report ===\n") catch return;
 
-        const pct = if (self.total_ticks > 0)
-            @as(f64, @floatFromInt(self.slow_ticks)) / @as(f64, @floatFromInt(self.total_ticks)) * 100.0
+        const total_ticks = @atomicLoad(u64, &self.total_ticks, .monotonic);
+        const slow_ticks = @atomicLoad(u64, &self.slow_ticks, .monotonic);
+        const pct = if (total_ticks > 0)
+            @as(f64, @floatFromInt(slow_ticks)) / @as(f64, @floatFromInt(total_ticks)) * 100.0
         else
             0.0;
 
-        var line = std.fmt.bufPrint(&buf, "Total ticks: {d}\n", .{self.total_ticks}) catch return;
+        var line = std.fmt.bufPrint(&buf, "Total ticks: {d}\n", .{total_ticks}) catch return;
         writer.interface.writeAll(line) catch return;
 
         line = std.fmt.bufPrint(&buf, "Slow ticks (>{d}ms): {d} ({d:.1}%)\n", .{
             self.tick_budget_ns / 1_000_000,
-            self.slow_ticks,
+            slow_ticks,
             pct,
         }) catch return;
         writer.interface.writeAll(line) catch return;
@@ -122,24 +134,28 @@ pub const TickProfiler = struct {
         writer.interface.writeAll(line) catch return;
 
         for (0..PHASE_COUNT) |i| {
-            const s = self.phases[i];
-            if (s.count == 0) continue;
-            const avg_ms = @as(f64, @floatFromInt(s.total_ns / s.count)) / 1_000_000.0;
-            const min_ms = @as(f64, @floatFromInt(s.min_ns)) / 1_000_000.0;
-            const max_ms = @as(f64, @floatFromInt(s.max_ns)) / 1_000_000.0;
+            const stats = &self.phases[i];
+            const sample_count = @atomicLoad(u64, &stats.count, .monotonic);
+            if (sample_count == 0) continue;
+            const total_ns = @atomicLoad(u64, &stats.total_ns, .monotonic);
+            const min_ns = @atomicLoad(u64, &stats.min_ns, .monotonic);
+            const max_ns = @atomicLoad(u64, &stats.max_ns, .monotonic);
+            const avg_ms = @as(f64, @floatFromInt(total_ns / sample_count)) / 1_000_000.0;
+            const min_ms = @as(f64, @floatFromInt(min_ns)) / 1_000_000.0;
+            const max_ms = @as(f64, @floatFromInt(max_ns)) / 1_000_000.0;
             line = std.fmt.bufPrint(&buf, "{s:<25} {d:>10.3} {d:>10.3} {d:>10.3} {d:>10}\n", .{
-                @tagName(@as(Phase, @enumFromInt(i))), avg_ms, min_ms, max_ms, s.count,
+                @tagName(@as(Phase, @enumFromInt(i))), avg_ms, min_ms, max_ms, sample_count,
             }) catch continue;
             writer.interface.writeAll(line) catch continue;
         }
 
-        if (self.total_ticks > 0) {
+        if (total_ticks > 0) {
             writer.interface.writeAll("\n") catch return;
             writer.interface.writeAll("Counter                   Total    Per tick\n") catch return;
             writer.interface.writeAll("------------------------------- ------------\n") catch return;
             for (0..COUNTER_COUNT) |i| {
-                const total = self.counters[i];
-                const per_tick = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(self.total_ticks));
+                const total = @atomicLoad(u64, &self.counters[i], .monotonic);
+                const per_tick = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(total_ticks));
                 line = std.fmt.bufPrint(&buf, "{s:<25} {d:>12} {d:>11.2}\n", .{
                     @tagName(@as(Counter, @enumFromInt(i))), total, per_tick,
                 }) catch continue;
@@ -153,3 +169,20 @@ pub const TickProfiler = struct {
         };
     }
 };
+
+test "phases and counters accumulate atomically" {
+    var profiler: TickProfiler = .{};
+
+    profiler.record(.raknet_tick, 1_000_000);
+    profiler.record(.raknet_tick, 3_000_000);
+    const stats = &profiler.phases[@intFromEnum(Phase.raknet_tick)];
+    try std.testing.expectEqual(@as(u64, 2), @atomicLoad(u64, &stats.count, .monotonic));
+    try std.testing.expectEqual(@as(u64, 4_000_000), @atomicLoad(u64, &stats.total_ns, .monotonic));
+    try std.testing.expectEqual(@as(u64, 1_000_000), @atomicLoad(u64, &stats.min_ns, .monotonic));
+    try std.testing.expectEqual(@as(u64, 3_000_000), @atomicLoad(u64, &stats.max_ns, .monotonic));
+
+    profiler.count(.movement_updates, 3);
+    profiler.count(.movement_updates, 2);
+    const updates = @atomicLoad(u64, &profiler.counters[@intFromEnum(Counter.movement_updates)], .monotonic);
+    try std.testing.expectEqual(@as(u64, 5), updates);
+}
