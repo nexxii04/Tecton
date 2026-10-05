@@ -36,7 +36,8 @@ fn onTick(state: *State, entity: *Entity) void {
     state.visibility_tick +%= 1;
     if (moved_chunks or state.visibility_tick >= visibility_interval) {
         state.visibility_tick = 0;
-        visibility.updatePlayerVisibility(player);
+        // The pass runs later, after the player tick loop on the world workers, so only the cadence is decided here.
+        player.visibility_due = true;
     }
 
     if (!moved_chunks) return;

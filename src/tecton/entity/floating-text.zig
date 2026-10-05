@@ -144,6 +144,8 @@ pub const FloatingTextManager = struct {
     by_name: std.StringHashMap(*FloatingText),
     free_runtime_ids: std.ArrayList(i64),
     air_block_runtime_id: i32,
+    /// `updateVisibilityForPlayer` runs on multiple world workers and mutates the viewer sets, so it takes this lock.
+    viewers_mutex: std.Io.Mutex = .init,
 
     pub fn create(allocator: std.mem.Allocator, dimension: *Dimension) !*FloatingTextManager {
         const manager = try allocator.create(FloatingTextManager);
@@ -218,6 +220,10 @@ pub const FloatingTextManager = struct {
 
     pub fn updateVisibilityForPlayer(self: *FloatingTextManager, player: *Player) void {
         if (!self.canTrack(player)) return;
+
+        const io = self.dimension.world.tecton.io;
+        self.viewers_mutex.lock(io) catch return;
+        defer self.viewers_mutex.unlock(io);
 
         for (self.texts.items) |hologram| {
             const in_range = isInRange(hologram, player);

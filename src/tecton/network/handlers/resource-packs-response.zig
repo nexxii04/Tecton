@@ -106,7 +106,7 @@ fn runJoinStartupTask(ctx: *anyopaque) bool {
 
 fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
     const player = state.player;
-    if (!player.connection.active or state.tecton.getPlayerByConnection(player.connection) == null) {
+    if (!player.connection.isActive() or state.tecton.getPlayerByConnection(player.connection) == null) {
         player.join_startup_started = false;
         return true;
     }
@@ -131,7 +131,8 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
                 return true;
             };
             player.entity.dimension = dimension;
-        player.entity.instance_id = dimension.instance_id;            player.tecton.instances.assignDimension(player.entity.runtime_id, dimension) catch {};
+            player.entity.instance_id = dimension.instance_id;
+            player.tecton.instances.assignDimension(player.entity.runtime_id, dimension) catch {};
             player.tecton.registerEcsEntity(&player.entity);
 
             const loaded = player.loadPlayerData();

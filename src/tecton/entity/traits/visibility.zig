@@ -30,6 +30,11 @@ pub fn sendPublisherUpdate(player: *Player) void {
 pub fn updatePlayerVisibility(player: *Player) void {
     const tecton = player.tecton;
     const allocator = player.entity.allocator;
+    const pass_start = std.Io.Timestamp.now(tecton.io, .awake);
+    defer {
+        const elapsed = pass_start.durationTo(.now(tecton.io, .awake));
+        tecton.profiler.record(.visibility_pass, @intCast(@max(0, elapsed.nanoseconds)));
+    }
     const snapshots = tecton.getPlayerSnapshots();
     const range = player.view_distance * 16;
     const range_sq: f32 = @floatFromInt(range * range);
@@ -101,6 +106,11 @@ fn sweepUnseenPlayers(
 }
 
 fn updateTrackedEntities(player: *Player) void {
+    const start = std.Io.Timestamp.now(player.tecton.io, .awake);
+    defer {
+        const elapsed = start.durationTo(.now(player.tecton.io, .awake));
+        player.tecton.profiler.record(.visibility_tracked, @intCast(@max(0, elapsed.nanoseconds)));
+    }
     const dimension = player.entity.dimension orelse return;
     const allocator = player.entity.allocator;
 

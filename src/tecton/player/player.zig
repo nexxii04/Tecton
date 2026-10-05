@@ -22,6 +22,7 @@ const Tecton = @import("../tecton.zig").Tecton;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const MoveDelta = @import("move-delta.zig");
 const Pose = @import("pose.zig").Pose;
+const SharedBroadcast = @import("../network/shared-broadcast.zig").SharedBroadcast;
 
 pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
 pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;
@@ -47,8 +48,7 @@ pub fn damageable(gamemode: Protocol.GameMode) bool {
     };
 }
 
-/// Sanity ceiling for the attack packet (vanilla reach is ~3 blocks), not a
-/// guard: the attacker's position is client-reported.
+/// Sanity ceiling for the attack packet (vanilla reach is ~3 blocks), not a guard: the attacker's position is client-reported.
 pub const MAX_ATTACK_REACH: f32 = 8.0;
 
 pub fn withinAttackReach(attacker: Protocol.Vector3f, target: Protocol.Vector3f) bool {
@@ -85,6 +85,8 @@ pub const Player = struct {
     visible_players: std.AutoHashMap(i64, u32),
     visible_sweep: std.ArrayList(i64) = .empty,
     visibility_epoch: u32 = 0,
+    /// Set by the chunk-loading trait on the worker; consumed by the tick's visibility phase.
+    visibility_due: bool = false,
     visible_entities: std.AutoHashMap(i64, i64),
     pending_removal: std.atomic.Value(bool) = .init(false),
     spawned: bool = false,
@@ -94,7 +96,6 @@ pub const Player = struct {
     block_target: ?Protocol.BlockPosition = null,
     gamemode: Protocol.GameMode = .Creative,
     last_broadcast: MoveDelta.LastBroadcast = .{},
-    // Band of the last flush; null until computed or while no viewer can receive it.
     broadcast_band: ?u8 = null,
     on_ground: bool = true,
     pending_move: ?MoveDelta.State = null,
@@ -213,7 +214,7 @@ pub const Player = struct {
 
     pub fn disconnectFromNetwork(self: *Player) void {
         if (!self.beginRemoval()) return;
-        // RakNet onDisconnect: mark the player and hand it to the tick thread.
+        // RakNet onDisconnect: mark the player here and hand it to the tick thread.
         self.tecton.enqueuePlayerRemoval(self);
     }
 
@@ -248,13 +249,21 @@ pub const Player = struct {
             const serialized = remove.serialize(&stream) catch null;
             if (serialized) |data| {
                 if (self.entity.dimension) |dimension| {
-                    for (snapshots) |other| {
-                        if (other.entity.runtime_id == self.entity.runtime_id) continue;
-                        if (!other.spawned) continue;
-                        if (other.entity.dimension != dimension) continue;
-                        _ = other.visible_players.remove(self.entity.runtime_id);
-                        self.network.sendPacket(other.connection, data) catch {};
-                    }
+                    if (SharedBroadcast.begin(
+                        self.network.allocator,
+                        data,
+                        self.network.options,
+                    )) |begun| {
+                        var broadcast = begun;
+                        defer broadcast.deinit();
+                        for (snapshots) |other| {
+                            if (other.entity.runtime_id == self.entity.runtime_id) continue;
+                            if (!other.spawned) continue;
+                            if (other.entity.dimension != dimension) continue;
+                            _ = other.visible_players.remove(self.entity.runtime_id);
+                            broadcast.send(other.connection, .normal);
+                        }
+                    } else |_| {}
                 }
             }
         }
@@ -276,11 +285,19 @@ pub const Player = struct {
             };
             const serialized = packet.serialize(&stream, allocator) catch null;
             if (serialized) |data| {
-                for (snapshots) |other| {
-                    if (other.entity.runtime_id == self.entity.runtime_id) continue;
-                    if (!other.spawned) continue;
-                    self.network.sendPacket(other.connection, data) catch {};
-                }
+                if (SharedBroadcast.begin(
+                    self.network.allocator,
+                    data,
+                    self.network.options,
+                )) |begun| {
+                    var broadcast = begun;
+                    defer broadcast.deinit();
+                    for (snapshots) |other| {
+                        if (other.entity.runtime_id == self.entity.runtime_id) continue;
+                        if (!other.spawned) continue;
+                        broadcast.send(other.connection, .normal);
+                    }
+                } else |_| {}
             }
         }
 
