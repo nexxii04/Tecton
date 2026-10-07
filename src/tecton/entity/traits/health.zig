@@ -1,11 +1,13 @@
 const std = @import("std");
 const Protocol = @import("protocol");
 const BinaryStream = @import("BinaryStream").BinaryStream;
+const NBT = @import("nbt");
+const CompoundTag = NBT.CompoundTag;
+const FloatTag = NBT.FloatTag;
 const Entity = @import("../entity.zig").Entity;
 const EntityType = @import("../entity-type.zig").EntityType;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const entities = @import("../../world/dimension/entities.zig");
 const broadcast = @import("../../world/dimension/broadcast.zig");
 
 pub const MAX_HEALTH: f32 = 20.0;
@@ -46,6 +48,40 @@ pub fn clampLoadedHealth(current: f32, max: f32) f32 {
     return max;
 }
 
+/// Mirrors a state read from disk onto the `Health` attribute, so a rebuilt mob
+/// does not report full health.
+pub fn syncAttributes(state: *const State, entity: *Entity) void {
+    entity.attributes.setMax(.Health, state.max);
+    entity.attributes.setCurrent(.Health, state.current);
+}
+
+fn onSerialize(state: *State, tag: *CompoundTag) void {
+    setFloat(tag, "Health", state.current);
+    setFloat(tag, "MaxHealth", state.max);
+}
+
+/// `CompoundTag.set` leaks when the key already exists, so a repeat write is skipped.
+fn setFloat(tag: *CompoundTag, key: []const u8, value: f32) void {
+    if (tag.get(key) != null) return;
+    tag.set(key, .{ .Float = FloatTag.init(value, null) }) catch {};
+}
+
+fn onDeserialize(state: *State, tag: *const CompoundTag) void {
+    if (readFloat(tag, "MaxHealth")) |max| {
+        if (max > 0) state.max = max;
+    }
+    if (readFloat(tag, "Health")) |current| {
+        state.current = if (current < 0) 0 else @min(current, state.max);
+    }
+}
+
+fn readFloat(tag: *const CompoundTag, key: []const u8) ?f32 {
+    return switch (tag.get(key) orelse return null) {
+        .Float => |value| value.value,
+        else => null,
+    };
+}
+
 pub fn isPlayer(entity: *const Entity) bool {
     return std.mem.eql(u8, entity.entity_type.identifier, "minecraft:player");
 }
@@ -74,6 +110,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
 
     if (!isDead(state.current)) return;
 
+    state.dead = true;
     entity.fireEvent(.Death, .{entity});
 
     var stream = BinaryStream.init(tecton.allocator, null, null);
@@ -88,15 +125,13 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
 
     broadcast.broadcastToEntityViewers(dimension, entity, serialized);
 
-    if (isPlayer(entity)) {
-        state.dead = true;
-        return;
-    }
+    if (isPlayer(entity)) return;
 
     if (entity.ecs_id != 0) {
         _ = tecton.ecs.queueEntityDrop(@bitCast(entity.ecs_id), entity.position);
     }
-    entities.removeEntity(dimension, entity) catch {};
+
+    dimension.pending_removals.append(dimension.allocator, entity.runtime_id) catch {};
 }
 
 /// A failed hurt-animation packet must not skip the death branch in `onDamage`.
@@ -150,6 +185,75 @@ test "a health read back from disk below one comes back as full" {
     try testing.expectEqual(@as(f32, 20.0), clampLoadedHealth(0.0, 20.0));
     try testing.expectEqual(@as(f32, 20.0), clampLoadedHealth(-4.0, 20.0));
     try testing.expectEqual(@as(f32, 20.0), clampLoadedHealth(40.0, 20.0));
+}
+
+test "health survives an nbt round trip" {
+    const allocator = testing.allocator;
+
+    var tag = CompoundTag.init(allocator, null);
+    defer tag.deinit(allocator);
+
+    var hurt = State{ .current = 7.5, .max = 20.0 };
+    onSerialize(&hurt, &tag);
+
+    var restored = State{ .current = 20.0, .max = 20.0 };
+    onDeserialize(&restored, &tag);
+    try testing.expectEqual(@as(f32, 7.5), restored.current);
+    try testing.expectEqual(@as(f32, 20.0), restored.max);
+
+    var boosted_tag = CompoundTag.init(allocator, null);
+    defer boosted_tag.deinit(allocator);
+
+    var boosted = State{ .current = 24.0, .max = 30.0 };
+    onSerialize(&boosted, &boosted_tag);
+
+    var boosted_restored = State{ .current = 20.0, .max = 20.0 };
+    onDeserialize(&boosted_restored, &boosted_tag);
+    try testing.expectEqual(@as(f32, 24.0), boosted_restored.current);
+    try testing.expectEqual(@as(f32, 30.0), boosted_restored.max);
+}
+
+// A second write must not call `CompoundTag.set`, which leaks an existing key.
+test "serializing health twice does not leak the compound key" {
+    const allocator = testing.allocator;
+
+    var tag = CompoundTag.init(allocator, null);
+    defer tag.deinit(allocator);
+
+    var state = State{ .current = 7.5, .max = 20.0 };
+    onSerialize(&state, &tag);
+    onSerialize(&state, &tag);
+
+    try testing.expectEqual(@as(usize, 2), tag.count());
+    try testing.expectEqual(@as(f32, 7.5), tag.get("Health").?.Float.value);
+}
+
+// Legacy records carry no health keys: they must load at full, not at zero.
+test "a record without health comes back at full" {
+    const allocator = testing.allocator;
+
+    var tag = CompoundTag.init(allocator, null);
+    defer tag.deinit(allocator);
+
+    var restored = State{ .current = 20.0, .max = 20.0 };
+    onDeserialize(&restored, &tag);
+    try testing.expectEqual(@as(f32, 20.0), restored.current);
+    try testing.expectEqual(@as(f32, 20.0), restored.max);
+}
+
+// A stored zero is a dead mob, not one to quietly heal to full.
+test "a stored zero stays zero instead of healing to full" {
+    const allocator = testing.allocator;
+
+    var tag = CompoundTag.init(allocator, null);
+    defer tag.deinit(allocator);
+    try tag.set("Health", .{ .Float = FloatTag.init(0.0, null) });
+    try tag.set("MaxHealth", .{ .Float = FloatTag.init(20.0, null) });
+
+    var restored = State{ .current = 20.0, .max = 20.0 };
+    onDeserialize(&restored, &tag);
+    try testing.expectEqual(@as(f32, 0.0), restored.current);
+    try testing.expect(isDead(restored.current));
 }
 
 test "only the player leaves a body behind when it dies" {
@@ -242,60 +346,64 @@ test "a dead player ignores damage until it is revived" {
     try testing.expectEqual(@as(f32, 17.0), state.current);
 }
 
+pub const DAMAGEABLE_ENTITIES: []const []const u8 = &.{
+    "minecraft:zombie",
+    "minecraft:skeleton",
+    "minecraft:creeper",
+    "minecraft:spider",
+    "minecraft:cow",
+    "minecraft:pig",
+    "minecraft:sheep",
+    "minecraft:chicken",
+    "minecraft:wolf",
+    "minecraft:villager",
+    "minecraft:enderman",
+    "minecraft:slime",
+    "minecraft:silverfish",
+    "minecraft:blaze",
+    "minecraft:witch",
+    "minecraft:bat",
+    "minecraft:iron_golem",
+    "minecraft:snow_golem",
+    "minecraft:ocelot",
+    "minecraft:horse",
+    "minecraft:rabbit",
+    "minecraft:polar_bear",
+    "minecraft:llama",
+    "minecraft:parrot",
+    "minecraft:dolphin",
+    "minecraft:drowned",
+    "minecraft:phantom",
+    "minecraft:cat",
+    "minecraft:panda",
+    "minecraft:fox",
+    "minecraft:bee",
+    "minecraft:hoglin",
+    "minecraft:piglin",
+    "minecraft:strider",
+    "minecraft:zoglin",
+    "minecraft:goat",
+    "minecraft:axolotl",
+    "minecraft:glow_squid",
+    "minecraft:warden",
+    "minecraft:allay",
+    "minecraft:frog",
+    "minecraft:camel",
+    "minecraft:sniffer",
+    "minecraft:armadillo",
+    "minecraft:bogged",
+    "minecraft:breeze",
+};
+
 pub const HealthTrait = EntityTrait(State, .{
     .identifier = "health",
-    .entities = &.{
-        "minecraft:zombie",
-        "minecraft:skeleton",
-        "minecraft:creeper",
-        "minecraft:spider",
-        "minecraft:cow",
-        "minecraft:pig",
-        "minecraft:sheep",
-        "minecraft:chicken",
-        "minecraft:wolf",
-        "minecraft:villager",
-        "minecraft:enderman",
-        "minecraft:slime",
-        "minecraft:silverfish",
-        "minecraft:blaze",
-        "minecraft:witch",
-        "minecraft:bat",
-        "minecraft:iron_golem",
-        "minecraft:snow_golem",
-        "minecraft:ocelot",
-        "minecraft:horse",
-        "minecraft:rabbit",
-        "minecraft:polar_bear",
-        "minecraft:llama",
-        "minecraft:parrot",
-        "minecraft:dolphin",
-        "minecraft:drowned",
-        "minecraft:phantom",
-        "minecraft:cat",
-        "minecraft:panda",
-        "minecraft:fox",
-        "minecraft:bee",
-        "minecraft:hoglin",
-        "minecraft:piglin",
-        "minecraft:strider",
-        "minecraft:zoglin",
-        "minecraft:goat",
-        "minecraft:axolotl",
-        "minecraft:glow_squid",
-        "minecraft:warden",
-        "minecraft:allay",
-        "minecraft:frog",
-        "minecraft:camel",
-        "minecraft:sniffer",
-        "minecraft:armadillo",
-        "minecraft:bogged",
-        "minecraft:breeze",
-    },
+    .entities = DAMAGEABLE_ENTITIES,
     .default_state = .{
         .current = 20.0,
         .max = 20.0,
     },
     .on_attach = onAttach,
     .on_damage = onDamage,
+    .on_serialize = onSerialize,
+    .on_deserialize = onDeserialize,
 });

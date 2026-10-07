@@ -163,6 +163,7 @@ pub const Dimension = struct {
 
         try self.chunks.put(hash, chunk);
         self.world.provider.readBlockEntities(chunk, self) catch {};
+        self.world.provider.readChunkEntities(chunk, self) catch {};
         return chunk;
     }
 
@@ -173,6 +174,8 @@ pub const Dimension = struct {
         }
         if (self.chunks.fetchRemove(hash)) |entry| {
             var chunk = entry.value;
+            // Rewrite the digest so a mob that died since the last save stays gone.
+            self.world.provider.writeChunkEntities(chunk, self) catch {};
             if (self.getBlocksInChunk(x, z).len > 0) {
                 self.world.provider.writeBlockEntities(chunk, self) catch {};
             }
@@ -210,6 +213,8 @@ pub const Dimension = struct {
                 if (self.chunks.fetchRemove(h)) |entry| {
                     const coords2 = Protocol.ChunkCoords.unhash(h);
                     var chunk = entry.value;
+                    // Rewrite the digest so a mob that died since the last save stays gone.
+                    self.world.provider.writeChunkEntities(chunk, self) catch {};
                     if (self.getBlocksInChunk(coords2.x, coords2.z).len > 0) {
                         self.world.provider.writeBlockEntities(chunk, self) catch {};
                     }

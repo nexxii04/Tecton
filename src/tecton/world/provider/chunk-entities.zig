@@ -6,6 +6,8 @@ const CompoundTag = NBT.CompoundTag;
 
 const Chunk = @import("../chunk/chunk.zig").Chunk;
 const Dimension = @import("../dimension/dimension.zig").Dimension;
+const chunkHash = @import("../dimension/dimension.zig").chunkHash;
+const entities = @import("../dimension/entities.zig");
 const key_mod = @import("./leveldb-keys.zig");
 const persistence = @import("./persistence.zig");
 const serialization = @import("./serialization.zig");
@@ -74,4 +76,289 @@ pub fn readChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: *
         };
     }
     return result;
+}
+
+/// Rebuilds the actors the chunk's digest lists, skipping any that cannot spawn.
+pub fn loadChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !void {
+    var tags = try readChunkEntities(provider, chunk, dimension);
+    defer {
+        for (tags.items) |*tag| tag.deinit(provider.allocator);
+        tags.deinit(provider.allocator);
+    }
+    for (tags.items) |*tag| {
+        _ = entities.spawnStoredEntity(dimension, tag) catch continue;
+    }
+}
+
+const testing = std.testing;
+
+const Events = @import("../../events/types.zig");
+const events_mod = @import("../../events/root.zig");
+const EcsWorld = @import("../../entity/ecs.zig").EcsWorld;
+const Entity = @import("../../entity/entity.zig").Entity;
+const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
+const EntityTraits = @import("../../entity/traits/root.zig");
+const Tecton = @import("../../tecton.zig").Tecton;
+const NetworkHandler = @import("../../network/network-handler.zig").NetworkHandler;
+const PlayerRegistry = @import("../../server/players.zig").PlayerRegistry;
+const Protocol = @import("protocol");
+const World = @import("../world.zig").World;
+const BlockState = @import("../block/block-permutation.zig").BlockState;
+const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const BlockType = @import("../block/block-type.zig").BlockType;
+const LongTag = NBT.LongTag;
+const IntTag = NBT.IntTag;
+const FloatTag = NBT.FloatTag;
+const StringTag = NBT.StringTag;
+
+/// Provider + registries wired enough to rebuild stored actors without a network.
+const LoadHarness = struct {
+    tecton: Tecton,
+    network: NetworkHandler,
+    world: World,
+    dim: Dimension,
+    chunk: *Chunk,
+    provider: *LevelDBProvider,
+
+    fn init(self: *LoadHarness, allocator: std.mem.Allocator, db_name: [*:0]const u8) !void {
+        self.* = undefined;
+
+        try BlockPermutation.initRegistry(allocator);
+        errdefer BlockPermutation.deinitRegistry();
+        try BlockType.initRegistry(allocator);
+        errdefer BlockType.deinitRegistry();
+        const air_type = try BlockType.init(allocator, "minecraft:air");
+        try air_type.register();
+        const air_perm = try BlockPermutation.init(allocator, 0, "minecraft:air", BlockState.init(allocator));
+        try air_perm.register();
+        try air_type.addPermutation(air_perm);
+
+        _ = try EntityTypeRegistry.initRegistry(allocator);
+        errdefer EntityTypeRegistry.EntityTypeRegistry.deinit();
+        EntityTraits.initEntityTraitRegistry(allocator);
+        errdefer EntityTraits.deinitEntityTraitRegistry();
+        try EntityTraits.HealthTrait.register();
+        try EntityTraits.FireTrait.register();
+
+        self.tecton = undefined;
+        self.tecton.events = events_mod.Events.init(allocator);
+        self.tecton.ecs = try EcsWorld.init(allocator, 16);
+        self.tecton.players = PlayerRegistry.init(testing.io, allocator);
+        self.network = undefined;
+        self.network.allocator = allocator;
+        self.network.options = .{ .compression_method = .Zlib, .compression_threshold = 255 };
+        self.tecton.network = &self.network;
+
+        self.provider = try LevelDBProvider.init(testing.io, allocator, db_name);
+        self.world = try World.init(&self.tecton, allocator, "load-world", self.provider.asProvider());
+        self.dim = Dimension.init(&self.world, allocator, "overworld", .Overworld, null);
+        self.chunk = try allocator.create(Chunk);
+        self.chunk.* = Chunk.init(allocator, 0, 0, .Overworld);
+        try self.dim.chunks.put(chunkHash(0, 0), self.chunk);
+    }
+
+    fn deinit(self: *LoadHarness) void {
+        self.dim.deinit();
+        self.world.deinit();
+        self.tecton.players.deinit();
+        self.tecton.ecs.deinit();
+        self.tecton.events.deinit();
+        EntityTraits.deinitEntityTraitRegistry();
+        EntityTypeRegistry.EntityTypeRegistry.deinit();
+        BlockType.deinitRegistry();
+        BlockPermutation.deinitRegistry();
+    }
+};
+
+fn putStoredActor(provider: *LevelDBProvider, uid: i64, identifier: []const u8, fire_ticks: i32, health: ?f32) !void {
+    const allocator = provider.allocator;
+    var tag = CompoundTag.init(allocator, null);
+    defer tag.deinit(allocator);
+    try tag.set("identifier", .{ .String = StringTag.init(try allocator.dupe(u8, identifier), null) });
+    try tag.set("UniqueID", .{ .Long = LongTag.init(uid, null) });
+    if (fire_ticks > 0) try tag.set("FireTicks", .{ .Int = IntTag.init(fire_ticks, null) });
+    if (health) |value| {
+        try tag.set("Health", .{ .Float = FloatTag.init(value, null) });
+        try tag.set("MaxHealth", .{ .Float = FloatTag.init(20.0, null) });
+    }
+    const data = try serialization.encodeNbt(allocator, &tag);
+    defer allocator.free(data);
+    const key = key_mod.actorKey(uid);
+    try provider.db.put(key.slice(), data);
+}
+
+fn putStoredDigest(provider: *LevelDBProvider, dim_index: i32, x: i32, z: i32, uids: []const i64) !void {
+    const allocator = provider.allocator;
+    const digest = try allocator.alloc(u8, uids.len * 8);
+    defer allocator.free(digest);
+    for (uids, 0..) |uid, i| {
+        const bytes: [8]u8 = @bitCast(std.mem.nativeToLittle(i64, uid));
+        @memcpy(digest[i * 8 .. (i + 1) * 8], &bytes);
+    }
+    const key = key_mod.digpKey(x, z, dim_index);
+    try provider.db.put(key.slice(), digest);
+}
+
+test "a stored mob comes back burning after its chunk reloads" {
+    const allocator = testing.allocator;
+    var harness: LoadHarness = undefined;
+    try harness.init(allocator, "test_chunk_entities_db\x00");
+    defer {
+        harness.deinit();
+        std.Io.Dir.cwd().deleteTree(testing.io, "test_chunk_entities_db") catch {};
+    }
+
+    const entity_type = EntityTypeRegistry.EntityTypeRegistry.get("minecraft:zombie").?;
+    const mob = try allocator.create(Entity);
+    mob.* = Entity.init(allocator, entity_type, &harness.dim);
+    mob.position = Protocol.Vector3f.init(2.5, 64.0, 2.5);
+    try mob.addTrait(try EntityTraits.FireTrait.create(allocator, .{
+        .fire_ticks = 120,
+        .damage_timer = 7,
+        .burn_source = .lava,
+    }));
+    const stored_uid = mob.unique_id;
+    const stored_runtime_id = mob.runtime_id;
+    try harness.dim.entities.put(stored_runtime_id, mob);
+
+    try writeChunkEntities(harness.provider, harness.chunk, &harness.dim);
+
+    // The chunk is released and re-read while the mob is still alive: it must not double.
+    try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+    try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+
+    // Then the mob dies and is flushed; the chunk comes back from storage.
+    const removed = harness.dim.entities.fetchRemove(stored_runtime_id).?.value;
+    removed.deinit();
+    allocator.destroy(removed);
+
+    try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+    try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+
+    var it = harness.dim.entities.valueIterator();
+    const loaded = it.next().?.*;
+    try testing.expectEqual(stored_uid, loaded.unique_id);
+    try testing.expectEqual(@as(f32, 2.5), loaded.position.x);
+    try testing.expectEqual(@as(f32, 64.0), loaded.position.y);
+    try testing.expectEqual(@as(f32, 2.5), loaded.position.z);
+    try testing.expect(loaded.ecs_id != 0);
+    try testing.expectEqual(@as(usize, 1), harness.dim.entity_index.count());
+
+    const fire_state = loaded.getTraitState(EntityTraits.FireTrait).?;
+    try testing.expectEqual(@as(i32, 120), fire_state.fire_ticks);
+    try testing.expectEqual(@as(i32, 7), fire_state.damage_timer);
+    try testing.expectEqual(Events.CombustSource.lava, fire_state.burn_source);
+
+    // The first tick after the load re-synchronizes the OnFire actor flag.
+    loaded.fireEvent(.Tick, .{loaded});
+    try testing.expect(loaded.flags.getFlag(.OnFire));
+    try testing.expectEqual(@as(i32, 119), fire_state.fire_ticks);
+}
+
+test "stored actors that cannot spawn are skipped without losing the chunk" {
+    const allocator = testing.allocator;
+    var harness: LoadHarness = undefined;
+    try harness.init(allocator, "test_chunk_entities_skip_db\x00");
+    defer {
+        harness.deinit();
+        std.Io.Dir.cwd().deleteTree(testing.io, "test_chunk_entities_skip_db") catch {};
+    }
+
+    try putStoredActor(harness.provider, 9001, "minecraft:not_a_real_mob", 0, null);
+    try putStoredActor(harness.provider, 9002, "minecraft:item", 0, null);
+    try putStoredActor(harness.provider, 9003, "minecraft:player", 0, null);
+    try putStoredActor(harness.provider, 9004, "minecraft:zombie", 55, null);
+    try putStoredDigest(harness.provider, 0, 0, 0, &.{ 9001, 9002, 9003, 9004 });
+
+    try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+
+    try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+    var it = harness.dim.entities.valueIterator();
+    const loaded = it.next().?.*;
+    try testing.expectEqual(@as(i64, 9004), loaded.unique_id);
+    const fire_state = loaded.getTraitState(EntityTraits.FireTrait).?;
+    try testing.expectEqual(@as(i32, 55), fire_state.fire_ticks);
+}
+
+// A mob hurt before the save must come back hurt, with its `Health` attribute in sync.
+test "a stored mob keeps the health it had when the world was saved" {
+    const allocator = testing.allocator;
+    var harness: LoadHarness = undefined;
+    try harness.init(allocator, "test_chunk_entities_health_db\x00");
+    defer {
+        harness.deinit();
+        std.Io.Dir.cwd().deleteTree(testing.io, "test_chunk_entities_health_db") catch {};
+    }
+
+    const entity_type = EntityTypeRegistry.EntityTypeRegistry.get("minecraft:zombie").?;
+    const mob = try allocator.create(Entity);
+    mob.* = Entity.init(allocator, entity_type, &harness.dim);
+    mob.position = Protocol.Vector3f.init(2.5, 64.0, 2.5);
+    try mob.addTrait(try EntityTraits.HealthTrait.create(allocator, .{ .current = 7.5, .max = 20.0 }));
+    const stored_uid = mob.unique_id;
+    const stored_runtime_id = mob.runtime_id;
+    try harness.dim.entities.put(stored_runtime_id, mob);
+
+    try writeChunkEntities(harness.provider, harness.chunk, &harness.dim);
+
+    const removed = harness.dim.entities.fetchRemove(stored_runtime_id).?.value;
+    removed.deinit();
+    allocator.destroy(removed);
+
+    try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+    try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+
+    var it = harness.dim.entities.valueIterator();
+    const loaded = it.next().?.*;
+    try testing.expectEqual(stored_uid, loaded.unique_id);
+    const health_state = loaded.getTraitState(EntityTraits.HealthTrait).?;
+    try testing.expectEqual(@as(f32, 7.5), health_state.current);
+    try testing.expectEqual(@as(f32, 20.0), health_state.max);
+    try testing.expectEqual(@as(f32, 7.5), loaded.attributes.get(.Health).?.current);
+    try testing.expectEqual(@as(f32, 20.0), loaded.attributes.get(.Health).?.max);
+}
+
+// Regression: a digest still listing a corpse must not revive the mob the player killed.
+test "a stored mob saved at zero health is not rebuilt" {
+    const allocator = testing.allocator;
+    var harness: LoadHarness = undefined;
+    try harness.init(allocator, "test_chunk_entities_dead_db\x00");
+    defer {
+        harness.deinit();
+        std.Io.Dir.cwd().deleteTree(testing.io, "test_chunk_entities_dead_db") catch {};
+    }
+
+    try putStoredActor(harness.provider, 9101, "minecraft:zombie", 0, 0.0);
+    try putStoredActor(harness.provider, 9102, "minecraft:zombie", 0, 7.0);
+    try putStoredDigest(harness.provider, 0, 0, 0, &.{ 9101, 9102 });
+
+    try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+
+    try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+    var it = harness.dim.entities.valueIterator();
+    const loaded = it.next().?.*;
+    try testing.expectEqual(@as(i64, 9102), loaded.unique_id);
+    try testing.expectEqual(@as(f32, 7.0), loaded.getTraitState(EntityTraits.HealthTrait).?.current);
+}
+
+// Legacy records carry no health keys: they must load at full, not at zero.
+test "a stored mob without a health tag comes back at full" {
+    const allocator = testing.allocator;
+    var harness: LoadHarness = undefined;
+    try harness.init(allocator, "test_chunk_entities_legacy_db\x00");
+    defer {
+        harness.deinit();
+        std.Io.Dir.cwd().deleteTree(testing.io, "test_chunk_entities_legacy_db") catch {};
+    }
+
+    try putStoredActor(harness.provider, 9201, "minecraft:zombie", 0, null);
+    try putStoredDigest(harness.provider, 0, 0, 0, &.{9201});
+
+    try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+
+    var it = harness.dim.entities.valueIterator();
+    const loaded = it.next().?.*;
+    try testing.expectEqual(@as(f32, 20.0), loaded.getTraitState(EntityTraits.HealthTrait).?.current);
+    try testing.expectEqual(@as(f32, 20.0), loaded.getTraitState(EntityTraits.HealthTrait).?.max);
+    try testing.expectEqual(@as(f32, 20.0), loaded.attributes.get(.Health).?.current);
 }

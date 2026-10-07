@@ -1,10 +1,14 @@
 const std = @import("std");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
+const NBT = @import("nbt");
 const Protocol = @import("protocol");
+const CompoundTag = NBT.CompoundTag;
 
 const EntityType = @import("../../entity/entity-type.zig").EntityType;
+const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig").EntityTypeRegistry;
 const Entity = @import("../../entity/entity.zig").Entity;
+const Health = @import("../../entity/traits/health.zig");
 const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
 const ItemEntityTrait = @import("../../entity/traits/item-entity.zig").ItemEntityTrait;
 const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
@@ -12,6 +16,8 @@ const ItemStack = @import("../../items/item-stack.zig").ItemStack;
 const ItemType = @import("../../items/item-type.zig").ItemType;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("./dimension.zig").Dimension;
+const broadcast = @import("./broadcast.zig");
+const serialization = @import("../provider/serialization.zig");
 
 const item_entity_type = EntityType{
     .identifier = "minecraft:item",
@@ -103,6 +109,66 @@ pub fn spawnItemStackEntity(dim: *Dimension, stack: ItemStack, position: Protoco
     return entity;
 }
 
+/// Rebuilds a stored actor from its NBT tag and makes it live in `dim`. Returns null
+/// when the tag must not come back: item, player, unknown type, already loaded, or saved dead.
+pub fn spawnStoredEntity(dim: *Dimension, tag: *const CompoundTag) !?*Entity {
+    const identifier = stringField(tag, "identifier") orelse return null;
+    if (std.mem.eql(u8, identifier, "minecraft:item") or
+        std.mem.eql(u8, identifier, "minecraft:player")) return null;
+    const entity_type = EntityTypeRegistry.get(identifier) orelse return null;
+
+    // Zero health is a mob that died before the last save; do not rebuild a corpse.
+    if (floatField(tag, "Health")) |stored_health| {
+        if (stored_health <= 0) return null;
+    }
+
+    if (longField(tag, "UniqueID")) |stored_uid| {
+        if (findByUniqueId(dim, stored_uid) != null) return null;
+    }
+
+    const entity = try dim.allocator.create(Entity);
+    errdefer dim.allocator.destroy(entity);
+    entity.* = Entity.init(dim.allocator, entity_type, dim);
+    errdefer entity.deinit();
+    entity.instance_id = dim.instance_id;
+    try applyGlobalTraits(dim.allocator, entity);
+    serialization.deserializeEntity(dim.allocator, entity, tag);
+    if (entity.getTraitState(Health.HealthTrait)) |health_state| Health.syncAttributes(health_state, entity);
+    dim.world.tecton.registerEcsEntity(entity);
+    try dim.entities.put(entity.runtime_id, entity);
+    dim.entity_index.add(entity);
+    return entity;
+}
+
+fn findByUniqueId(dim: *Dimension, unique_id: i64) ?*Entity {
+    var it = dim.entities.valueIterator();
+    while (it.next()) |entry| {
+        if (entry.*.unique_id == unique_id) return entry.*;
+    }
+    return null;
+}
+
+fn stringField(tag: *const CompoundTag, key: []const u8) ?[]const u8 {
+    return switch (tag.get(key) orelse return null) {
+        .String => |s| s.value,
+        else => null,
+    };
+}
+
+fn longField(tag: *const CompoundTag, key: []const u8) ?i64 {
+    return switch (tag.get(key) orelse return null) {
+        .Long => |l| l.value,
+        else => null,
+    };
+}
+
+fn floatField(tag: *const CompoundTag, key: []const u8) ?f32 {
+    return switch (tag.get(key) orelse return null) {
+        .Float => |f| f.value,
+        else => null,
+    };
+}
+
 fn serializeAddEntity(dim: *Dimension, entity: *Entity, stream: *BinaryStream) ![]const u8 {
     const flags_data = try entity.flags.buildDataItems(dim.allocator, null);
     defer dim.allocator.free(flags_data);
@@ -182,6 +248,18 @@ pub fn updateEntityNameTag(dim: *Dimension, entity: *Entity) void {
         if (!player.visible_entities.contains(entity.runtime_id)) continue;
         dim.world.tecton.network.sendPacket(player.connection, serialized) catch {};
     }
+}
+
+pub fn updateEntityActorFlags(dim: *Dimension, entity: *Entity) void {
+    const data = entity.flags.buildDataItems(dim.allocator, null) catch return;
+    defer dim.allocator.free(data);
+
+    var stream = BinaryStream.init(dim.allocator, null, null);
+    defer stream.deinit();
+    var packet = Protocol.SetActorDataPacket.initBorrowed(dim.allocator, entity.runtime_id, 0, data);
+    defer packet.deinit();
+    const serialized = packet.serialize(&stream) catch return;
+    broadcast.broadcastToEntityViewers(dim, entity, serialized);
 }
 
 pub fn sendRemoveEntityToPlayer(dim: *Dimension, player: *Player, entity: *Entity) void {

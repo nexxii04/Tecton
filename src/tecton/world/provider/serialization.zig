@@ -231,10 +231,7 @@ pub fn serializePlayer(allocator: std.mem.Allocator, player: *Player) !CompoundT
         try tag.set("SelectedInventorySlot", .{ .Int = IntTag.init(@intCast(inv_state.selected_slot), null) });
     }
 
-    if (player.entity.getTraitState(HealthTrait)) |health_state| {
-        try tag.set("Health", .{ .Float = FloatTag.init(health_state.current, null) });
-        try tag.set("MaxHealth", .{ .Float = FloatTag.init(health_state.max, null) });
-    }
+    // Health/MaxHealth come from the Health trait's hook; re-setting them here leaks a tag.
 
     const dimension_id: i32 = if (player.entity.dimension) |dimension|
         @intCast(@intFromEnum(dimension.dimension_type))
@@ -281,6 +278,7 @@ pub fn deserializePlayer(allocator: std.mem.Allocator, player: *Player, tag: *co
             }
         }
         health_state.dead = false;
+        Health.syncAttributes(health_state, &player.entity);
     }
 }
 

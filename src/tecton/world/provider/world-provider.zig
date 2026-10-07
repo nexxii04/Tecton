@@ -38,6 +38,7 @@ pub const WorldProvider = struct {
         write_player: ?*const fn (ptr: *anyopaque, uuid: []const u8, player: *Player) anyerror!void,
         read_player: ?*const fn (ptr: *anyopaque, uuid: []const u8, player: *Player) anyerror!bool,
         write_chunk_entities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
+        read_chunk_entities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
         write_block_entities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
         read_block_entities: ?*const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
         deinit_fn: *const fn (ptr: *anyopaque) void,
@@ -91,6 +92,10 @@ pub const WorldProvider = struct {
 
     pub fn writeChunkEntities(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {
         if (self.vtable.write_chunk_entities) |f| return f(self.ptr, chunk, dimension);
+    }
+
+    pub fn readChunkEntities(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {
+        if (self.vtable.read_chunk_entities) |f| return f(self.ptr, chunk, dimension);
     }
 
     pub fn writeBlockEntities(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {

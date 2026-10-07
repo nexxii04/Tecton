@@ -148,6 +148,7 @@ pub const LevelDBProvider = struct {
         .write_player = vtableWritePlayer,
         .read_player = vtableReadPlayer,
         .write_chunk_entities = vtableWriteChunkEntities,
+        .read_chunk_entities = vtableReadChunkEntities,
         .write_block_entities = vtableWriteBlockEntities,
         .read_block_entities = vtableReadBlockEntities,
         .deinit_fn = vtableDeinit,
@@ -206,6 +207,11 @@ pub const LevelDBProvider = struct {
     fn vtableWriteChunkEntities(ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void {
         const self: *LevelDBProvider = @ptrCast(@alignCast(ptr));
         return chunk_entities.writeChunkEntities(self, chunk, dimension);
+    }
+
+    fn vtableReadChunkEntities(ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void {
+        const self: *LevelDBProvider = @ptrCast(@alignCast(ptr));
+        return chunk_entities.loadChunkEntities(self, chunk, dimension);
     }
 
     fn vtableWriteBlockEntities(ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void {

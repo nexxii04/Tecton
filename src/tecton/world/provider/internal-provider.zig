@@ -97,6 +97,7 @@ pub const InternalProvider = struct {
         .write_player = null,
         .read_player = null,
         .write_chunk_entities = null,
+        .read_chunk_entities = null,
         .write_block_entities = null,
         .read_block_entities = null,
         .deinit_fn = vtableDeinit,
