@@ -1,7 +1,8 @@
 const std = @import("std");
-const NBT = @import("nbt");
+const testing = std.testing;
+
 const BinaryStream = @import("BinaryStream").BinaryStream;
-const Protocol = @import("protocol");
+const NBT = @import("nbt");
 const CompoundTag = NBT.CompoundTag;
 const ListTag = NBT.ListTag;
 const Tag = NBT.Tag;
@@ -12,16 +13,19 @@ const ByteTag = NBT.ByteTag;
 const ShortTag = NBT.ShortTag;
 const IntTag = NBT.IntTag;
 const ReadWriteOptions = NBT.ReadWriteOptions;
+const Protocol = @import("protocol");
 
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const ItemType = @import("../../items/item-type.zig").ItemType;
-const enchantment_nbt = @import("../../items/enchantments/nbt.zig");
 const Container = @import("../../container/container.zig").Container;
+const EntityType = @import("../../entity/entity-type.zig").EntityType;
 const Entity = @import("../../entity/entity.zig").Entity;
-const Player = @import("../../player/player.zig").Player;
-const InventoryTrait = @import("../../entity/traits/inventory.zig").InventoryTrait;
 const Health = @import("../../entity/traits/health.zig");
 const HealthTrait = Health.HealthTrait;
+const InventoryTrait = @import("../../entity/traits/inventory.zig").InventoryTrait;
+const enchantment_nbt = @import("../../items/enchantments/nbt.zig");
+const EnchantmentTesting = @import("../../items/enchantments/testing.zig");
+const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemType = @import("../../items/item-type.zig").ItemType;
+const Player = @import("../../player/player.zig").Player;
 
 pub fn serializeItemStack(allocator: std.mem.Allocator, item: *ItemStack) !CompoundTag {
     enchantment_nbt.sync(item) catch {
@@ -180,9 +184,9 @@ pub fn deserializeEntity(_: std.mem.Allocator, entity: *Entity, tag: *const Comp
             .List => |list| {
                 if (list.value.len >= 3) {
                     entity.position = Protocol.Vector3f.init(
-                        getFloat(&list.value[0]),
-                        getFloat(&list.value[1]),
-                        getFloat(&list.value[2]),
+                        sane(getFloat(&list.value[0]), world_border),
+                        sane(getFloat(&list.value[1]), world_border),
+                        sane(getFloat(&list.value[2]), world_border),
                     );
                 }
             },
@@ -209,9 +213,9 @@ pub fn deserializeEntity(_: std.mem.Allocator, entity: *Entity, tag: *const Comp
             .List => |list| {
                 if (list.value.len >= 3) {
                     entity.motion = Protocol.Vector3f.init(
-                        getFloat(&list.value[0]),
-                        getFloat(&list.value[1]),
-                        getFloat(&list.value[2]),
+                        sane(getFloat(&list.value[0]), max_motion),
+                        sane(getFloat(&list.value[1]), max_motion),
+                        sane(getFloat(&list.value[2]), max_motion),
                     );
                 }
             },
@@ -295,6 +299,14 @@ pub fn decodeNbt(allocator: std.mem.Allocator, data: []const u8) !CompoundTag {
     return try CompoundTag.read(&stream, allocator, ReadWriteOptions.default);
 }
 
+const world_border: f32 = 30_000_000;
+const max_motion: f32 = 1_000;
+
+fn sane(value: f32, limit: f32) f32 {
+    if (!std.math.isFinite(value)) return 0;
+    return std.math.clamp(value, -limit, limit);
+}
+
 fn getFloat(tag: *const Tag) f32 {
     return switch (tag.*) {
         .Float => |f| f.value,
@@ -311,8 +323,37 @@ fn copyCompound(allocator: std.mem.Allocator, src: *const CompoundTag) !Compound
     return try CompoundTag.read(&read_stream, allocator, ReadWriteOptions.default);
 }
 
-const testing = std.testing;
-const EnchantmentTesting = @import("../../items/enchantments/testing.zig");
+test "a corrupt position and motion from disk are clamped on load" {
+    const allocator = testing.allocator;
+
+    const entity_type = EntityType.init("minecraft:zombie", 1, &.{}, &.{});
+    var entity = Entity.init(allocator, &entity_type, null);
+    defer entity.deinit();
+
+    var tag = CompoundTag.init(allocator, null);
+    defer tag.deinit(allocator);
+
+    const pos = try allocator.alloc(Tag, 3);
+    pos[0] = .{ .Float = FloatTag.init(std.math.inf(f32), null) };
+    pos[1] = .{ .Float = FloatTag.init(std.math.nan(f32), null) };
+    pos[2] = .{ .Float = FloatTag.init(-1e30, null) };
+    try tag.set("Pos", .{ .List = ListTag.init(pos, null) });
+
+    const motion = try allocator.alloc(Tag, 3);
+    motion[0] = .{ .Float = FloatTag.init(std.math.nan(f32), null) };
+    motion[1] = .{ .Float = FloatTag.init(1e30, null) };
+    motion[2] = .{ .Float = FloatTag.init(0.02, null) };
+    try tag.set("Motion", .{ .List = ListTag.init(motion, null) });
+
+    deserializeEntity(allocator, &entity, &tag);
+
+    try testing.expectEqual(@as(f32, 0.0), entity.position.x);
+    try testing.expectEqual(@as(f32, 0.0), entity.position.y);
+    try testing.expectEqual(@as(f32, -world_border), entity.position.z);
+    try testing.expectEqual(@as(f32, 0.0), entity.motion.x);
+    try testing.expectEqual(@as(f32, max_motion), entity.motion.y);
+    try testing.expectEqual(@as(f32, 0.02), entity.motion.z);
+}
 
 // The typed structure is the source of truth; disk must not keep a stale ench.
 test "writing a stack syncs the enchantments the ops never wrote" {

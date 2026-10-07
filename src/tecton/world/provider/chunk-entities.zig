@@ -1,17 +1,36 @@
 const std = @import("std");
+const testing = std.testing;
 
 const LevelDB = @import("leveldb");
 const NBT = @import("nbt");
 const CompoundTag = NBT.CompoundTag;
+const LongTag = NBT.LongTag;
+const IntTag = NBT.IntTag;
+const FloatTag = NBT.FloatTag;
+const StringTag = NBT.StringTag;
+const Protocol = @import("protocol");
 
+const EcsWorld = @import("../../entity/ecs.zig").EcsWorld;
+const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
+const Entity = @import("../../entity/entity.zig").Entity;
+const EntityTraits = @import("../../entity/traits/root.zig");
+const events_mod = @import("../../events/root.zig");
+const Events = @import("../../events/types.zig");
+const NetworkHandler = @import("../../network/network-handler.zig").NetworkHandler;
+const PlayerRegistry = @import("../../server/players.zig").PlayerRegistry;
+const Tecton = @import("../../tecton.zig").Tecton;
+const BlockState = @import("../block/block-permutation.zig").BlockState;
+const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const BlockType = @import("../block/block-type.zig").BlockType;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
 const Dimension = @import("../dimension/dimension.zig").Dimension;
 const chunkHash = @import("../dimension/dimension.zig").chunkHash;
 const entities = @import("../dimension/entities.zig");
+const World = @import("../world.zig").World;
 const key_mod = @import("./leveldb-keys.zig");
+const LevelDBProvider = @import("./leveldb-provider.zig").LevelDBProvider;
 const persistence = @import("./persistence.zig");
 const serialization = @import("./serialization.zig");
-const LevelDBProvider = @import("./leveldb-provider.zig").LevelDBProvider;
 
 pub fn writeChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !void {
     const dim_index = key_mod.dimensionIndex(dimension);
@@ -90,27 +109,6 @@ pub fn loadChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: *
     }
 }
 
-const testing = std.testing;
-
-const Events = @import("../../events/types.zig");
-const events_mod = @import("../../events/root.zig");
-const EcsWorld = @import("../../entity/ecs.zig").EcsWorld;
-const Entity = @import("../../entity/entity.zig").Entity;
-const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
-const EntityTraits = @import("../../entity/traits/root.zig");
-const Tecton = @import("../../tecton.zig").Tecton;
-const NetworkHandler = @import("../../network/network-handler.zig").NetworkHandler;
-const PlayerRegistry = @import("../../server/players.zig").PlayerRegistry;
-const Protocol = @import("protocol");
-const World = @import("../world.zig").World;
-const BlockState = @import("../block/block-permutation.zig").BlockState;
-const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
-const BlockType = @import("../block/block-type.zig").BlockType;
-const LongTag = NBT.LongTag;
-const IntTag = NBT.IntTag;
-const FloatTag = NBT.FloatTag;
-const StringTag = NBT.StringTag;
-
 /// Provider + registries wired enough to rebuild stored actors without a network.
 const LoadHarness = struct {
     tecton: Tecton,
@@ -183,6 +181,27 @@ fn putStoredActor(provider: *LevelDBProvider, uid: i64, identifier: []const u8, 
     }
     const data = try serialization.encodeNbt(allocator, &tag);
     defer allocator.free(data);
+    const key = key_mod.actorKey(uid);
+    try provider.db.put(key.slice(), data);
+}
+
+fn putStoredActorWithPosition(provider: *LevelDBProvider, uid: i64, identifier: []const u8, x: f32, y: f32, z: f32) !void {
+    const allocator = provider.allocator;
+    var tag = CompoundTag.init(allocator, null);
+    defer tag.deinit(allocator);
+
+    try tag.set("identifier", .{ .String = StringTag.init(try allocator.dupe(u8, identifier), null) });
+    try tag.set("UniqueID", .{ .Long = LongTag.init(uid, null) });
+
+    const pos = try allocator.alloc(NBT.Tag, 3);
+    pos[0] = .{ .Float = FloatTag.init(x, null) };
+    pos[1] = .{ .Float = FloatTag.init(y, null) };
+    pos[2] = .{ .Float = FloatTag.init(z, null) };
+
+    try tag.set("Pos", .{ .List = NBT.ListTag.init(pos, null) });
+    const data = try serialization.encodeNbt(allocator, &tag);
+    defer allocator.free(data);
+
     const key = key_mod.actorKey(uid);
     try provider.db.put(key.slice(), data);
 }
@@ -339,6 +358,31 @@ test "a stored mob saved at zero health is not rebuilt" {
     const loaded = it.next().?.*;
     try testing.expectEqual(@as(i64, 9102), loaded.unique_id);
     try testing.expectEqual(@as(f32, 7.0), loaded.getTraitState(EntityTraits.HealthTrait).?.current);
+}
+
+test "a stored mob with a corrupt position is clamped before it reaches the save" {
+    const allocator = testing.allocator;
+    var harness: LoadHarness = undefined;
+    try harness.init(allocator, "test_chunk_entities_corrupt_db\x00");
+    defer {
+        harness.deinit();
+        std.Io.Dir.cwd().deleteTree(testing.io, "test_chunk_entities_corrupt_db") catch {};
+    }
+
+    try putStoredActorWithPosition(harness.provider, 9301, "minecraft:zombie", std.math.inf(f32), std.math.nan(f32), std.math.nan(f32));
+    try putStoredDigest(harness.provider, 0, 0, 0, &.{9301});
+
+    try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+    try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+
+    var it = harness.dim.entities.valueIterator();
+    const loaded = it.next().?.*;
+    try testing.expect(std.math.isFinite(loaded.position.x));
+    try testing.expect(std.math.isFinite(loaded.position.y));
+    try testing.expect(std.math.isFinite(loaded.position.z));
+    try testing.expect(@abs(loaded.position.x) < 16 and @abs(loaded.position.z) < 16);
+
+    try writeChunkEntities(harness.provider, harness.chunk, &harness.dim);
 }
 
 // Legacy records carry no health keys: they must load at full, not at zero.

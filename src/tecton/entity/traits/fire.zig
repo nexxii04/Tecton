@@ -59,28 +59,39 @@ pub fn ignite(entity: *Entity, source: Events.CombustSource, instigator: ?*Entit
     const state = entity.getTraitState(FireTrait) orelse return false;
     const dimension = entity.dimension orelse return false;
 
-    var event = Events.EntityCombustEvent{
-        .entity = entity,
-        .duration = EnchantmentEffects.fireBurnDuration(duration_ticks, fireProtectionLevels(entity)),
-        .instigator = instigator,
-        .source = source,
-    };
-    if (!dimension.world.tecton.events.emit(.EntityCombust, &event)) return false;
+    const instigator_id: i64 = if (instigator) |cause| cause.runtime_id else 0;
+    const was_burning = state.fire_ticks > 0;
+    var incoming = EnchantmentEffects.fireBurnDuration(duration_ticks, fireProtectionLevels(entity));
+
+    if (!isRepeatIgnition(state, source, instigator_id)) {
+        var event = Events.EntityCombustEvent{
+            .entity = entity,
+            .duration = incoming,
+            .instigator = instigator,
+            .source = source,
+        };
+        if (!dimension.world.tecton.events.emit(.EntityCombust, &event)) return false;
+        incoming = event.duration;
+    }
+
     if (isImmuneToFire(gamemodeOf(dimension, entity))) return false;
 
-    const duration = refreshedFireTicks(state.fire_ticks, event.duration);
+    const duration = refreshedFireTicks(state.fire_ticks, incoming);
     if (duration <= 0) return false;
 
     const extended = duration > state.fire_ticks;
-    const was_burning = state.fire_ticks > 0;
     state.fire_ticks = duration;
     if (extended) {
         state.burn_source = source;
-        state.instigator_id = if (instigator) |cause| cause.runtime_id else 0;
+        state.instigator_id = instigator_id;
     }
     if (!was_burning) state.damage_timer = 0;
     syncOnFireFlag(state, entity);
     return true;
+}
+
+fn isRepeatIgnition(state: *const State, source: Events.CombustSource, instigator_id: i64) bool {
+    return state.fire_ticks > 0 and source == state.burn_source and instigator_id == state.instigator_id;
 }
 
 pub fn extinguish(entity: *Entity) void {
@@ -385,6 +396,19 @@ test "creative and spectator entities are immune to fire" {
     try testing.expect(!isImmuneToFire(.Survival));
     try testing.expect(!isImmuneToFire(.Adventure));
     try testing.expect(!isImmuneToFire(null));
+}
+
+test "a repeated contact ignition is not a new combustion" {
+    var state = State{ .fire_ticks = 200, .burn_source = .lava, .instigator_id = 0 };
+    try testing.expect(isRepeatIgnition(&state, .lava, 0));
+    try testing.expect(!isRepeatIgnition(&state, .fire_block, 0));
+    try testing.expect(!isRepeatIgnition(&state, .lava, 42));
+
+    state.fire_ticks = 0;
+    try testing.expect(!isRepeatIgnition(&state, .lava, 0));
+
+    try testing.expectEqual(@as(i32, LAVA_IGNITION_TICKS), refreshedFireTicks(LAVA_IGNITION_TICKS - 1, contactBurnDuration(.lava)));
+    try testing.expectEqual(@as(i32, FIRE_BLOCK_IGNITION_TICKS), refreshedFireTicks(FIRE_BLOCK_IGNITION_TICKS - 1, contactBurnDuration(.fire_block)));
 }
 
 test "fire resistance keeps the entity burning but cancels the damage" {
