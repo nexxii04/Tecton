@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Raknet = @import("Raknet");
+const Protocol = @import("protocol");
 const WorkerLayout = @import("tasks/threaded-tasks.zig").WorkerLayout;
 
 pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
@@ -16,6 +17,7 @@ pub const ServerProperties = struct {
     address: []const u8 = "0.0.0.0",
     port: u16 = 19132,
     motd: []const u8 = "Tecton Server",
+    gamemode: []const u8 = "survival",
     max_players: u32 = 120,
     online_mode: bool = false,
     online_mode_offline_fallback: bool = false,
@@ -69,6 +71,7 @@ pub const ServerProperties = struct {
         .address = "What address should the server run on",
         .port = "What port should the server run on",
         .motd = "What motd should server display in the server list",
+        .gamemode = "Default game mode: survival, creative, adventure or spectator",
         .max_players = "Max Player count on the server",
         .online_mode = "Verify logins against the Minecraft authorization service; an unverifiable login is refused (see online-mode-offline-fallback)",
         .online_mode_offline_fallback = "With online-mode=true, let unverified logins in as offline identities instead of refusing them",
@@ -131,7 +134,20 @@ pub const ServerProperties = struct {
         return self;
     }
 
+    pub fn parseGamemode(value: []const u8) ?Protocol.GameMode {
+        if (std.ascii.eqlIgnoreCase(value, "survival")) return .Survival;
+        if (std.ascii.eqlIgnoreCase(value, "creative")) return .Creative;
+        if (std.ascii.eqlIgnoreCase(value, "adventure")) return .Adventure;
+        if (std.ascii.eqlIgnoreCase(value, "spectator")) return .Spectator;
+        return null;
+    }
+
+    pub fn gameMode(self: *const ServerProperties) Protocol.GameMode {
+        return parseGamemode(self.gamemode) orelse .Survival;
+    }
+
     fn setField(self: *ServerProperties, key: []const u8, value: []const u8) !void {
+        if (std.mem.eql(u8, key, "gamemode") and parseGamemode(value) == null) return error.InvalidValue;
         inline for (@typeInfo(ServerProperties).@"struct".fields) |field| {
             if (comptime std.mem.eql(u8, field.name, "allocator") or
                 std.mem.eql(u8, field.name, "_allocated_strings")) continue;
@@ -217,6 +233,34 @@ pub const ServerProperties = struct {
         self._allocated_strings.deinit(self.allocator);
     }
 };
+
+test "gamemode defaults to survival and validates configured modes" {
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try std.testing.expectEqual(Protocol.GameMode.Survival, properties.gameMode());
+    try properties.setField("gamemode", "creative");
+    try std.testing.expectEqual(Protocol.GameMode.Creative, properties.gameMode());
+    try properties.setField("gamemode", "Adventure");
+    try std.testing.expectEqual(Protocol.GameMode.Adventure, properties.gameMode());
+    try properties.setField("gamemode", "spectator");
+    try std.testing.expectEqual(Protocol.GameMode.Spectator, properties.gameMode());
+    try properties.setField("gamemode", "survival");
+    try std.testing.expectEqual(Protocol.GameMode.Survival, properties.gameMode());
+    try std.testing.expectError(error.InvalidValue, properties.setField("gamemode", "invalid"));
+    try std.testing.expectEqual(Protocol.GameMode.Survival, properties.gameMode());
+}
+
+test "gamemode survives saving and loading properties" {
+    const path = "test-gamemode.properties";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    var properties = ServerProperties{ .allocator = std.testing.allocator };
+    defer properties.deinit();
+    try properties.setField("gamemode", "adventure");
+    try properties.save(std.testing.io, path);
+    var loaded = try ServerProperties.load(std.testing.io, std.testing.allocator, path);
+    defer loaded.deinit();
+    try std.testing.expectEqual(Protocol.GameMode.Adventure, loaded.gameMode());
+}
 
 test "max mtu clamps to the range RakNet supports" {
     const clamp = ServerProperties.clampMaxMtu;

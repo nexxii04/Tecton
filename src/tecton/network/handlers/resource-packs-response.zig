@@ -265,7 +265,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
     var packet = Protocol.StartGamePacket{
         .entity_id = entity_id,
         .runtime_entity_id = runtime_entity_id,
-        .player_gamemode = .Creative,
+        .player_gamemode = player.gamemode,
         .player_position = player.entity.position,
         .pitch = player.entity.rotation.x,
         .yaw = player.entity.rotation.y,
@@ -274,7 +274,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .biome_name = "plains",
         .dimension = 0,
         .generator = 1,
-        .world_gamemode = .Survival,
+        .world_gamemode = state.tecton.config.gameMode(),
         .hardcore = false,
         .difficulty = .Normal,
         .spawn_position = state.spawn_pos,
