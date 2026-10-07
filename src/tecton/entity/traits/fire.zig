@@ -17,7 +17,6 @@ const broadcast = @import("../../world/dimension/broadcast.zig");
 const entities = @import("../../world/dimension/entities.zig");
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
-const Chunk = @import("../../world/chunk/chunk.zig");
 
 pub const TICKS_PER_SECOND: i32 = 20;
 pub const FIRE_DAMAGE_INTERVAL_TICKS: i32 = TICKS_PER_SECOND;
@@ -304,18 +303,7 @@ fn isRainingOn(dimension: *Dimension, entity: *Entity) bool {
 fn hasSkyAccess(dimension: *Dimension, entity: *Entity) bool {
     const feet = blockPositionAt(feetPosition(entity));
     const chunk = dimension.getChunk(feet.x >> 4, feet.z >> 4) orelse return false;
-    var y = feet.y + 2;
-    while (y < buildLimit(dimension)) : (y += 1) {
-        const permutation = chunk.getPermutationReadOnly(feet.x, y, feet.z, 0) catch return false;
-        if (!std.mem.eql(u8, permutation.identifier, "minecraft:air")) return false;
-    }
-    return true;
-}
-
-fn buildLimit(dimension: *const Dimension) i32 {
-    const max_subchunks: i32 = @intCast(Chunk.MAX_SUBCHUNKS);
-    const offset: i32 = @intCast(Chunk.yOffset(dimension.dimension_type));
-    return (max_subchunks - offset) * 16;
+    return chunk.topBlockY(feet.x, feet.z) < feet.y + 2;
 }
 
 fn feetPosition(entity: *Entity) Protocol.Vector3f {
@@ -491,4 +479,55 @@ test "the on-fire flag re-synchronizes from the restored state" {
     state.fire_ticks = 0;
     syncOnFireFlag(&state, &entity);
     try testing.expect(!entity.flags.getFlag(.OnFire));
+}
+
+test "sky access follows the cached column top of the chunk" {
+    const allocator = testing.allocator;
+    const ChunkImpl = @import("../../world/chunk/chunk.zig").Chunk;
+    const chunkHash = @import("../../world/dimension/dimension.zig").chunkHash;
+    const BlockState = @import("../../world/block/block-permutation.zig").BlockState;
+    const BlockType = @import("../../world/block/block-type.zig").BlockType;
+
+    try BlockPermutation.initRegistry(allocator);
+    defer BlockPermutation.deinitRegistry();
+    try BlockType.initRegistry(allocator);
+    defer BlockType.deinitRegistry();
+
+    const air_type = try BlockType.init(allocator, "minecraft:air");
+    try air_type.register();
+    const air = try BlockPermutation.init(allocator, 0, "minecraft:air", BlockState.init(allocator));
+    try air.register();
+    try air_type.addPermutation(air);
+
+    const stone_type = try BlockType.init(allocator, "minecraft:stone");
+    try stone_type.register();
+    const stone = try BlockPermutation.init(allocator, 1, "minecraft:stone", BlockState.init(allocator));
+    try stone.register();
+    try stone_type.addPermutation(stone);
+
+    const mob_type = EntityType.init("minecraft:zombie", 1, &.{}, &.{});
+    var entity = Entity.init(allocator, &mob_type, null);
+    defer entity.deinit();
+    entity.position = Protocol.Vector3f.init(4.5, 64.0, 4.5);
+
+    var dimension = Dimension.init(undefined, allocator, "overworld", .Overworld, null);
+    const chunk = try allocator.create(ChunkImpl);
+    chunk.* = ChunkImpl.init(allocator, 0, 0, .Overworld);
+    try dimension.chunks.put(chunkHash(0, 0), chunk);
+    defer dimension.deinit();
+
+    // Nothing above the mob: the rain reaches it.
+    try testing.expect(hasSkyAccess(&dimension, &entity));
+
+    // Only the mob's own column counts.
+    try chunk.setPermutation(0, 200, 0, stone, 0);
+    try testing.expect(hasSkyAccess(&dimension, &entity));
+
+    // A roof inside the two-block grace still lets the rain through.
+    try chunk.setPermutation(4, 65, 4, stone, 0);
+    try testing.expect(hasSkyAccess(&dimension, &entity));
+
+    // From feet + 2 upwards any block shelters the mob.
+    try chunk.setPermutation(4, 66, 4, stone, 0);
+    try testing.expect(!hasSkyAccess(&dimension, &entity));
 }

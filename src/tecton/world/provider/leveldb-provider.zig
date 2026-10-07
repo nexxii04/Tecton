@@ -416,6 +416,7 @@ test "cleared subchunks are deleted from persisted chunk data" {
             const sc = try alloc.create(SubChunk);
             sc.* = try SubChunk.init(alloc, index);
             c.subchunks[slot] = sc;
+            c.invalidateHeightmap();
             c.dirty = true;
         }
     }.f;
