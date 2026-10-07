@@ -18,6 +18,10 @@ pub const BASE_KNOCKBACK: f32 = 0.3;
 pub const KNOCKBACK_PER_LEVEL: f32 = 0.15;
 pub const PROTECTION_PER_LEVEL: f32 = 0.04;
 pub const PROTECTION_MAX_LEVELS: u8 = 20;
+pub const FIRE_PROTECTION_DAMAGE_PER_LEVEL: f32 = 0.08;
+pub const FIRE_PROTECTION_DURATION_PER_LEVEL: f32 = 0.15;
+pub const FIRE_PROTECTION_MAX_LEVELS: u8 = 4;
+pub const FIRE_ASPECT_TICKS_PER_LEVEL: i32 = 80;
 pub const THORNS_CHANCE_PER_LEVEL: f32 = 0.15;
 pub const THORNS_MIN_DAMAGE: f32 = 1.0;
 pub const THORNS_MAX_DAMAGE: f32 = 5.0;
@@ -131,6 +135,24 @@ pub fn blocksArmorRemoval(item: *const ItemStack) bool {
 pub fn mitigatedDamage(armor: *const compat.ArmorAggregate, amount: f32) f32 {
     const levels: f32 = @floatFromInt(@min(armor.protection, PROTECTION_MAX_LEVELS));
     return amount * (1.0 - PROTECTION_PER_LEVEL * levels);
+}
+
+pub fn mitigatedFireDamage(armor: *const compat.ArmorAggregate, amount: f32) f32 {
+    const levels: f32 = @floatFromInt(@min(armor.fire_protection, FIRE_PROTECTION_MAX_LEVELS));
+    return amount * (1.0 - FIRE_PROTECTION_DAMAGE_PER_LEVEL * levels);
+}
+
+pub fn fireBurnDuration(base_ticks: i32, fire_protection_levels: u8) i32 {
+    if (base_ticks <= 0) return 0;
+    const levels: f32 = @floatFromInt(@min(fire_protection_levels, FIRE_PROTECTION_MAX_LEVELS));
+    const reduced = @as(f32, @floatFromInt(base_ticks)) * (1.0 - FIRE_PROTECTION_DURATION_PER_LEVEL * levels);
+    return @intFromFloat(@round(reduced));
+}
+
+pub fn fireAspectDurationTicks(weapon: ?*const ItemStack) i32 {
+    const stack = weapon orelse return 0;
+    const level = ops.level(stack, compat.FIRE_ASPECT) orelse return 0;
+    return FIRE_ASPECT_TICKS_PER_LEVEL * @as(i32, level);
 }
 
 pub fn thornsReflection(armor: *const Container, random: std.Random) f32 {
@@ -450,4 +472,55 @@ test "curse of binding blocks armor removal and nothing else" {
 
     _ = plain.enchantments.set(compat.CURSE_OF_BINDING, 1);
     try testing.expect(blocksArmorRemoval(&plain));
+}
+
+test "fire protection shaves the burn duration by fifteen percent a level" {
+    try testing.expectEqual(@as(i32, 150), fireBurnDuration(150, 0));
+    try testing.expectEqual(@as(i32, 128), fireBurnDuration(150, 1));
+    try testing.expectEqual(@as(i32, 105), fireBurnDuration(150, 2));
+    try testing.expectEqual(@as(i32, 60), fireBurnDuration(150, FIRE_PROTECTION_MAX_LEVELS));
+    try testing.expectEqual(@as(i32, 60), fireBurnDuration(150, 200));
+    try testing.expectEqual(@as(i32, 0), fireBurnDuration(0, 2));
+    try testing.expectEqual(@as(i32, 0), fireBurnDuration(-40, 2));
+}
+
+test "fire protection shaves the fire damage by eight percent a level" {
+    var armor: compat.ArmorAggregate = .empty;
+
+    try testing.expectEqual(@as(f32, 1.0), mitigatedFireDamage(&armor, 1.0));
+
+    armor.fire_protection = 2;
+    try testing.expectApproxEqAbs(@as(f32, 0.84), mitigatedFireDamage(&armor, 1.0), 0.0001);
+
+    armor.fire_protection = FIRE_PROTECTION_MAX_LEVELS;
+    try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
+
+    armor.fire_protection = 200;
+    try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
+
+    armor.protection = 4;
+    try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
+}
+
+test "fire aspect burns for four seconds per level" {
+    const allocator = testing.allocator;
+
+    try testing.expectEqual(@as(i32, 0), fireAspectDurationTicks(null));
+
+    const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_fire_sword", &.{ "minecraft:is_sword", "minecraft:wooden_tier" }, false);
+    defer kind.deinit();
+
+    var plain = ItemStack.init(allocator, kind, .{});
+    defer plain.deinit();
+    try testing.expectEqual(@as(i32, 0), fireAspectDurationTicks(&plain));
+
+    var one = ItemStack.init(allocator, kind, .{});
+    defer one.deinit();
+    _ = one.enchantments.set(compat.FIRE_ASPECT, 1);
+    try testing.expectEqual(@as(i32, 80), fireAspectDurationTicks(&one));
+
+    var two = ItemStack.init(allocator, kind, .{});
+    defer two.deinit();
+    _ = two.enchantments.set(compat.FIRE_ASPECT, 2);
+    try testing.expectEqual(@as(i32, 160), fireAspectDurationTicks(&two));
 }

@@ -10,6 +10,7 @@ const entities = @import("../world/dimension/entities.zig");
 
 const EntityTypeRegistry = @import("../entity/entity-type-registry.zig");
 const EntityTraits = @import("../entity/traits/root.zig");
+const FireTrait = EntityTraits.FireTrait;
 const GravityTrait = EntityTraits.GravityTrait;
 const HealthTrait = EntityTraits.HealthTrait;
 const VillagerTradeTrait = EntityTraits.VillagerTradeTrait;
@@ -45,6 +46,7 @@ pub fn prepare(tecton: *Tecton) !void {
     EntityTraits.initEntityTraitRegistry(tecton.allocator);
     try GravityTrait.register();
     try HealthTrait.register();
+    try FireTrait.register();
     try VillagerTradeTrait.register();
 
     try ItemPalette.initRegistry(tecton.allocator);

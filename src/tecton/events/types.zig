@@ -41,11 +41,33 @@ pub const PlayerMoveEvent = struct {
     to: Protocol.Vector3f,
 };
 
+pub const DamageCause = enum(u8) {
+    entity_attack = 0,
+    fire = 1,
+    fire_tick = 2,
+    lava = 3,
+};
+
 pub const DamageEvent = struct {
     attacker: ?*Entity,
     victim: *Entity,
     amount: f32,
-    cause: u8,
+    cause: DamageCause,
+};
+
+pub const CombustSource = enum {
+    command,
+    fire_aspect,
+    fire_block,
+    lava,
+    projectile,
+};
+
+pub const EntityCombustEvent = struct {
+    entity: *Entity,
+    duration: i32,
+    instigator: ?*Entity,
+    source: CombustSource,
 };
 
 pub const BlockPlaceEvent = struct {
@@ -120,6 +142,7 @@ pub const Event = enum {
     ItemUse,
     PlayerMove,
     Damage,
+    EntityCombust,
     BlockPlace,
     BlockBreak,
     InventoryOpen,
@@ -142,6 +165,7 @@ pub const Event = enum {
             .ItemUse => ItemUseEvent,
             .PlayerMove => PlayerMoveEvent,
             .Damage => DamageEvent,
+            .EntityCombust => EntityCombustEvent,
             .BlockPlace => BlockPlaceEvent,
             .BlockBreak => BlockBreakEvent,
             .InventoryOpen => InventoryOpenEvent,

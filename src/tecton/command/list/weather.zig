@@ -5,6 +5,7 @@ const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
+const Weather = @import("../../world/world.zig").Weather;
 const broadcast = @import("../../world/dimension/broadcast.zig");
 const types = @import("../types.zig");
 
@@ -41,18 +42,26 @@ fn handle(raw: *anyopaque) void {
     if (std.mem.eql(u8, trimmed, "clear")) {
         broadcastLevelEvent(ctx, .StopRain, zero, 0);
         broadcastLevelEvent(ctx, .StopThunder, zero, 0);
+        applyWeather(ctx, .clear);
         ctx.sendOutput(true, "Set weather to clear");
     } else if (std.mem.eql(u8, trimmed, "rain")) {
         broadcastLevelEvent(ctx, .StopThunder, zero, 0);
         broadcastLevelEvent(ctx, .StartRain, zero, 65535);
+        applyWeather(ctx, .rain);
         ctx.sendOutput(true, "Set weather to rain");
     } else if (std.mem.eql(u8, trimmed, "thunder")) {
         broadcastLevelEvent(ctx, .StartRain, zero, 65535);
         broadcastLevelEvent(ctx, .StartThunder, zero, 65535);
+        applyWeather(ctx, .thunder);
         ctx.sendOutput(true, "Set weather to thunder");
     } else {
         ctx.sendOutput(false, "Unknown weather type. Use: clear, rain, thunder");
     }
+}
+
+fn applyWeather(ctx: *CommandContext, weather: Weather) void {
+    const dimension = resolveWeatherDimension(ctx) orelse return;
+    dimension.world.weather = weather;
 }
 
 fn broadcastLevelEvent(ctx: *CommandContext, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {

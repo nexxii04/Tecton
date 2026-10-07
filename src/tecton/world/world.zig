@@ -7,6 +7,8 @@ const InternalProvider = @import("./provider/internal-provider.zig").InternalPro
 const ThreadedGenerator = @import("./generator/threaded-generator.zig").ThreadedGenerator;
 const FloatingTextManager = @import("../entity/floating-text.zig").FloatingTextManager;
 
+pub const Weather = enum { clear, rain, thunder };
+
 pub const World = struct {
     tecton: *Tecton,
     allocator: std.mem.Allocator,
@@ -15,6 +17,7 @@ pub const World = struct {
     provider: WorldProvider,
 
     unloading: bool = false,
+    weather: Weather = .clear,
 
     pub fn init(
         tecton: *Tecton,

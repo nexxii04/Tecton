@@ -6,6 +6,7 @@ const Raknet = @import("Raknet");
 
 const inventory = @import("../../entity/traits/inventory.zig");
 const InventoryTrait = inventory.InventoryTrait;
+const Fire = @import("../../entity/traits/fire.zig");
 const Health = @import("../../entity/traits/health.zig");
 const EnchantmentEffects = @import("../../items/enchantments/effects.zig");
 const ArmorAggregate = @import("../../items/enchantments/compat.zig").ArmorAggregate;
@@ -113,7 +114,7 @@ pub fn handleInventoryTransaction(
                     .attacker = &player.entity,
                     .victim = target,
                     .amount = EnchantmentEffects.mitigatedDamage(&armor, impact.damage),
-                    .cause = 0,
+                    .cause = .entity_attack,
                 };
                 if (!tecton.events.emit(.Damage, &damage_event)) return;
 
@@ -145,7 +146,7 @@ pub fn handleInventoryTransaction(
                                     .attacker = target,
                                     .victim = &player.entity,
                                     .amount = reflected,
-                                    .cause = 0,
+                                    .cause = .entity_attack,
                                 };
                                 if (tecton.events.emit(.Damage, &thorns_event)) {
                                     player.entity.fireEvent(.Damage, .{ &player.entity, thorns_event.amount });
@@ -153,6 +154,12 @@ pub fn handleInventoryTransaction(
                             }
                         }
                     }
+                }
+
+                // Ignite before the hit lands: a lethal hit clears the burn on death and must not leave the corpse rekindled.
+                const burn_ticks = EnchantmentEffects.fireAspectDurationTicks(weapon);
+                if (burn_ticks > 0) {
+                    _ = Fire.ignite(target, .fire_aspect, &player.entity, burn_ticks);
                 }
 
                 target.fireEvent(.Damage, .{ target, damage_event.amount });

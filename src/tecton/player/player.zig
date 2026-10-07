@@ -13,6 +13,7 @@ const ChunkStreaming = @import("../entity/traits/chunk-streaming.zig");
 const Visibility = @import("../entity/traits/visibility.zig");
 const CreatedOutputTrait = @import("../entity/traits/created-output.zig").CreatedOutputTrait;
 const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
+const Fire = @import("../entity/traits/fire.zig");
 const Health = @import("../entity/traits/health.zig");
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
@@ -94,7 +95,7 @@ pub const Player = struct {
     pending_dimension: ?*Dimension = null,
     opened_container: ?*Container = null,
     block_target: ?Protocol.BlockPosition = null,
-    gamemode: Protocol.GameMode = .Creative,
+    gamemode: Protocol.GameMode = .Survival,
     last_broadcast: MoveDelta.LastBroadcast = .{},
     broadcast_band: ?u8 = null,
     on_ground: bool = true,
@@ -118,6 +119,7 @@ pub const Player = struct {
             .connection = connection,
             .network = network,
             .tecton = tecton,
+            .gamemode = tecton.config.gameMode(),
             .login_data = loginData,
             .xuid = loginData.identity_data.xuid,
             .username = loginData.identity_data.display_name,
@@ -141,6 +143,9 @@ pub const Player = struct {
             .max = Health.MAX_HEALTH,
         });
         try self.entity.addTrait(health);
+
+        const fire = try Fire.FireTrait.create(allocator, .{});
+        try self.entity.addTrait(fire);
 
         const inv = try InventoryTrait.create(allocator, .{
             .container = undefined,

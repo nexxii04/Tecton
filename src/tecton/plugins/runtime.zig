@@ -540,7 +540,7 @@ pub const PluginRuntime = struct {
 
     fn externalEventId(event: Events.Event) ?abi.EventId {
         return switch (event) {
-            .EnchantmentApply, .EnchantmentRemove => null,
+            .EntityCombust, .EnchantmentApply, .EnchantmentRemove => null,
             .ServerStart => .server_start,
             .ServerShutdown => .server_shutdown,
             .ServerTick => .server_tick,

@@ -217,7 +217,7 @@ pub const Tecton = struct {
                     .max_players = @intCast(owned_config.max_players),
                     .guid = 0,
                     .name = owned_config.motd,
-                    .gamemode = "Creative",
+                    .gamemode = @tagName(owned_config.gameMode()),
                 },
                 .max_mtu = max_mtu,
             }),
@@ -847,7 +847,9 @@ test {
     _ = @import("./command/list/world.zig");
     _ = @import("./command/list/floating-text.zig");
     _ = @import("./world/provider/leveldb-provider.zig");
+    _ = @import("./world/provider/chunk-entities.zig");
     _ = @import("./entity/traits/chunk-loading.zig");
+    _ = @import("./entity/traits/fire.zig");
     _ = @import("./player/player-snapshot.zig");
     _ = @import("./player/move-delta.zig");
     _ = @import("./network/movement-broadcast.zig");

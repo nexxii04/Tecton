@@ -6,6 +6,7 @@ const Protocol = @import("protocol");
 const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const Player = @import("../../player/player.zig").Player;
+const Fire = @import("../../entity/traits/fire.zig");
 const Health = @import("../../entity/traits/health.zig");
 const visibility = @import("../../entity/traits/visibility.zig");
 
@@ -27,6 +28,7 @@ pub fn respawnPlayer(network: *NetworkHandler, player: *Player) void {
     const health_state = player.entity.getTraitState(Health.HealthTrait) orelse return;
     const dimension = player.entity.dimension orelse return;
     if (!Health.revive(health_state, &player.entity)) return;
+    Fire.extinguish(&player.entity);
 
     const spawn = dimension.spawn_position;
     const position = Protocol.Vector3f.init(
