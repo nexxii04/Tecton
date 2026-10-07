@@ -9,16 +9,16 @@
             .hash = "zlib-1.3.2-ZZQ7lc8NAAAHm9MDfplvwoesXvk4tVm6VCsiI8KnIbT0",
         },
         .nbt = .{
-            .url = "git+https://github.com/VantStudios/Nbt.git#dbd31d6265cd0dcc6e659822ec2cedd72613c0e8",
+            .url = "git+https://github.com/nexxii04/Nbt.git#dbd31d6265cd0dcc6e659822ec2cedd72613c0e8",
             .hash = "nbt-0.0.0-lsUufBrRAADisGBZm4XFayu1qBm1yBV_OQA7ffTtUwod",
         },
         .BinaryStream = .{
-            .url = "git+https://github.com/VantStudios/BinaryStream.git#b0953025800d6069ceccaad2315a1c8a818105b1",
+            .url = "git+https://github.com/nexxii04/BinaryStream.git#b0953025800d6069ceccaad2315a1c8a818105b1",
             .hash = "BinaryStream-0.0.0-gn8mmkJfAQB7hx3EiIoUs228mEqfXMqE78Fjf_Bdq7We",
         },
         .protocol = .{
-            .url = "git+https://github.com/VantStudios/Protocol.git#abab937464e3d8b2e992d924920181819b69a1d9",
-            .hash = "protocol-0.0.0-129wXi7ccwCxPyAkaEQEK5CMF1YCY4bYX7KjPmOp4vNf",
+            .url = "git+https://github.com/nexxii04/Protocol.git#ed2bd22869e9b601dfaa6bd466afa703a67670c8",
+            .hash = "protocol-0.0.0-129wXkDccwB_ks0qubeFXDvBsIAcH4DyfI_VnrMygLl_",
         },
         .ZigNet = .{
             .url = "git+https://github.com/nexxii04/ZigNet.git#5c962aee8ad822fc07413d17a2702fa7bd64454f",
