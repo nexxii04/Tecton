@@ -117,6 +117,13 @@ pub const Chunk = struct {
         return self.heightmap[column];
     }
 
+    /// True when the column is clear from `y + 2` up to the build limit, so rain
+    /// reaches an entity standing at `y`. The block at `y + 1` is inside the
+    /// grace: being level with a block is not shelter.
+    pub fn isSkyExposed(self: *Chunk, x: i32, y: i32, z: i32) bool {
+        return self.topBlockY(x, z) < y + 2;
+    }
+
     fn scanColumnTop(self: *const Chunk, x: i32, z: i32) i32 {
         var y = self.buildLimit() - 1;
         const floor = self.minBuildY();
@@ -243,6 +250,32 @@ test "the heightmap reports the top block of a column" {
     // The lowest layer of the overworld still counts as a block.
     try chunk.setPermutation(0, -64, 0, blocks.stone, 0);
     try testing.expectEqual(@as(i32, -64), chunk.topBlockY(0, 0));
+}
+
+test "sky exposure looks past the two block grace" {
+    const allocator = testing.allocator;
+    const blocks = try registerTestBlocks(allocator);
+    defer deinitTestBlocks();
+
+    var chunk = Chunk.init(allocator, 0, 0, .Overworld);
+    defer chunk.deinit();
+
+    // An empty column has nothing overhead.
+    try testing.expect(chunk.isSkyExposed(1, 64, 1));
+
+    // A block level with the feet and one above it are not a roof.
+    try chunk.setPermutation(1, 64, 1, blocks.stone, 0);
+    try testing.expect(chunk.isSkyExposed(1, 64, 1));
+    try chunk.setPermutation(1, 65, 1, blocks.stone, 0);
+    try testing.expect(chunk.isSkyExposed(1, 64, 1));
+
+    // From feet + 2 up, any block shelters.
+    try chunk.setPermutation(1, 66, 1, blocks.stone, 0);
+    try testing.expect(!chunk.isSkyExposed(1, 64, 1));
+
+    // Breaking the roof exposes the column again without a rescan of the world.
+    try chunk.setPermutation(1, 66, 1, blocks.air, 0);
+    try testing.expect(chunk.isSkyExposed(1, 64, 1));
 }
 
 test "a chunk without the overworld offset keeps its own build range" {

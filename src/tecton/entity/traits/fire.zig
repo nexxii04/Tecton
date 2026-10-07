@@ -303,7 +303,7 @@ fn isRainingOn(dimension: *Dimension, entity: *Entity) bool {
 fn hasSkyAccess(dimension: *Dimension, entity: *Entity) bool {
     const feet = blockPositionAt(feetPosition(entity));
     const chunk = dimension.getChunk(feet.x >> 4, feet.z >> 4) orelse return false;
-    return chunk.topBlockY(feet.x, feet.z) < feet.y + 2;
+    return chunk.isSkyExposed(feet.x, feet.y, feet.z);
 }
 
 fn feetPosition(entity: *Entity) Protocol.Vector3f {
