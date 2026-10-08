@@ -1,6 +1,6 @@
 const std = @import("std");
 const Block = @import("../block.zig").Block;
-const BlockType = @import("../block-type.zig").BlockType;
+const BlockType = @import("../block_type.zig").BlockType;
 const Player = @import("../../../player/player.zig").Player;
 const CompoundTag = @import("nbt").CompoundTag;
 

@@ -5,7 +5,7 @@ const NBT = @import("nbt");
 const CompoundTag = NBT.CompoundTag;
 const FloatTag = NBT.FloatTag;
 const Entity = @import("../entity.zig").Entity;
-const EntityType = @import("../entity-type.zig").EntityType;
+const EntityType = @import("../entity_type.zig").EntityType;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const broadcast = @import("../../world/dimension/broadcast.zig");
@@ -42,14 +42,11 @@ pub fn isDead(current: f32) bool {
     return current <= 0;
 }
 
-/// A health of 0 from disk would log the player in dead before it can respawn.
 pub fn clampLoadedHealth(current: f32, max: f32) f32 {
     if (current > 0) return @min(current, max);
     return max;
 }
 
-/// Mirrors a state read from disk onto the `Health` attribute, so a rebuilt mob
-/// does not report full health.
 pub fn syncAttributes(state: *const State, entity: *Entity) void {
     entity.attributes.setMax(.Health, state.max);
     entity.attributes.setCurrent(.Health, state.current);
@@ -60,7 +57,6 @@ fn onSerialize(state: *State, tag: *CompoundTag) void {
     setFloat(tag, "MaxHealth", state.max);
 }
 
-/// `CompoundTag.set` leaks when the key already exists, so a repeat write is skipped.
 fn setFloat(tag: *CompoundTag, key: []const u8, value: f32) void {
     if (tag.get(key) != null) return;
     tag.set(key, .{ .Float = FloatTag.init(value, null) }) catch {};
@@ -134,7 +130,6 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
     dimension.pending_removals.append(dimension.allocator, entity.runtime_id) catch {};
 }
 
-/// A failed hurt-animation packet must not skip the death branch in `onDamage`.
 fn broadcastHurtAnimation(allocator: std.mem.Allocator, dimension: *Dimension, entity: *Entity) void {
     var stream = BinaryStream.init(allocator, null, null);
     defer stream.deinit();
@@ -149,7 +144,6 @@ fn broadcastHurtAnimation(allocator: std.mem.Allocator, dimension: *Dimension, e
     broadcast.broadcastToEntityViewers(dimension, entity, serialized);
 }
 
-/// A failed attribute packet or an empty dirty set must not skip the death branch in `onDamage`.
 fn broadcastDirtyAttributes(allocator: std.mem.Allocator, dimension: *Dimension, entity: *Entity) void {
     var attrs = entity.attributes.collectDirty(allocator) catch return;
     defer attrs.deinit(allocator);
@@ -213,7 +207,6 @@ test "health survives an nbt round trip" {
     try testing.expectEqual(@as(f32, 30.0), boosted_restored.max);
 }
 
-// A second write must not call `CompoundTag.set`, which leaks an existing key.
 test "serializing health twice does not leak the compound key" {
     const allocator = testing.allocator;
 
@@ -228,7 +221,6 @@ test "serializing health twice does not leak the compound key" {
     try testing.expectEqual(@as(f32, 7.5), tag.get("Health").?.Float.value);
 }
 
-// Legacy records carry no health keys: they must load at full, not at zero.
 test "a record without health comes back at full" {
     const allocator = testing.allocator;
 
@@ -241,7 +233,6 @@ test "a record without health comes back at full" {
     try testing.expectEqual(@as(f32, 20.0), restored.max);
 }
 
-// A stored zero is a dead mob, not one to quietly heal to full.
 test "a stored zero stays zero instead of healing to full" {
     const allocator = testing.allocator;
 
@@ -310,7 +301,6 @@ test "the damage window opens on a landed hit and lasts ten ticks" {
     try testing.expect(!isInvulnerable(&state, 110));
     try testing.expectEqual(@as(u64, 110), state.invulnerable_until);
 
-    // The next landed hit reopens the window from its own tick.
     markInvulnerable(&state, 110);
     try testing.expect(isInvulnerable(&state, 119));
     try testing.expect(!isInvulnerable(&state, 120));

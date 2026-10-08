@@ -11,7 +11,6 @@ const Handles = @import("handles.zig");
 const SendPriority = @import("../network/root.zig").SendPriority;
 const Player = @import("../player/player.zig").Player;
 
-/// Sanity ceiling for plugin payloads; larger ones fragment into hundreds of frames.
 const MAX_PLUGIN_PACKET_BYTES: usize = 1 << 20;
 const event_count = std.meta.fields(Events.Event).len;
 
@@ -625,7 +624,7 @@ pub const PluginRuntime = struct {
     }
 
     fn itemsCount(_: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
-        const ItemType = @import("../items/item-type.zig").ItemType;
+        const ItemType = @import("../items/item_type.zig").ItemType;
         count_output.* = ItemType.getAll().count();
         return abi.result_ok;
     }
@@ -634,7 +633,7 @@ pub const PluginRuntime = struct {
         const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
-        const ItemType = @import("../items/item-type.zig").ItemType;
+        const ItemType = @import("../items/item_type.zig").ItemType;
         var iterator = ItemType.getAll().valueIterator();
         var current: usize = 0;
         while (iterator.next()) |item_ptr| {
@@ -780,7 +779,7 @@ pub const PluginRuntime = struct {
         const tecton = self.tecton orelse return -1;
         const world = self.findWorldByHandle(tecton, world_handle) orelse return -1;
         const dimension_value = world.getDimension(dimension.slice()) orelse return -2;
-        const permutation = @import("../world/block/block-permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return -3;
+        const permutation = @import("../world/block/block_permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return -3;
         dimension_value.setPermutation(.{ .x = x, .y = y, .z = z }, permutation, 0) catch return -3;
         return 0;
     }

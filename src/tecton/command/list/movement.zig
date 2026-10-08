@@ -3,7 +3,7 @@ const std = @import("std");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const MovementBroadcast = @import("../../network/movement-broadcast.zig");
+const MovementBroadcast = @import("../../network/movement_broadcast.zig");
 
 pub fn register(registry: *CommandRegistry) !void {
     const cmd = try Command.init(

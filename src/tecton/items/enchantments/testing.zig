@@ -1,6 +1,6 @@
 const std = @import("std");
 const NBT = @import("nbt");
-const ItemType = @import("../item-type.zig").ItemType;
+const ItemType = @import("../item_type.zig").ItemType;
 const EnchantmentInstance = @import("enchantment.zig").EnchantmentInstance;
 const Tag = NBT.Tag;
 const CompoundTag = NBT.CompoundTag;

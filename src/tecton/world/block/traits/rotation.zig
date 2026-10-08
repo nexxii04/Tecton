@@ -1,9 +1,9 @@
 const std = @import("std");
 const Protocol = @import("protocol");
-const BlockPermutation = @import("../block-permutation.zig").BlockPermutation;
-const BlockState = @import("../block-permutation.zig").BlockState;
-const BlockStateValue = @import("../block-permutation.zig").BlockStateValue;
-const BlockType = @import("../block-type.zig").BlockType;
+const BlockPermutation = @import("../block_permutation.zig").BlockPermutation;
+const BlockState = @import("../block_permutation.zig").BlockState;
+const BlockStateValue = @import("../block_permutation.zig").BlockStateValue;
+const BlockType = @import("../block_type.zig").BlockType;
 
 pub const PlacementContext = struct {
     yaw: f32,

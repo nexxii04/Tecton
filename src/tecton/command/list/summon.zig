@@ -4,7 +4,7 @@ const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
 const types = @import("../types.zig");
-const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
+const EntityTypeRegistry = @import("../../entity/entity_type_registry.zig");
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const entities = @import("../../world/dimension/entities.zig");
 
@@ -94,7 +94,6 @@ const Coordinates = struct {
     z: f32,
 };
 
-/// Coordinates only apply when all three parse, so `/summon zombie Guard` stays a name tag.
 fn parseCoordinates(tokens: []const []const u8) ?Coordinates {
     const x = std.fmt.parseFloat(f32, tokens[0]) catch return null;
     const y = std.fmt.parseFloat(f32, tokens[1]) catch return null;

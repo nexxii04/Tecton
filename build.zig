@@ -132,7 +132,7 @@ pub fn build(b: *std.Build) void {
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
     const chest_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/tecton/chest-test-root.zig"),
+        .root_source_file = b.path("src/tecton/chest_test_root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libcpp = true,

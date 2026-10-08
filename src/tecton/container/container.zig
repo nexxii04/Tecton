@@ -2,7 +2,7 @@ const std = @import("std");
 const Raknet = @import("Raknet");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const ItemStack = @import("../items/item-stack.zig").ItemStack;
+const ItemStack = @import("../items/item_stack.zig").ItemStack;
 const Display = @import("../items/traits/display.zig");
 const Player = @import("../player/player.zig").Player;
 
@@ -288,7 +288,7 @@ pub const Container = struct {
 
 test "slot access beyond size returns null instead of wrapping" {
     const allocator = std.testing.allocator;
-    const ItemType = @import("../items/item-type.zig").ItemType;
+    const ItemType = @import("../items/item_type.zig").ItemType;
     const NBT = @import("nbt");
 
     try ItemType.initRegistry(allocator);
@@ -326,7 +326,7 @@ test "slot access beyond size returns null instead of wrapping" {
 
 test "takeItem preserves item nbt when splitting a stack" {
     const allocator = std.testing.allocator;
-    const ItemType = @import("../items/item-type.zig").ItemType;
+    const ItemType = @import("../items/item_type.zig").ItemType;
     const NBT = @import("nbt");
 
     try ItemType.initRegistry(allocator);

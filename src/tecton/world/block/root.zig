@@ -1,10 +1,10 @@
 const std = @import("std");
 const Data = @import("protocol").Data;
 
-pub const BlockStateValue = @import("./block-permutation.zig").BlockStateValue;
-pub const BlockState = @import("./block-permutation.zig").BlockState;
-pub const BlockPermutation = @import("./block-permutation.zig").BlockPermutation;
-pub const BlockType = @import("./block-type.zig").BlockType;
+pub const BlockStateValue = @import("./block_permutation.zig").BlockStateValue;
+pub const BlockState = @import("./block_permutation.zig").BlockState;
+pub const BlockPermutation = @import("./block_permutation.zig").BlockPermutation;
+pub const BlockType = @import("./block_type.zig").BlockType;
 pub const Block = @import("./block.zig").Block;
 pub const BlockTrait = @import("./traits/trait.zig").BlockTrait;
 pub const BlockTraitInstance = @import("./traits/trait.zig").BlockTraitInstance;
@@ -13,7 +13,7 @@ pub const TraitFactory = @import("./traits/trait.zig").TraitFactory;
 pub const initTraitRegistry = @import("./traits/trait.zig").initTraitRegistry;
 pub const deinitTraitRegistry = @import("./traits/trait.zig").deinitTraitRegistry;
 pub const applyTraitsForBlock = @import("./traits/trait.zig").applyTraitsForBlock;
-pub const BreakSpeed = @import("./break-speed.zig").BreakSpeed;
+pub const BreakSpeed = @import("./break_speed.zig").BreakSpeed;
 
 pub fn loadBlockPermutations(allocator: std.mem.Allocator) !usize {
     var loader = Data.BlockPermutationLoader.init(allocator);

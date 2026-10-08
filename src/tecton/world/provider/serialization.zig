@@ -16,15 +16,15 @@ const ReadWriteOptions = NBT.ReadWriteOptions;
 const Protocol = @import("protocol");
 
 const Container = @import("../../container/container.zig").Container;
-const EntityType = @import("../../entity/entity-type.zig").EntityType;
+const EntityType = @import("../../entity/entity_type.zig").EntityType;
 const Entity = @import("../../entity/entity.zig").Entity;
 const Health = @import("../../entity/traits/health.zig");
 const HealthTrait = Health.HealthTrait;
 const InventoryTrait = @import("../../entity/traits/inventory.zig").InventoryTrait;
 const enchantment_nbt = @import("../../items/enchantments/nbt.zig");
 const EnchantmentTesting = @import("../../items/enchantments/testing.zig");
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const ItemType = @import("../../items/item-type.zig").ItemType;
+const ItemStack = @import("../../items/item_stack.zig").ItemStack;
+const ItemType = @import("../../items/item_type.zig").ItemType;
 const Player = @import("../../player/player.zig").Player;
 
 pub fn serializeItemStack(allocator: std.mem.Allocator, item: *ItemStack) !CompoundTag {
@@ -235,8 +235,6 @@ pub fn serializePlayer(allocator: std.mem.Allocator, player: *Player) !CompoundT
         try tag.set("SelectedInventorySlot", .{ .Int = IntTag.init(@intCast(inv_state.selected_slot), null) });
     }
 
-    // Health/MaxHealth come from the Health trait's hook; re-setting them here leaks a tag.
-
     const dimension_id: i32 = if (player.entity.dimension) |dimension|
         @intCast(@intFromEnum(dimension.dimension_type))
     else
@@ -355,7 +353,6 @@ test "a corrupt position and motion from disk are clamped on load" {
     try testing.expectEqual(@as(f32, 0.02), entity.motion.z);
 }
 
-// The typed structure is the source of truth; disk must not keep a stale ench.
 test "writing a stack syncs the enchantments the ops never wrote" {
     const allocator = testing.allocator;
 

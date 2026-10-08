@@ -7,16 +7,15 @@ const Protocol = @import("protocol");
 const identity = @import("identity.zig");
 const jwks = @import("jwks.zig");
 const jwt = @import("jwt.zig");
-const legacy = @import("legacy-chain.zig");
-const mojang_root_key = @import("mojang-root-key.zig");
+const legacy = @import("legacy_chain.zig");
+const mojang_root_key = @import("mojang_root_key.zig");
 const oidc = @import("oidc.zig");
 const signature = @import("signature.zig");
 const wire = @import("wire.zig");
 
 pub const default_discovery_url = "https://client.discovery.minecraft-services.net";
 pub const default_application_type = "MinecraftPE";
-/// Refetched when a token names an unknown key id. The id is attacker-controlled,
-/// so it can trigger at most one refetch per interval.
+
 pub const default_refresh_min_interval_seconds: i64 = 60;
 pub const supported_signing_algorithm = "RS256";
 
@@ -212,7 +211,6 @@ fn resolveJwksUri(
     if (!std.mem.eql(u8, normalised, issuer)) return error.ConfigurationFailed;
 
     if (try jwt.stringClaim(document.value, "jwks_uri")) |uri| {
-        // An algorithm this server cannot check must not be accepted quietly.
         const algorithms = document.value.object.get("id_token_signing_alg_values_supported") orelse
             return error.UnsupportedSigningAlgorithm;
         if (algorithms != .array) return error.UnsupportedSigningAlgorithm;

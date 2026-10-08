@@ -2,13 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Raknet = @import("Raknet");
 const Protocol = @import("protocol");
-const WorkerLayout = @import("tasks/threaded-tasks.zig").WorkerLayout;
+const WorkerLayout = @import("tasks/threaded_tasks.zig").WorkerLayout;
 
 pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
     return mode == .Debug;
 }
 
-/// Log predicate: tests must not log, or the build runner reports the step as failed.
 pub fn shouldEmitStartupLogs() bool {
     return shouldEmitVerboseStartupLogs(builtin.mode) and !builtin.is_test;
 }
@@ -39,7 +38,6 @@ pub const ServerProperties = struct {
     allocator: std.mem.Allocator,
     _allocated_strings: std.ArrayList([]const u8) = .empty,
 
-    // 576 is the IPv4 minimum reassembly size, the smallest MTU a RakNet handshake survives.
     pub const min_max_mtu: u16 = 576;
     pub const max_max_mtu: u16 = Raknet.MAX_MTU_SIZE;
 

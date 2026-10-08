@@ -4,9 +4,9 @@ const CompoundTag = NBT.CompoundTag;
 const StringTag = NBT.StringTag;
 const ListTag = NBT.ListTag;
 const Tag = NBT.Tag;
-const ItemStack = @import("../item-stack.zig").ItemStack;
+const ItemStack = @import("../item_stack.zig").ItemStack;
 const ItemStackTrait = @import("../trait.zig").ItemStackTrait;
-const DisplayNameComponent = @import("../components/display-name.zig");
+const DisplayNameComponent = @import("../components/display_name.zig");
 
 pub const State = struct {};
 

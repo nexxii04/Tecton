@@ -16,7 +16,7 @@ const PlayerMath = @import("../../player/player.zig");
 const broadcast = @import("../../world/dimension/broadcast.zig");
 const entities = @import("../../world/dimension/entities.zig");
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
+const BlockPermutation = @import("../../world/block/block_permutation.zig").BlockPermutation;
 
 pub const TICKS_PER_SECOND: i32 = 20;
 pub const FIRE_DAMAGE_INTERVAL_TICKS: i32 = TICKS_PER_SECOND;
@@ -366,7 +366,7 @@ pub const FireTrait = EntityTrait(State, .{
 });
 
 const testing = std.testing;
-const EntityType = @import("../entity-type.zig").EntityType;
+const EntityType = @import("../entity_type.zig").EntityType;
 
 test "a shorter ignition never shrinks an active burn" {
     try testing.expectEqual(@as(i32, 80), refreshedFireTicks(0, 80));
@@ -485,8 +485,8 @@ test "sky access follows the cached column top of the chunk" {
     const allocator = testing.allocator;
     const ChunkImpl = @import("../../world/chunk/chunk.zig").Chunk;
     const chunkHash = @import("../../world/dimension/dimension.zig").chunkHash;
-    const BlockState = @import("../../world/block/block-permutation.zig").BlockState;
-    const BlockType = @import("../../world/block/block-type.zig").BlockType;
+    const BlockState = @import("../../world/block/block_permutation.zig").BlockState;
+    const BlockType = @import("../../world/block/block_type.zig").BlockType;
 
     try BlockPermutation.initRegistry(allocator);
     defer BlockPermutation.deinitRegistry();
@@ -516,18 +516,14 @@ test "sky access follows the cached column top of the chunk" {
     try dimension.chunks.put(chunkHash(0, 0), chunk);
     defer dimension.deinit();
 
-    // Nothing above the mob: the rain reaches it.
     try testing.expect(hasSkyAccess(&dimension, &entity));
 
-    // Only the mob's own column counts.
     try chunk.setPermutation(0, 200, 0, stone, 0);
     try testing.expect(hasSkyAccess(&dimension, &entity));
 
-    // A roof inside the two-block grace still lets the rain through.
     try chunk.setPermutation(4, 65, 4, stone, 0);
     try testing.expect(hasSkyAccess(&dimension, &entity));
 
-    // From feet + 2 upwards any block shelters the mob.
     try chunk.setPermutation(4, 66, 4, stone, 0);
     try testing.expect(!hasSkyAccess(&dimension, &entity));
 }

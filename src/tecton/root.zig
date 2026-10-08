@@ -4,7 +4,7 @@ pub const binary_stream = @import("BinaryStream");
 pub const nbt = @import("nbt");
 pub const protocol = @import("protocol");
 
-pub const pool_allocator = @import("./pool-allocator.zig");
+pub const pool_allocator = @import("./pool_allocator.zig");
 pub const command = @import("./command/root.zig");
 pub const Tecton = @import("./tecton.zig").Tecton;
 pub const Server = Tecton;

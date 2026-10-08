@@ -6,7 +6,7 @@ const CommandRegistry = @import("../registry.zig").CommandRegistry;
 const types = @import("../types.zig");
 const Player = @import("../../player/player.zig").Player;
 
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const Enchantment = @import("../../items/enchantments/enchantment.zig").Enchantment;
 const EnchantmentRegistry = @import("../../items/enchantments/registry.zig");
 const EnchantmentRules = @import("../../items/enchantments/rules.zig");
@@ -25,7 +25,6 @@ pub const MESSAGE_CANT_COMBINE: []const u8 = "{s} can't be combined with {s}";
 pub const MESSAGE_INVALID_LEVEL: []const u8 = "{s} does not support level {d}";
 pub const MESSAGE_NOT_FOUND: []const u8 = "There is no such enchantment with ID {d}";
 pub const MESSAGE_NO_TARGETS: []const u8 = "No targets matched selector";
-
 
 fn successMessage(buffer: []u8, username: []const u8) []const u8 {
     return std.fmt.bufPrint(buffer, MESSAGE_SUCCESS, .{username}) catch USAGE;
@@ -203,7 +202,6 @@ fn parseLevel(argument: ?[]const u8) ?i64 {
     return std.fmt.parseInt(i64, text, 10) catch null;
 }
 
-// Level 0 removes the enchantment; other out-of-range levels fail validation.
 fn levelInRange(definition: *const Enchantment, level: i64) bool {
     return level >= 0 and level <= @as(i64, definition.max_level);
 }

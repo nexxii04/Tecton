@@ -5,8 +5,8 @@ const EnchantmentInstance = enchantment.EnchantmentInstance;
 const Category = enchantment.Category;
 const Source = enchantment.Source;
 
-const ItemStack = @import("../item-stack.zig").ItemStack;
-const ItemType = @import("../item-type.zig").ItemType;
+const ItemStack = @import("../item_stack.zig").ItemStack;
+const ItemType = @import("../item_type.zig").ItemType;
 const storage = @import("storage.zig");
 const EnchantmentStorage = storage.EnchantmentStorage;
 const MergeMode = storage.MergeMode;

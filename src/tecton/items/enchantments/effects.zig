@@ -1,8 +1,8 @@
 const std = @import("std");
 const Protocol = @import("protocol");
 
-const ItemStack = @import("../item-stack.zig").ItemStack;
-const ItemType = @import("../item-type.zig").ItemType;
+const ItemStack = @import("../item_stack.zig").ItemStack;
+const ItemType = @import("../item_type.zig").ItemType;
 const Container = @import("../../container/container.zig").Container;
 const ops = @import("ops.zig");
 const compat = @import("compat.zig");

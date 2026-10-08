@@ -7,9 +7,9 @@ const EntityTrait = @import("./trait.zig").EntityTrait;
 const Player = @import("../../player/player.zig").Player;
 const NetworkHandler = @import("../../player/player.zig").NetworkHandler;
 const Container = @import("../../container/container.zig").Container;
-const EntityContainer = @import("../../container/entity-container.zig").EntityContainer;
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const ItemType = @import("../../items/item-type.zig").ItemType;
+const EntityContainer = @import("../../container/entity_container.zig").EntityContainer;
+const ItemStack = @import("../../items/item_stack.zig").ItemStack;
+const ItemType = @import("../../items/item_type.zig").ItemType;
 const EnchantmentEffects = @import("../../items/enchantments/effects.zig");
 
 pub const State = struct {
@@ -115,12 +115,9 @@ fn descriptorFor(item: ?*const ItemStack) Protocol.NetworkItemStackDescriptor {
     return if (item) |stack| stack.toNetworkStack() else emptyDescriptor();
 }
 
-/// Worn armor reaches other clients through `MobArmorEquipment` (0x20);
-/// `MobEquipment` (0x1f) carries only the held item.
 pub fn serializeArmor(state: *const State, runtime_id: i64, stream: *BinaryStream) ?[]const u8 {
     const armor = state.armor orelse return null;
 
-    // Armor container order; the body slot is unused by players.
     const packet = Protocol.MobArmorEquipmentPacket{
         .runtime_entity_id = @intCast(runtime_id),
         .helmet = descriptorFor(armor.getItem(0)),
@@ -177,7 +174,6 @@ pub fn sendEquipmentTo(viewer: *Player, target: *Player, state: *const State) vo
     }
 }
 
-/// Armor slot an item belongs on, or null when no player wears it; the elytra is a chest piece.
 pub fn armorSlotFor(item_type: *const ItemType) ?u8 {
     const identifier = item_type.identifier;
     if (std.mem.endsWith(u8, identifier, "_helmet")) return 0;
@@ -208,14 +204,13 @@ pub fn swapIntoArmor(state: *State, slot: u8) ?u8 {
 
 pub fn equipFromSlot(network: *NetworkHandler, player: *Player, state: *State, slot: u8) bool {
     const piece = state.container.base.getItem(slot) orelse return false;
-    // Read the item type before the swap: taking the stack clears the slot's pointer.
+
     const item_type = piece.item_type;
     if (armorSlotFor(item_type) == null) return false;
 
     const applied = swapIntoArmor(state, slot) != null;
     if (applied) state.container.updateSlot(slot);
 
-    // The owner gets the real set, undoing the client's predicted swap.
     sendEquipmentTo(player, player, state);
     if (!applied) return false;
 
@@ -359,7 +354,6 @@ test "equipping into an empty armor slot leaves the hotbar slot cleared" {
 
     state.container.base.setItem(2, ItemStack.init(allocator, chestplate, .{}));
 
-    // Read the type while the stack is still in the slot, like equipFromSlot.
     const item_type = state.container.base.getItem(2).?.item_type;
 
     try std.testing.expectEqual(@as(?u8, 1), swapIntoArmor(&state, 2));

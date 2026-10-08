@@ -4,7 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
-const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
+const NetworkHandler = @import("../network/network_handler.zig").NetworkHandler;
 const Player = @import("../player/player.zig").Player;
 const Tecton = @import("../tecton.zig").Tecton;
 const Command = @import("command.zig").Command;

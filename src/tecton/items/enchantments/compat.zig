@@ -1,5 +1,5 @@
 const std = @import("std");
-const ItemStack = @import("../item-stack.zig").ItemStack;
+const ItemStack = @import("../item_stack.zig").ItemStack;
 const Container = @import("../../container/container.zig").Container;
 const set_mod = @import("set.zig");
 const EnchantmentSet = set_mod.EnchantmentSet;

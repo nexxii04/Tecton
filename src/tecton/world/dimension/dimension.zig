@@ -3,18 +3,18 @@ const std = @import("std");
 const Protocol = @import("protocol");
 
 const Entity = @import("../../entity/entity.zig").Entity;
-const FloatingTextManager = @import("../../entity/floating-text.zig").FloatingTextManager;
-const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const FloatingTextManager = @import("../../entity/floating_text.zig").FloatingTextManager;
+const BlockPermutation = @import("../block/block_permutation.zig").BlockPermutation;
 const Block = @import("../block/block.zig").Block;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
-const TerrainGenerator = @import("../generator/terrain-generator.zig").TerrainGenerator;
-const ThreadedGenerator = @import("../generator/threaded-generator.zig").ThreadedGenerator;
+const TerrainGenerator = @import("../generator/terrain_generator.zig").TerrainGenerator;
+const ThreadedGenerator = @import("../generator/threaded_generator.zig").ThreadedGenerator;
 const World = @import("../world.zig").World;
-const ChunkEntityIndex = @import("./entity-index.zig").ChunkEntityIndex;
-const block_pos = @import("./block-pos.zig");
+const ChunkEntityIndex = @import("./entity_index.zig").ChunkEntityIndex;
+const block_pos = @import("./block_pos.zig");
 const broadcast = @import("./broadcast.zig");
-const random_tick = @import("./random-tick.zig");
-const tick_scheduler = @import("./tick-scheduler.zig");
+const random_tick = @import("./random_tick.zig");
+const tick_scheduler = @import("./tick_scheduler.zig");
 
 pub const ChunkHash = i64;
 
@@ -139,7 +139,6 @@ pub const Dimension = struct {
         return cached.data;
     }
 
-    /// Takes ownership of `data`.
     pub fn putCachedChunkPacket(self: *Dimension, hash: ChunkHash, data: []const u8) void {
         const gen = self.chunk_generations.get(hash) orelse 0;
         if (self.chunk_packet_cache.fetchPut(hash, .{ .data = data, .generation = gen }) catch null) |old| {
@@ -174,7 +173,7 @@ pub const Dimension = struct {
         }
         if (self.chunks.fetchRemove(hash)) |entry| {
             var chunk = entry.value;
-            // Rewrite the digest so a mob that died since the last save stays gone.
+
             self.world.provider.writeChunkEntities(chunk, self) catch {};
             if (self.getBlocksInChunk(x, z).len > 0) {
                 self.world.provider.writeBlockEntities(chunk, self) catch {};
@@ -213,7 +212,7 @@ pub const Dimension = struct {
                 if (self.chunks.fetchRemove(h)) |entry| {
                     const coords2 = Protocol.ChunkCoords.unhash(h);
                     var chunk = entry.value;
-                    // Rewrite the digest so a mob that died since the last save stays gone.
+
                     self.world.provider.writeChunkEntities(chunk, self) catch {};
                     if (self.getBlocksInChunk(coords2.x, coords2.z).len > 0) {
                         self.world.provider.writeBlockEntities(chunk, self) catch {};
@@ -367,7 +366,7 @@ test "view distance range predicate compares squared horizontal distance" {
 }
 
 test "entity index chunk hash matches dimension chunk hash" {
-    const entity_index = @import("./entity-index.zig");
+    const entity_index = @import("./entity_index.zig");
     try std.testing.expectEqual(chunkHash(0, 0), entity_index.chunkHash(0, 0));
     try std.testing.expectEqual(chunkHash(-33, 17), entity_index.chunkHash(-33, 17));
     try std.testing.expectEqual(chunkHash(1000, -1000), entity_index.chunkHash(1000, -1000));

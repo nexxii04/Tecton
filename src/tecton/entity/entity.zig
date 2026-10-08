@@ -1,8 +1,8 @@
 const std = @import("std");
 const Protocol = @import("protocol");
 const CompoundTag = @import("nbt").CompoundTag;
-const EntityType = @import("./entity-type.zig").EntityType;
-const EntityActorFlags = @import("./metadata/actor-flags.zig").EntityActorFlags;
+const EntityType = @import("./entity_type.zig").EntityType;
+const EntityActorFlags = @import("./metadata/actor_flags.zig").EntityActorFlags;
 const Attributes = @import("./metadata/attributes.zig").Attributes;
 const trait_mod = @import("./traits/trait.zig");
 const EntityTraitInstance = trait_mod.EntityTraitInstance;
@@ -46,7 +46,6 @@ pub const Entity = struct {
         return @atomicRmw(i64, &nextUniqueId, .Add, 1, .monotonic);
     }
 
-    /// Saved unique_ids are reserved on load; reusing one would collide with a known actor.
     pub fn reserveUniqueId(uid: i64) void {
         if (uid < 0) return;
         const next = std.math.add(i64, uid, 1) catch return;

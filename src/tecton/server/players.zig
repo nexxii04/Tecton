@@ -2,8 +2,8 @@ const std = @import("std");
 const Raknet = @import("Raknet");
 
 const Player = @import("../player/player.zig").Player;
-const PlayerSnapshot = @import("../player/player-snapshot.zig").PlayerSnapshot;
-const MovementBroadcast = @import("../network/movement-broadcast.zig");
+const PlayerSnapshot = @import("../player/player_snapshot.zig").PlayerSnapshot;
+const MovementBroadcast = @import("../network/movement_broadcast.zig");
 
 pub const PlayerRegistry = struct {
     allocator: std.mem.Allocator,
@@ -19,7 +19,7 @@ pub const PlayerRegistry = struct {
     movement_candidates: std.ArrayListUnmanaged(u32) = .empty,
     movement_batch: std.ArrayList([]const u8) = .empty,
     movement_viewers: std.ArrayListUnmanaged(MovementBroadcast.ViewerPoint) = .empty,
-    // Cleared before any player is freed so no snapshot outlives its players.
+
     publishing: bool = true,
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator) PlayerRegistry {

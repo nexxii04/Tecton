@@ -7,7 +7,7 @@ const Protocol = @import("protocol");
 const Tecton = @import("../tecton.zig").Tecton;
 const World = @import("../world/world.zig").World;
 const Generator = @import("../world/generator/root.zig");
-const LevelDBProvider = @import("../world/provider/leveldb-provider.zig").LevelDBProvider;
+const LevelDBProvider = @import("../world/provider/leveldb_provider.zig").LevelDBProvider;
 
 pub const WorldRegistry = struct {
     allocator: std.mem.Allocator,
@@ -59,7 +59,6 @@ pub const WorldRegistry = struct {
         try self.by_name.put(world.identifier, world);
     }
 
-    /// Removed from the map without freeing: in-flight dimension batches may still need it.
     pub fn detach(self: *WorldRegistry, world: *World) void {
         _ = self.by_name.remove(world.identifier);
     }

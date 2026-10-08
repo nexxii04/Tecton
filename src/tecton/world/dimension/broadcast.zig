@@ -5,7 +5,7 @@ const Protocol = @import("protocol");
 const Entity = @import("../../entity/entity.zig").Entity;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("./dimension.zig").Dimension;
-const SharedBroadcast = @import("../../network/shared-broadcast.zig").SharedBroadcast;
+const SharedBroadcast = @import("../../network/shared_broadcast.zig").SharedBroadcast;
 
 pub const SOUND_BROADCAST_RADIUS: f32 = 32.0;
 pub const PARTICLE_BROADCAST_RADIUS: f32 = 64.0;
@@ -41,7 +41,7 @@ pub fn broadcastToEntityViewers(dim: *Dimension, entity: *const Entity, data: []
         if (!player.spawned) continue;
         if (player.entity.dimension != dim or player.entity.instance_id != dim.instance_id) continue;
         const is_self = player.entity.runtime_id == entity.runtime_id;
-        // Players live in visible_players, not in tracked entities, so both maps must be asked.
+
         if (!is_self and
             !player.visible_players.contains(entity.runtime_id) and
             !player.visible_entities.contains(entity.runtime_id)) continue;

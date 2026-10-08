@@ -5,15 +5,15 @@ const NBT = @import("nbt");
 const Protocol = @import("protocol");
 const CompoundTag = NBT.CompoundTag;
 
-const EntityType = @import("../../entity/entity-type.zig").EntityType;
-const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig").EntityTypeRegistry;
+const EntityType = @import("../../entity/entity_type.zig").EntityType;
+const EntityTypeRegistry = @import("../../entity/entity_type_registry.zig").EntityTypeRegistry;
 const Entity = @import("../../entity/entity.zig").Entity;
 const Health = @import("../../entity/traits/health.zig");
 const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
-const ItemEntityTrait = @import("../../entity/traits/item-entity.zig").ItemEntityTrait;
+const ItemEntityTrait = @import("../../entity/traits/item_entity.zig").ItemEntityTrait;
 const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const ItemType = @import("../../items/item-type.zig").ItemType;
+const ItemStack = @import("../../items/item_stack.zig").ItemStack;
+const ItemType = @import("../../items/item_type.zig").ItemType;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("./dimension.zig").Dimension;
 const broadcast = @import("./broadcast.zig");
@@ -109,15 +109,12 @@ pub fn spawnItemStackEntity(dim: *Dimension, stack: ItemStack, position: Protoco
     return entity;
 }
 
-/// Rebuilds a stored actor from its NBT tag and makes it live in `dim`. Returns null
-/// when the tag must not come back: item, player, unknown type, already loaded, or saved dead.
 pub fn spawnStoredEntity(dim: *Dimension, tag: *const CompoundTag) !?*Entity {
     const identifier = stringField(tag, "identifier") orelse return null;
     if (std.mem.eql(u8, identifier, "minecraft:item") or
         std.mem.eql(u8, identifier, "minecraft:player")) return null;
     const entity_type = EntityTypeRegistry.get(identifier) orelse return null;
 
-    // Zero health is a mob that died before the last save; do not rebuild a corpse.
     if (floatField(tag, "Health")) |stored_health| {
         if (stored_health <= 0) return null;
     }

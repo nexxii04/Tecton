@@ -6,10 +6,10 @@ const Raknet = @import("Raknet");
 const Events = @import("../../events/root.zig");
 const Player = @import("../../player/player.zig").Player;
 const auth = @import("../auth/root.zig");
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
-const PlayerLog = @import("../player-log.zig");
-const offline_identity = @import("../offline-identity.zig");
+const PlayerLog = @import("../player_log.zig");
+const offline_identity = @import("../offline_identity.zig");
 
 fn applyOfflineIdentity(allocator: std.mem.Allocator, data: *Protocol.Login.Decoder.LoginData) !void {
     try offline_identity.validateDisplayName(data.identity_data.display_name);
@@ -164,7 +164,6 @@ pub fn handleLogin(
     }
 
     const resolution = resolveIdentity(tecton, network, &data, login.client) catch |err| {
-        // Never log the rejected name itself: it is attacker-controlled bytes.
         Raknet.Logger.WARN("Rejected login: {s}", .{@errorName(err)});
         data.deinit();
         sendPlayStatus(network, connection, .FailedClient);

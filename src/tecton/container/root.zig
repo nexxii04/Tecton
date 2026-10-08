@@ -1,3 +1,3 @@
-pub const BlockContainer = @import("./block-container.zig").BlockContainer;
+pub const BlockContainer = @import("./block_container.zig").BlockContainer;
 pub const Container = @import("./container.zig").Container;
-pub const EntityContainer = @import("./entity-container.zig").EntityContainer;
+pub const EntityContainer = @import("./entity_container.zig").EntityContainer;

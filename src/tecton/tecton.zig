@@ -9,38 +9,38 @@ const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
 const ServerProperties = @import("./config.zig").ServerProperties;
 const shouldEmitStartupLogs = @import("./config.zig").shouldEmitStartupLogs;
 const Console = @import("./console/console.zig").Console;
-const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
-const EntityType = @import("./entity/entity-type.zig").EntityType;
+const EntityTypeRegistry = @import("./entity/entity_type_registry.zig");
+const EntityType = @import("./entity/entity_type.zig").EntityType;
 const Entity = @import("./entity/entity.zig").Entity;
 const EntityTraits = @import("./entity/traits/root.zig");
-const CreativeContentLoader = @import("./items/creative-content-loader.zig");
-const ItemPalette = @import("./items/item-palette.zig");
+const CreativeContentLoader = @import("./items/creative_content_loader.zig");
+const ItemPalette = @import("./items/item_palette.zig");
 const AuthService = @import("./network/auth/root.zig").AuthService;
-const BanManager = @import("./network/ban-manager.zig").BanManager;
-const MovementBroadcast = @import("./network/movement-broadcast.zig");
+const BanManager = @import("./network/ban_manager.zig").BanManager;
+const MovementBroadcast = @import("./network/movement_broadcast.zig");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const SendPriority = @import("./network/root.zig").SendPriority;
 const dispatch = @import("./network/dispatch.zig");
-const PlayerLog = @import("./network/player-log.zig");
-const MoveDelta = @import("./player/move-delta.zig");
-const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
-const PlayerLocations = @import("./player/player-locations.zig").PlayerLocations;
-const PlayerLocation = @import("./player/player-locations.zig").Location;
-const PlayerSnapshot = @import("./player/player-snapshot.zig").PlayerSnapshot;
+const PlayerLog = @import("./network/player_log.zig");
+const MoveDelta = @import("./player/move_delta.zig");
+const PermissionManager = @import("./player/permission_manager.zig").PermissionManager;
+const PlayerLocations = @import("./player/player_locations.zig").PlayerLocations;
+const PlayerLocation = @import("./player/player_locations.zig").Location;
+const PlayerSnapshot = @import("./player/player_snapshot.zig").PlayerSnapshot;
 const Player = @import("./player/player.zig").Player;
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
-const threaded_tasks = @import("./tasks/threaded-tasks.zig");
+const threaded_tasks = @import("./tasks/threaded_tasks.zig");
 const ThreadedTaskQueue = threaded_tasks.ThreadedTaskQueue;
-const WorkerCountResolution = @import("./tasks/threaded-tasks.zig").WorkerCountResolution;
+const WorkerCountResolution = @import("./tasks/threaded_tasks.zig").WorkerCountResolution;
 const visibility_mod = @import("./entity/traits/visibility.zig");
-const resolveWorkerCount = @import("./tasks/threaded-tasks.zig").resolveWorkerCount;
-const totalServerThreadCount = @import("./tasks/threaded-tasks.zig").totalServerThreadCount;
-const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
+const resolveWorkerCount = @import("./tasks/threaded_tasks.zig").resolveWorkerCount;
+const totalServerThreadCount = @import("./tasks/threaded_tasks.zig").totalServerThreadCount;
+const TickProfiler = @import("./tick_profiler.zig").TickProfiler;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const EcsWorld = @import("entity/ecs.zig").EcsWorld;
 const Events = @import("events/root.zig");
 const PluginRuntime = @import("plugins/runtime.zig").PluginRuntime;
-const GameInstanceRegistry = @import("world/game-instance.zig").GameInstanceRegistry;
+const GameInstanceRegistry = @import("world/game_instance.zig").GameInstanceRegistry;
 const PlayerRegistry = @import("server/players.zig").PlayerRegistry;
 const options_mod = @import("server/options.zig");
 const SaveScheduler = @import("server/save.zig").SaveScheduler;
@@ -114,7 +114,7 @@ pub const Tecton = struct {
     plugin_runtime: PluginRuntime,
     instances: GameInstanceRegistry,
     ecs: EcsWorld,
-    /// Players whose visibility pass is due this tick, plus the reusable blocking job that runs it.
+
     visibility_batch: std.ArrayList(*Player) = .empty,
     visibility_job: threaded_tasks.ParallelJob = .{},
 
@@ -374,7 +374,7 @@ pub const Tecton = struct {
         } else {
             Raknet.Logger.INFO("Inbound ring disabled; using the legacy packet queue", .{});
         }
-        // The pump is the input ring's single consumer and the input shards' single producer, so it only runs with dedicated input workers.
+
         if (self.threaded_tasks.layoutResolution().layout == .split) {
             try self.network.startInputPump();
             Raknet.Logger.INFO("Input pump: dedicated thread draining the input queue", .{});
@@ -484,7 +484,6 @@ pub const Tecton = struct {
         movement_mod.flush(self);
     }
 
-    /// A disjoint viewer per worker is race-free: the pass mutates only the viewer's maps and reads other players read-only.
     pub fn runVisibilityPass(self: *Tecton) void {
         const snapshots = self.getPlayerSnapshots();
         self.visibility_batch.clearRetainingCapacity();
@@ -686,7 +685,6 @@ pub const Tecton = struct {
         }
     }
 
-    /// The RakNet tick thread touches Tecton state, so cancel and join it before the teardown below races it.
     fn stopRaknetTickThread(self: *Tecton) void {
         self.raknet.running.store(false, .release);
         if (self.raknet.tick_thread) |*tick_thread| {
@@ -697,9 +695,9 @@ pub const Tecton = struct {
 
     pub fn deinit(self: *Tecton) void {
         self.stopRaknetTickThread();
-        // The input pump feeds the worker pool, so it must be joined before the pool stops accepting tasks.
+
         if (self.network_initialized) self.network.stopInputPump();
-        // Workers may still be finishing tasks, but every counter is an atomic RMW, so the report reads whole values without pausing them.
+
         self.profiler.writeReport(self.io, "dump/tick-profile.txt");
 
         self.threaded_tasks.stop();
@@ -833,7 +831,7 @@ fn on_tick_start_line(source: []const u8, at: usize) usize {
 
 test {
     _ = @import("./network/dispatch.zig");
-    _ = @import("./network/handlers/player-hotbar.zig");
+    _ = @import("./network/handlers/player_hotbar.zig");
     _ = @import("./command/list/summon.zig");
     _ = @import("./items/enchantments/ops.zig");
     _ = @import("./items/enchantments/compat.zig");
@@ -845,12 +843,12 @@ test {
     _ = @import("./items/enchantments/set.zig");
     _ = @import("./command/list/enchant.zig");
     _ = @import("./command/list/world.zig");
-    _ = @import("./command/list/floating-text.zig");
-    _ = @import("./world/provider/leveldb-provider.zig");
-    _ = @import("./world/provider/chunk-entities.zig");
-    _ = @import("./entity/traits/chunk-loading.zig");
+    _ = @import("./command/list/floating_text.zig");
+    _ = @import("./world/provider/leveldb_provider.zig");
+    _ = @import("./world/provider/chunk_entities.zig");
+    _ = @import("./entity/traits/chunk_loading.zig");
     _ = @import("./entity/traits/fire.zig");
-    _ = @import("./player/player-snapshot.zig");
-    _ = @import("./player/move-delta.zig");
-    _ = @import("./network/movement-broadcast.zig");
+    _ = @import("./player/player_snapshot.zig");
+    _ = @import("./player/move_delta.zig");
+    _ = @import("./network/movement_broadcast.zig");
 }

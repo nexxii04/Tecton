@@ -1,6 +1,6 @@
 const std = @import("std");
-const BlockStorage = @import("./storage/block-storage.zig").BlockStorage;
-const BiomeStorage = @import("./storage/biome-storage.zig").BiomeStorage;
+const BlockStorage = @import("./storage/block_storage.zig").BlockStorage;
+const BiomeStorage = @import("./storage/biome_storage.zig").BiomeStorage;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 
 pub const SubChunk = struct {

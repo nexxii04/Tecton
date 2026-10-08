@@ -8,7 +8,7 @@ const shouldEmitStartupLogs = @import("../config.zig").shouldEmitStartupLogs;
 const worlds = @import("worlds.zig");
 const entities = @import("../world/dimension/entities.zig");
 
-const EntityTypeRegistry = @import("../entity/entity-type-registry.zig");
+const EntityTypeRegistry = @import("../entity/entity_type_registry.zig");
 const EntityTraits = @import("../entity/traits/root.zig");
 const FireTrait = EntityTraits.FireTrait;
 const GravityTrait = EntityTraits.GravityTrait;
@@ -16,18 +16,18 @@ const HealthTrait = EntityTraits.HealthTrait;
 const VillagerTradeTrait = EntityTraits.VillagerTradeTrait;
 const EcsEntityId = @import("../entity/ecs.zig").EntityId;
 const ItemDrop = @import("../entity/ecs.zig").ItemDrop;
-const CreativeContentLoader = @import("../items/creative-content-loader.zig");
-const ItemPalette = @import("../items/item-palette.zig");
-const ItemType = @import("../items/item-type.zig").ItemType;
+const CreativeContentLoader = @import("../items/creative_content_loader.zig");
+const ItemPalette = @import("../items/item_palette.zig");
+const ItemType = @import("../items/item_type.zig").ItemType;
 const EnchantmentRegistry = @import("../items/enchantments/registry.zig");
-const BlockPermutation = @import("../world/block/block-permutation.zig").BlockPermutation;
+const BlockPermutation = @import("../world/block/block_permutation.zig").BlockPermutation;
 const initRegistries = @import("../world/block/root.zig").initRegistries;
 const loadBlockPermutations = @import("../world/block/root.zig").loadBlockPermutations;
 const BarrelTrait = @import("../world/block/traits/barrel.zig").BarrelTrait;
 const ChestTrait = @import("../world/block/traits/chest.zig").ChestTrait;
-const OpenBitTrait = @import("../world/block/traits/open-bit.zig").OpenBitTrait;
-const UpperBlockTrait = @import("../world/block/traits/upper-block.zig").UpperBlockTrait;
-const WallConnectionTrait = @import("../world/block/traits/wall-connection.zig").WallConnectionTrait;
+const OpenBitTrait = @import("../world/block/traits/open_bit.zig").OpenBitTrait;
+const UpperBlockTrait = @import("../world/block/traits/upper_block.zig").UpperBlockTrait;
+const WallConnectionTrait = @import("../world/block/traits/wall_connection.zig").WallConnectionTrait;
 
 pub fn prepare(tecton: *Tecton) !void {
     if (tecton.prepared) return;
@@ -162,7 +162,7 @@ pub fn prepare(tecton: *Tecton) !void {
         @import("../command/list/give.zig"),
         @import("../command/list/weather.zig"),
         @import("../command/list/op.zig"),
-        @import("../command/list/floating-text.zig"),
+        @import("../command/list/floating_text.zig"),
         @import("../command/list/enchant.zig"),
         @import("../command/list/movement.zig"),
     };

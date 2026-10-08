@@ -2,7 +2,7 @@ const std = @import("std");
 const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Player = @import("../../player/player.zig").Player;
-const EntityContainer = @import("../../container/entity-container.zig").EntityContainer;
+const EntityContainer = @import("../../container/entity_container.zig").EntityContainer;
 
 pub const State = struct {
     container: EntityContainer,

@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const EntityActorFlags = @import("../entity/metadata/actor-flags.zig").EntityActorFlags;
+const EntityActorFlags = @import("../entity/metadata/actor_flags.zig").EntityActorFlags;
 
 pub const Pose = enum(u8) {
     standing,

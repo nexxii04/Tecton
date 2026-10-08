@@ -6,8 +6,8 @@ const Slot = enchantment.Slot;
 const SlotSet = enchantment.SlotSet;
 const Source = enchantment.Source;
 
-const ItemStack = @import("../item-stack.zig").ItemStack;
-const ItemType = @import("../item-type.zig").ItemType;
+const ItemStack = @import("../item_stack.zig").ItemStack;
+const ItemType = @import("../item_type.zig").ItemType;
 const registry_mod = @import("registry.zig");
 const events = @import("../../events/root.zig");
 const Player = @import("../../player/player.zig").Player;
@@ -49,10 +49,9 @@ pub const Context = struct {
 };
 
 pub const Rule = struct {
-    /// Diagnostic label; stored as a pointer, so it must outlive the registry.
     id: []const u8,
     priority: i16,
-    /// Runs on the tick thread and must only veto or adjust the level it receives.
+
     callback: *const fn (*Context) Verdict,
     owner_id: u32,
 };

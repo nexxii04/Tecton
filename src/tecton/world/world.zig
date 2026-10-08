@@ -2,10 +2,10 @@ const std = @import("std");
 const Protocol = @import("protocol");
 const Tecton = @import("../tecton.zig").Tecton;
 const Dimension = @import("./dimension/dimension.zig").Dimension;
-const WorldProvider = @import("./provider/world-provider.zig").WorldProvider;
-const InternalProvider = @import("./provider/internal-provider.zig").InternalProvider;
-const ThreadedGenerator = @import("./generator/threaded-generator.zig").ThreadedGenerator;
-const FloatingTextManager = @import("../entity/floating-text.zig").FloatingTextManager;
+const WorldProvider = @import("./provider/world_provider.zig").WorldProvider;
+const InternalProvider = @import("./provider/internal_provider.zig").InternalProvider;
+const ThreadedGenerator = @import("./generator/threaded_generator.zig").ThreadedGenerator;
+const FloatingTextManager = @import("../entity/floating_text.zig").FloatingTextManager;
 
 pub const Weather = enum { clear, rain, thunder };
 
