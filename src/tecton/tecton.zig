@@ -743,112 +743,51 @@ pub const Tecton = struct {
     }
 };
 
-test "the RakNet MTU cap is the clamped config value, never a literal" {
-    const source = @embedFile("tecton.zig");
-    const cutoff = std.mem.indexOf(u8, source, "test \"the RakNet MTU cap") orelse return error.TestUnexpectedResult;
-    const init_code = source[0..cutoff];
-    try std.testing.expect(std.mem.indexOf(u8, init_code, "ServerProperties.clampMaxMtu(owned_config.max_mtu)") != null);
+const test_owner = @This();
+const test_scope = struct {
+    pub const test_dependency_0 = @import("./command/list/enchant.zig");
+    pub const test_dependency_1 = @import("./command/list/floating_text.zig");
+    pub const test_dependency_2 = @import("./command/list/summon.zig");
+    pub const test_dependency_3 = @import("./command/list/world.zig");
+    pub const test_dependency_4 = @import("./entity/traits/chunk_loading.zig");
+    pub const test_dependency_5 = @import("./entity/traits/fire.zig");
+    pub const test_dependency_6 = @import("./items/enchantments/compat.zig");
+    pub const test_dependency_7 = @import("./items/enchantments/effects.zig");
+    pub const test_dependency_8 = @import("./items/enchantments/nbt.zig");
+    pub const test_dependency_9 = @import("./items/enchantments/ops.zig");
+    pub const test_dependency_10 = @import("./items/enchantments/registry.zig");
+    pub const test_dependency_11 = @import("./items/enchantments/rules.zig");
+    pub const test_dependency_12 = @import("./items/enchantments/set.zig");
+    pub const test_dependency_13 = @import("./items/enchantments/storage.zig");
+    pub const test_dependency_14 = @import("./network/dispatch.zig");
+    pub const test_dependency_15 = @import("./network/handlers/player_hotbar.zig");
+    pub const test_dependency_16 = @import("./network/movement_broadcast.zig");
+    pub const test_dependency_17 = @import("./player/move_delta.zig");
+    pub const test_dependency_18 = @import("./player/player_snapshot.zig");
+    pub const test_dependency_19 = @import("./world/provider/chunk_entities.zig");
+    pub const test_dependency_20 = @import("./world/provider/leveldb_provider.zig");
+    pub const std = test_owner.std;
+    pub const ServerProperties = test_owner.ServerProperties;
+    pub const dispatch = test_owner.dispatch;
+    pub const Tecton = test_owner.Tecton;
+};
 
-    var found: usize = 0;
-    var rest: []const u8 = init_code;
-    while (std.mem.indexOf(u8, rest, ".max_mtu = ")) |at| {
-        const value_start = at + ".max_mtu = ".len;
-        const end = std.mem.indexOfScalarPos(u8, rest, value_start, ',') orelse return error.TestUnexpectedResult;
-        if (!std.mem.eql(u8, rest[value_start..end], "max_mtu")) {
-            std.debug.print("tecton.zig: the RakNet MTU cap is not the clamped config value\n", .{});
-            return error.TestUnexpectedResult;
-        }
-        found += 1;
-        rest = rest[end..];
-    }
-    try std.testing.expectEqual(@as(usize, 1), found);
+test "the RakNet MTU cap is the clamped config value, never a literal" {
+    try @import("tecton_test.zig").Suite(test_scope).case_000();
 }
 
 test "the movement flush sends with the configured priority, never a literal" {
-    const source = @embedFile("server/movement.zig");
-    try std.testing.expect(std.mem.indexOf(u8, source, "sendPacketsUncompressedWith(viewer.connection, batch.items, tecton.movement_priority)") != null);
+    try @import("tecton_test.zig").Suite(test_scope).case_001();
 }
 
 test "onTick broadcasts movement and no path skips the flush" {
-    const source = @embedFile("server/tick.zig");
-    const flush_call = "tecton.flushMovementBroadcasts()";
-
-    const on_tick_start = std.mem.indexOf(u8, source, "pub fn onTick(context: ?*anyopaque) void {") orelse
-        return error.TestUnexpectedResult;
-    const body = source[on_tick_start..];
-
-    const allocator = std.testing.allocator;
-    var code: std.ArrayList(u8) = .empty;
-    defer code.deinit(allocator);
-    var lines = std.mem.splitScalar(u8, body, '\n');
-    while (lines.next()) |line| {
-        const stripped = if (std.mem.indexOf(u8, line, "//")) |at| line[0..at] else line;
-        try code.appendSlice(allocator, stripped);
-        try code.append(allocator, '\n');
-    }
-
-    const flush_at = std.mem.indexOf(u8, code.items, flush_call) orelse {
-        std.debug.print("tecton.zig: onTick no longer calls {s}: movement is not broadcast\n", .{flush_call});
-        return error.TestUnexpectedResult;
-    };
-
-    if (std.mem.indexOf(u8, code.items[0..flush_at], "return")) |at| {
-        const line_no = std.mem.count(u8, code.items[0..at], "\n") + 2;
-        std.debug.print(
-            "server/tick.zig:{d}: onTick returns before the movement flush\n",
-            .{on_tick_start_line(source, on_tick_start) + line_no},
-        );
-        return error.TestUnexpectedResult;
-    }
+    try @import("tecton_test.zig").Suite(test_scope).case_002();
 }
 
 test "the player snapshot goes quiet before the players are freed" {
-    const registry_source = @embedFile("server/players.zig");
-    if (std.mem.indexOf(u8, registry_source, "if (!self.publishing) return &.{};") == null) {
-        std.debug.print("server/players.zig: the published snapshot outlives the players it points at\n", .{});
-        return error.TestUnexpectedResult;
-    }
-    if (std.mem.indexOf(u8, registry_source, "self.publishing = false;") == null) {
-        std.debug.print("server/players.zig: nothing silences the snapshot before teardown\n", .{});
-        return error.TestUnexpectedResult;
-    }
-
-    const source = @embedFile("tecton.zig");
-    const deinit_start = std.mem.indexOf(u8, source, "pub fn deinit(self: *Tecton) void {") orelse
-        return error.TestUnexpectedResult;
-    const guard = std.mem.indexOfPos(u8, source, deinit_start, "self.players.silence();") orelse {
-        std.debug.print("tecton.zig: deinit frees the players while block traits can still broadcast\n", .{});
-        return error.TestUnexpectedResult;
-    };
-    const players_freed = std.mem.indexOfPos(u8, source, guard, "self.players.destroyPlayers();") orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expect(guard < players_freed);
-}
-
-fn on_tick_start_line(source: []const u8, at: usize) usize {
-    return std.mem.count(u8, source[0..at], "\n") + 1;
+    try @import("tecton_test.zig").Suite(test_scope).case_003();
 }
 
 test {
-    _ = @import("./network/dispatch.zig");
-    _ = @import("./network/handlers/player_hotbar.zig");
-    _ = @import("./command/list/summon.zig");
-    _ = @import("./items/enchantments/ops.zig");
-    _ = @import("./items/enchantments/compat.zig");
-    _ = @import("./items/enchantments/effects.zig");
-    _ = @import("./items/enchantments/nbt.zig");
-    _ = @import("./items/enchantments/rules.zig");
-    _ = @import("./items/enchantments/registry.zig");
-    _ = @import("./items/enchantments/storage.zig");
-    _ = @import("./items/enchantments/set.zig");
-    _ = @import("./command/list/enchant.zig");
-    _ = @import("./command/list/world.zig");
-    _ = @import("./command/list/floating_text.zig");
-    _ = @import("./world/provider/leveldb_provider.zig");
-    _ = @import("./world/provider/chunk_entities.zig");
-    _ = @import("./entity/traits/chunk_loading.zig");
-    _ = @import("./entity/traits/fire.zig");
-    _ = @import("./player/player_snapshot.zig");
-    _ = @import("./player/move_delta.zig");
-    _ = @import("./network/movement_broadcast.zig");
+    try @import("tecton_test.zig").Suite(test_scope).case_004();
 }

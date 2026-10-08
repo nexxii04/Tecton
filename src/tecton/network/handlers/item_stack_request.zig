@@ -549,82 +549,31 @@ pub fn handleItemStackRequest(
     }
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const Container = test_owner.Container;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const ItemType = test_owner.ItemType;
+    pub const resolveCoreSlot = test_owner.resolveCoreSlot;
+    pub const applyTransferAction = test_owner.applyTransferAction;
+    pub const applyDropAction = test_owner.applyDropAction;
+    pub const playerDropSpawnPosition = test_owner.playerDropSpawnPosition;
+};
+
 test "core slot mapping translates trade and creative ui slots" {
-    try std.testing.expectEqual(@as(u32, 0), resolveCoreSlot(.CreativeOutput, 50));
-    try std.testing.expectEqual(@as(u32, 1), resolveCoreSlot(.Trade2Ingredient2, 5));
-    try std.testing.expectEqual(@as(u32, 7), resolveCoreSlot(.Inventory, 7));
+    try @import("item_stack_request_test.zig").Suite(test_scope).case_000();
 }
 
 test "transfer action merges matching stacks into occupied destination" {
-    const allocator = std.testing.allocator;
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-
-    var src = try Container.init(allocator, .Inventory, 36);
-    defer src.deinit();
-    var dst = try Container.init(allocator, .Inventory, 1);
-    defer dst.deinit();
-
-    const stone = try ItemType.init(
-        allocator,
-        try allocator.dupe(u8, "minecraft:stone"),
-        1,
-        64,
-        true,
-        &.{},
-        false,
-        0,
-        .{ .End = .{} },
-    );
-    try stone.register();
-
-    src.setItem(5, ItemStack.init(allocator, stone, .{ .stack_size = 1 }));
-    dst.setItem(0, ItemStack.init(allocator, stone, .{ .stack_size = 10 }));
-
-    try applyTransferAction(&src, 5, &dst, 0, 1);
-
-    try std.testing.expect(src.getItem(5) == null);
-    const cursor = dst.getItem(0) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u16, 11), cursor.stack_size);
+    try @import("item_stack_request_test.zig").Suite(test_scope).case_001();
 }
 
 test "drop action removes only requested amount from source stack" {
-    const allocator = std.testing.allocator;
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-
-    var src = try Container.init(allocator, .Inventory, 36);
-    defer src.deinit();
-
-    const stone = try ItemType.init(
-        allocator,
-        try allocator.dupe(u8, "minecraft:stone"),
-        1,
-        64,
-        true,
-        &.{},
-        false,
-        0,
-        .{ .End = .{} },
-    );
-    try stone.register();
-
-    src.setItem(9, ItemStack.init(allocator, stone, .{ .stack_size = 32 }));
-
-    var dropped = try applyDropAction(&src, 9, 1);
-    defer dropped.deinit();
-
-    try std.testing.expectEqual(stone, dropped.item_type);
-    try std.testing.expectEqual(@as(u16, 1), dropped.stack_size);
-    const remaining = src.getItem(9) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u16, 31), remaining.stack_size);
+    try @import("item_stack_request_test.zig").Suite(test_scope).case_002();
 }
 
 test "drop spawn position is relative to player feet, not above head" {
-    const pos = Protocol.Vector3f.init(4, 65.62, -2);
-    const drop_pos = playerDropSpawnPosition(pos);
-
-    try std.testing.expectEqual(@as(f32, 4), drop_pos.x);
-    try std.testing.expectEqual(@as(f32, 65.3), drop_pos.y);
-    try std.testing.expectEqual(@as(f32, -2), drop_pos.z);
+    try @import("item_stack_request_test.zig").Suite(test_scope).case_003();
 }

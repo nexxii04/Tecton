@@ -28,7 +28,6 @@ fn acquireThreadLocal() !*c.z_stream {
     return s;
 }
 
-/// Thread-local stream reused across packets: `inflateInit2` allocates internal state that the zalloc=null counters cannot see.
 fn acquireInflateStream() !*c.z_stream {
     if (tl_inflate_stream) |s| {
         if (c.inflateReset(s) == c.Z_OK) return s;
@@ -59,7 +58,6 @@ pub const DecompressResult = struct {
     }
 };
 
-/// Slices live in the caller's arena, or borrow `data` when the framing is not zlib, so `data` must outlive the packets.
 pub const ArenaDecompressResult = struct {
     packets: [][]const u8,
 };
@@ -223,7 +221,6 @@ pub const Compression = struct {
         return .{ .packets = packets, .buffer = owned, .allocator = allocator };
     }
 
-    /// The returned slice may own more capacity than its length: arenas reset wholesale, so the slack is intentional.
     fn zlibInflateInto(input: []const u8, allocator: std.mem.Allocator) ![]const u8 {
         const stream = try acquireInflateStream();
         stream.next_in = @constCast(input.ptr);
@@ -342,7 +339,6 @@ pub const Compression = struct {
 
     const VarIntResult = struct { value: u32, size: usize };
 
-    // Null on malformed input (bad varints, >5 bytes, overflow); callers drop the frame.
     fn readVarInt(buffer: []const u8) ?VarIntResult {
         var result: u32 = 0;
         var pos: usize = 0;
@@ -360,200 +356,56 @@ pub const Compression = struct {
     }
 };
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const private_compression_writeVarInt = test_owner.Compression.writeVarInt;
+    pub const std = test_owner.std;
+    pub const CompressionOptions = test_owner.CompressionOptions;
+    pub const Compression = test_owner.Compression;
+    pub const private_compression_readVarInt = test_owner.Compression.readVarInt;
+    pub const private_compression_unframe = test_owner.Compression.unframe;
+};
+
 test "compression round-trip with pooled streams" {
-    const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0xdeadbeef);
-    const random = rng.random();
-
-    const options = CompressionOptions{
-        .compression_method = .Zlib,
-        .compression_threshold = 1,
-    };
-
-    for (0..100) |_| {
-        const len = random.intRangeAtMost(usize, 16, 512);
-        const data = try allocator.alloc(u8, len);
-        defer allocator.free(data);
-        random.bytes(data);
-
-        const pkts = [_][]const u8{data};
-        const compressed = try Compression.compress(&pkts, options, allocator);
-        defer allocator.free(compressed);
-
-        const result = try Compression.decompress(compressed, options, allocator);
-        defer result.deinit();
-
-        try std.testing.expectEqual(@as(usize, 1), result.packets.len);
-        try std.testing.expectEqualSlices(u8, data, result.packets[0]);
-    }
+    try @import("compression_test.zig").Suite(test_scope).case_000();
 }
 
 test "batch compression round-trip preserves order and content" {
-    const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0xcafe9876);
-    const random = rng.random();
-
-    const options = CompressionOptions{
-        .compression_method = .Zlib,
-        .compression_threshold = 1,
-    };
-
-    for (0..100) |_| {
-        const pkt_count = random.intRangeAtMost(usize, 1, 8);
-        var pkts: [8][]u8 = undefined;
-        var pkt_slices: [8][]const u8 = undefined;
-
-        for (0..pkt_count) |i| {
-            const len = random.intRangeAtMost(usize, 16, 256);
-            pkts[i] = try allocator.alloc(u8, len);
-            random.bytes(pkts[i]);
-            pkt_slices[i] = pkts[i];
-        }
-        defer for (0..pkt_count) |i| allocator.free(pkts[i]);
-
-        const compressed = try Compression.compress(pkt_slices[0..pkt_count], options, allocator);
-        defer allocator.free(compressed);
-
-        const result = try Compression.decompress(compressed, options, allocator);
-        defer result.deinit();
-
-        try std.testing.expectEqual(pkt_count, result.packets.len);
-        for (0..pkt_count) |i| {
-            try std.testing.expectEqualSlices(u8, pkts[i], result.packets[i]);
-        }
-    }
+    try @import("compression_test.zig").Suite(test_scope).case_001();
 }
 
 test "readVarInt round-trips values written by writeVarInt" {
-    const cases = [_]u32{ 0, 1, 127, 128, 16383, 16384, 2097151, 2097152, 268435455, 0xFFFFFFFF };
-    for (cases) |value| {
-        var buf: [5]u8 = undefined;
-        const size = Compression.writeVarInt(&buf, value);
-        const decoded = Compression.readVarInt(buf[0..size]) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqual(value, decoded.value);
-        try std.testing.expectEqual(size, decoded.size);
-    }
+    try @import("compression_test.zig").Suite(test_scope).case_002();
 }
 
 test "readVarInt rejects malformed varints" {
-    try std.testing.expect(Compression.readVarInt(&.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01 }) == null);
-    try std.testing.expect(Compression.readVarInt(&.{0x80}) == null);
-    try std.testing.expect(Compression.readVarInt(&.{}) == null);
-    try std.testing.expect(Compression.readVarInt(&.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x70 }) == null);
+    try @import("compression_test.zig").Suite(test_scope).case_003();
 }
 
 test "unframe rejects packet lengths beyond the payload" {
-    const allocator = std.testing.allocator;
-    const payload = [_]u8{ 0xFF, 0xFF, 0x01, 0xAA, 0xBB };
-    try std.testing.expectError(error.MalformedPacketFraming, Compression.unframe(&payload, allocator));
+    try @import("compression_test.zig").Suite(test_scope).case_004();
 }
 
 test "unframe rejects unterminated varint framing" {
-    const allocator = std.testing.allocator;
-    const payload = [_]u8{0x80};
-    try std.testing.expectError(error.MalformedPacketFraming, Compression.unframe(&payload, allocator));
+    try @import("compression_test.zig").Suite(test_scope).case_005();
 }
 
 test "unframe rejects truncated packet data" {
-    const allocator = std.testing.allocator;
-    const payload = [_]u8{ 0x05, 0xAA, 0xBB };
-    try std.testing.expectError(error.MalformedPacketFraming, Compression.unframe(&payload, allocator));
+    try @import("compression_test.zig").Suite(test_scope).case_006();
 }
 
 test "unframe accepts valid framing" {
-    const allocator = std.testing.allocator;
-    const payload = [_]u8{ 0x02, 0xAA, 0xBB, 0x00, 0x03, 0xCC, 0xDD, 0xEE };
-    const packets = try Compression.unframe(&payload, allocator);
-    defer allocator.free(packets);
-    try std.testing.expectEqual(@as(usize, 3), packets.len);
-    try std.testing.expectEqualSlices(u8, &.{ 0xAA, 0xBB }, packets[0]);
-    try std.testing.expectEqual(@as(usize, 0), packets[1].len);
-    try std.testing.expectEqualSlices(u8, &.{ 0xCC, 0xDD, 0xEE }, packets[2]);
+    try @import("compression_test.zig").Suite(test_scope).case_007();
 }
 
 test "decompressInto round-trips without owning the input" {
-    const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0x5eed1234);
-    const random = rng.random();
-
-    const options = CompressionOptions{
-        .compression_method = .Zlib,
-        .compression_threshold = 1,
-    };
-
-    for (0..100) |_| {
-        const pkt_count = random.intRangeAtMost(usize, 1, 8);
-        var pkts: [8][]u8 = undefined;
-        var pkt_slices: [8][]const u8 = undefined;
-        for (0..pkt_count) |i| {
-            const len = random.intRangeAtMost(usize, 16, 512);
-            pkts[i] = try allocator.alloc(u8, len);
-            random.bytes(pkts[i]);
-            pkt_slices[i] = pkts[i];
-        }
-        defer for (0..pkt_count) |i| allocator.free(pkts[i]);
-
-        const compressed = try Compression.compress(pkt_slices[0..pkt_count], options, allocator);
-        defer allocator.free(compressed);
-
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const result = try Compression.decompressInto(compressed, options, arena.allocator());
-
-        try std.testing.expectEqual(pkt_count, result.packets.len);
-        for (0..pkt_count) |i| {
-            try std.testing.expectEqualSlices(u8, pkts[i], result.packets[i]);
-        }
-    }
+    try @import("compression_test.zig").Suite(test_scope).case_008();
 }
 
 test "decompressInto borrows the input for uncompressed framing" {
-    const allocator = std.testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const options = CompressionOptions{
-        .compression_method = .Zlib,
-        .compression_threshold = 255,
-    };
-
-    const packet = [_]u8{ 1, 2, 3, 4, 5 };
-    const packets = [_][]const u8{&packet};
-    const compressed = try Compression.compress(&packets, options, allocator);
-    defer allocator.free(compressed);
-    try std.testing.expect(compressed[1] != 0xFE);
-
-    const result = try Compression.decompressInto(compressed, options, arena.allocator());
-    try std.testing.expectEqual(@as(usize, 1), result.packets.len);
-    try std.testing.expectEqualSlices(u8, &packet, result.packets[0]);
-    const payload_ptr = @intFromPtr(result.packets[0].ptr);
-    try std.testing.expect(payload_ptr >= @intFromPtr(compressed.ptr));
-    try std.testing.expect(payload_ptr + result.packets[0].len <= @intFromPtr(compressed.ptr) + compressed.len);
+    try @import("compression_test.zig").Suite(test_scope).case_009();
 }
 
 test "decompressInto survives many back-to-back uses of the pooled inflate stream" {
-    const allocator = std.testing.allocator;
-    const options = CompressionOptions{
-        .compression_method = .Zlib,
-        .compression_threshold = 1,
-    };
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var rng = std.Random.DefaultPrng.init(0xf00d9876);
-    const random = rng.random();
-    for (0..200) |_| {
-        var payload: [1024]u8 = undefined;
-        const len = random.intRangeAtMost(usize, 256, payload.len);
-        random.bytes(payload[0..len]);
-
-        const slices = [_][]const u8{payload[0..len]};
-        const compressed = try Compression.compress(&slices, options, allocator);
-        defer allocator.free(compressed);
-
-        const result = try Compression.decompressInto(compressed, options, arena.allocator());
-        try std.testing.expectEqualSlices(u8, payload[0..len], result.packets[0]);
-        _ = arena.reset(.retain_capacity);
-    }
+    try @import("compression_test.zig").Suite(test_scope).case_010();
 }

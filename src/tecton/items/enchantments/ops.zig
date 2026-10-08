@@ -449,407 +449,95 @@ fn levelOf(stack: *const ItemStack, id: u16) ?u8 {
     return stack.enchantments.level(id);
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const enchantment = test_owner.enchantment;
+    pub const EnchantmentInstance = test_owner.EnchantmentInstance;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const storage = test_owner.storage;
+    pub const registry_mod = test_owner.registry_mod;
+    pub const nbt = test_owner.nbt;
+    pub const EnchantmentSet = test_owner.EnchantmentSet;
+    pub const events = test_owner.events;
+    pub const Options = test_owner.Options;
+    pub const Reject = test_owner.Reject;
+    pub const rejected = test_owner.rejected;
+    pub const isEnchanted = test_owner.isEnchanted;
+    pub const count = test_owner.count;
+    pub const level = test_owner.level;
+    pub const has = test_owner.has;
+    pub const hasName = test_owner.hasName;
+    pub const totalLevels = test_owner.totalLevels;
+    pub const matches = test_owner.matches;
+    pub const highestOfGroup = test_owner.highestOfGroup;
+    pub const highestOfCategory = test_owner.highestOfCategory;
+    pub const canEnchant = test_owner.canEnchant;
+    pub const enchant = test_owner.enchant;
+    pub const enchantName = test_owner.enchantName;
+    pub const addLevels = test_owner.addLevels;
+    pub const remove = test_owner.remove;
+    pub const clear = test_owner.clear;
+    pub const setMany = test_owner.setMany;
+    pub const absorb = test_owner.absorb;
+    pub const transferTo = test_owner.transferTo;
+    pub const copyTo = test_owner.copyTo;
+    pub const syncNbt = test_owner.syncNbt;
+    pub const native_testing = test_owner.native_testing;
+    pub const testStack = test_owner.testStack;
+    pub const expectReject = test_owner.expectReject;
+    pub const enchantedKey = test_owner.enchantedKey;
+    pub const levelOf = test_owner.levelOf;
+};
+
 test "enchant applies, replaces, clamps and reports every rejection" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-    const registry = registry_mod.global().?;
-
-    var stack = try testStack(allocator, "minecraft:test_api_sword", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    const sharpness = registry.resolve("sharpness").?;
-    const smite = registry.resolve("smite").?;
-    const efficiency = registry.resolve("efficiency").?;
-    const mending = registry.resolve("mending").?;
-
-    switch (enchant(&stack, sharpness.id, 3, .{})) {
-        .applied => |applied| {
-            try std.testing.expectEqual(@as(u8, 3), applied.instance.level);
-            try std.testing.expect(!applied.clamped);
-        },
-        else => return error.ExpectedApplied,
-    }
-    try std.testing.expectEqual(@as(u8, 3), levelOf(&stack, sharpness.id).?);
-    try std.testing.expect(enchantedKey(&stack));
-
-    try std.testing.expect(enchant(&stack, sharpness.id, 5, .{}) == .applied);
-    try std.testing.expectEqual(@as(u8, 1), count(&stack));
-    try std.testing.expect(enchant(&stack, sharpness.id, 5, .{}) == .unchanged);
-    try std.testing.expect(enchant(&stack, sharpness.id, 9, .{}) == .unchanged);
-
-    try std.testing.expect(remove(&stack, sharpness.id, .{}) == .removed);
-    switch (enchant(&stack, sharpness.id, 9, .{})) {
-        .applied => |applied| {
-            try std.testing.expectEqual(@as(u8, 5), applied.instance.level);
-            try std.testing.expect(applied.clamped);
-        },
-        else => return error.ExpectedApplied,
-    }
-    try expectReject(enchant(&stack, sharpness.id, 9, .{ .clamp_level = false }), error.invalid_level);
-    try std.testing.expect(enchant(&stack, sharpness.id, 0, .{}) == .removed);
-    try std.testing.expectEqual(@as(u8, 0), count(&stack));
-    try std.testing.expect(!enchantedKey(&stack));
-    try std.testing.expect(enchant(&stack, sharpness.id, 5, .{}) == .applied);
-    try expectReject(enchant(&stack, 999, 1, .{}), error.unknown_enchantment);
-    try expectReject(enchant(&stack, efficiency.id, 1, .{}), error.not_applicable);
-    try expectReject(enchant(&stack, smite.id, 1, .{}), error.conflicts);
-
-    try std.testing.expectEqual(@as(u8, 1), count(&stack));
-
-    switch (enchant(&stack, smite.id, 1, .{ .allow_conflicts = true })) {
-        .applied => |applied| try std.testing.expectEqual(@as(u8, 1), applied.instance.level),
-        else => return error.ExpectedApplied,
-    }
-    try std.testing.expectEqual(@as(u8, 2), count(&stack));
-
-    try std.testing.expect(hasName(&stack, "smite"));
-    try std.testing.expect(has(&stack, mending.id) == false);
-    try std.testing.expectEqual(@as(u32, 6), totalLevels(&stack));
-    try std.testing.expectEqual(sharpness.id, highestOfGroup(&stack, 2).?.id);
-    try std.testing.expectEqual(@as(?EnchantmentInstance, null), highestOfGroup(&stack, 0));
-    try std.testing.expectEqual(sharpness.id, highestOfCategory(&stack, sharpness.category).?.id);
-    try std.testing.expect(matches(&stack, &EnchantmentSet.fromIds(&.{smite.id})));
-    try std.testing.expect(!matches(&stack, &EnchantmentSet.fromIds(&.{mending.id})));
-    try std.testing.expect(isEnchanted(&stack));
-    try std.testing.expect(canEnchant(stack.item_type, sharpness.id));
+    try @import("ops_test.zig").Suite(test_scope).case_000();
 }
 
 test "addLevels tops up an existing enchantment" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-    const registry = registry_mod.global().?;
-
-    var stack = try testStack(allocator, "minecraft:test_api_add_levels", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    const sharpness = registry.resolve("sharpness").?;
-
-    try std.testing.expect(enchantName(&stack, "sharpness", 2, .{}) == .applied);
-    switch (addLevels(&stack, sharpness.id, 2, .{})) {
-        .applied => |applied| try std.testing.expectEqual(@as(u8, 4), applied.instance.level),
-        else => return error.ExpectedApplied,
-    }
-    switch (addLevels(&stack, sharpness.id, 4, .{})) {
-        .applied => |applied| try std.testing.expectEqual(sharpness.max_level, applied.instance.level),
-        else => return error.ExpectedApplied,
-    }
-    try expectReject(addLevels(&stack, 999, 1, .{}), error.unknown_enchantment);
+    try @import("ops_test.zig").Suite(test_scope).case_001();
 }
 
 test "remove and clear keep the nbt block in sync" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-
-    var stack = try testStack(allocator, "minecraft:test_api_remove", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    try std.testing.expect(remove(&stack, 9, .{}) == .unchanged);
-    try std.testing.expect(enchantName(&stack, "sharpness", 3, .{}) == .applied);
-    try std.testing.expect(enchantedKey(&stack));
-
-    try std.testing.expect(remove(&stack, 9, .{}) == .removed);
-    try std.testing.expect(!enchantedKey(&stack));
-    try std.testing.expectEqual(@as(u8, 0), count(&stack));
-
-    try std.testing.expect(enchantName(&stack, "unbreaking", 2, .{}) == .applied);
-    try std.testing.expectEqual(@as(u8, 1), try clear(&stack));
-    try std.testing.expectEqual(@as(u8, 0), try clear(&stack));
-    try std.testing.expect(!enchantedKey(&stack));
+    try @import("ops_test.zig").Suite(test_scope).case_002();
 }
 
 test "the removal reaches the wire with nothing left to paint" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-
-    var stack = try testStack(allocator, "minecraft:test_api_wire_removal", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    try std.testing.expect(enchantName(&stack, "sharpness", 5, .{}) == .applied);
-
-    const before = stack.toNetworkStack().extras.?.nbt.?;
-    try std.testing.expect(before.get(nbt.KEY) != null);
-    try std.testing.expect(before.get("tag") == null);
-
-    try std.testing.expect(remove(&stack, 9, .{}) == .removed);
-    try std.testing.expect(!isEnchanted(&stack));
-
-    const after = stack.toNetworkStack();
-    if (after.extras) |extras| {
-        try std.testing.expect(extras.nbt.?.get(nbt.KEY) == null);
-        try std.testing.expect(extras.nbt.?.get("tag") == null);
-    }
+    try @import("ops_test.zig").Suite(test_scope).case_003();
 }
 
 test "setMany validates the whole batch before touching the item" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-
-    var stack = try testStack(allocator, "minecraft:test_api_set_many", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    _ = stack.enchantments.set(26, 1);
-
-    const conflicting = [_]EnchantmentInstance{
-        .{ .id = 9, .level = 5 },
-        .{ .id = 10, .level = 1 },
-    };
-    const report = setMany(&stack, &conflicting, .replace, .{});
-    try std.testing.expectEqual(Reject.conflicts, report.rejected.?);
-    try std.testing.expectEqual(@as(u16, 10), report.rejected_id.?);
-    try std.testing.expectEqual(@as(u8, 1), count(&stack));
-    try std.testing.expectEqual(@as(u8, 1), levelOf(&stack, 26).?);
-
-    const valid = [_]EnchantmentInstance{
-        .{ .id = 17, .level = 3 },
-        .{ .id = 9, .level = 5 },
-    };
-    const applied = setMany(&stack, &valid, .replace, .{});
-    try std.testing.expectEqual(@as(?Reject, null), applied.rejected);
-    try std.testing.expectEqual(@as(u8, 2), applied.applied);
-    try std.testing.expectEqual(@as(u8, 2), count(&stack));
-    try std.testing.expectEqual(@as(?u8, null), levelOf(&stack, 26));
-    try std.testing.expectEqual(@as(u8, 5), levelOf(&stack, 9).?);
-
-    const merged = [_]EnchantmentInstance{.{ .id = 9, .level = 2 }};
-    const merge_report = setMany(&stack, &merged, .merge, .{});
-    try std.testing.expectEqual(@as(u8, 1), merge_report.applied);
-    try std.testing.expectEqual(@as(u8, 5), levelOf(&stack, 9).?);
+    try @import("ops_test.zig").Suite(test_scope).case_004();
 }
 
 test "a batch that would overflow the cap is rejected whole" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-
-    const item_type = try native_testing.itemType(allocator, "minecraft:enchanted_book", &.{}, true);
-    defer item_type.deinit();
-    var stack = ItemStack.init(allocator, item_type, .{});
-    defer stack.deinit();
-
-    var entries: [storage.MAX_ENCHANTMENTS + 1]EnchantmentInstance = undefined;
-    for (&entries, 0..) |*entry, index| entry.* = .{ .id = @intCast(index), .level = 1 };
-
-    const opts: Options = .{ .allow_books = true, .allow_conflicts = true };
-    const report = setMany(&stack, &entries, .replace, opts);
-
-    try std.testing.expectEqual(Reject.too_many, report.rejected.?);
-    try std.testing.expectEqual(@as(?u16, storage.MAX_ENCHANTMENTS), report.rejected_id);
-    try std.testing.expectEqual(@as(u8, 0), report.applied);
-    try std.testing.expectEqual(@as(u8, 0), count(&stack));
-    try std.testing.expect(!enchantedKey(&stack));
+    try @import("ops_test.zig").Suite(test_scope).case_005();
 }
 
 test "an operation that cannot write its nbt is rolled back" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-    const registry = registry_mod.global().?;
-
-    var stack = try testStack(allocator, "minecraft:test_ops_rollback", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
-    stack.allocator = failing.allocator();
-    defer stack.allocator = allocator;
-
-    const sharpness = registry.resolve("sharpness").?;
-    try expectReject(enchant(&stack, sharpness.id, 3, .{}), error.storage_failure);
-    try std.testing.expectEqual(@as(u8, 0), count(&stack));
-    try std.testing.expect(!isEnchanted(&stack));
-    try std.testing.expect(stack.enchantments.dirty);
-
-    if (stack.nbt) |*leftover| leftover.deinit(allocator);
-    stack.nbt = null;
-    stack.allocator = allocator;
-
-    try std.testing.expect(enchant(&stack, sharpness.id, 3, .{}) == .applied);
-    try std.testing.expectEqual(@as(u8, 3), levelOf(&stack, sharpness.id).?);
+    try @import("ops_test.zig").Suite(test_scope).case_006();
 }
 
 test "a transfer leaves behind what the target refused" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-    const registry = registry_mod.global().?;
-
-    var source = try testStack(allocator, "minecraft:test_ops_source", true);
-    defer source.deinit();
-    defer source.item_type.deinit();
-    var target = try testStack(allocator, "minecraft:test_ops_target", true);
-    defer target.deinit();
-    defer target.item_type.deinit();
-
-    const sharpness = registry.resolve("sharpness").?;
-    const smite = registry.resolve("smite").?;
-
-    _ = source.enchantments.set(sharpness.id, 3);
-    _ = source.enchantments.set(smite.id, 2);
-    _ = target.enchantments.set(sharpness.id, 5);
-
-    const report = try transferTo(&source, &target, .{ .overwrite_existing = false, .respect_conflicts = false });
-    try std.testing.expectEqual(@as(u8, 1), report.skipped);
-    try std.testing.expectEqual(@as(u8, 1), report.moved);
-    try std.testing.expectEqual(@as(u8, 3), levelOf(&source, sharpness.id).?);
-    try std.testing.expectEqual(@as(u8, 5), levelOf(&target, sharpness.id).?);
-    try std.testing.expectEqual(@as(u8, 2), levelOf(&target, smite.id).?);
-    try std.testing.expectEqual(@as(u8, 0), levelOf(&source, smite.id) orelse 0);
+    try @import("ops_test.zig").Suite(test_scope).case_007();
 }
 
 test "a transfer takes off every id that landed, not every other one" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-
-    var source = try testStack(allocator, "minecraft:test_ops_drain_source", false);
-    defer source.deinit();
-    defer source.item_type.deinit();
-    var target = try testStack(allocator, "minecraft:test_ops_drain_target", false);
-    defer target.deinit();
-    defer target.item_type.deinit();
-
-    _ = source.enchantments.set(17, 2);
-    _ = source.enchantments.set(18, 3);
-
-    const report = try transferTo(&source, &target, .{});
-    try std.testing.expectEqual(@as(u8, 2), report.moved);
-    try std.testing.expectEqual(@as(u8, 0), count(&source));
-    try std.testing.expect(!isEnchanted(&source));
-    try std.testing.expectEqual(@as(u8, 2), levelOf(&target, 17).?);
-    try std.testing.expectEqual(@as(u8, 3), levelOf(&target, 18).?);
+    try @import("ops_test.zig").Suite(test_scope).case_008();
 }
 
 test "a transfer that moves nothing leaves the source untouched" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-    const registry = registry_mod.global().?;
-
-    var source = try testStack(allocator, "minecraft:test_ops_idle_source", true);
-    defer source.deinit();
-    defer source.item_type.deinit();
-    var target = try testStack(allocator, "minecraft:test_ops_idle_target", true);
-    defer target.deinit();
-    defer target.item_type.deinit();
-
-    const sharpness = registry.resolve("sharpness").?;
-    _ = source.enchantments.set(sharpness.id, 3);
-    _ = target.enchantments.set(sharpness.id, 5);
-    try syncNbt(&source);
-
-    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
-    source.allocator = failing.allocator();
-    defer source.allocator = allocator;
-
-    const report = try transferTo(&source, &target, .{ .overwrite_existing = false });
-    try std.testing.expectEqual(@as(u8, 0), report.moved);
-    try std.testing.expectEqual(@as(u8, 1), report.skipped);
-    try std.testing.expectEqual(@as(u8, 3), levelOf(&source, sharpness.id).?);
-    try std.testing.expect(!source.enchantments.dirty);
-    try std.testing.expectEqual(@as(usize, 0), failing.allocations);
+    try @import("ops_test.zig").Suite(test_scope).case_009();
 }
 
 test "events can veto an application" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-
-    var stack = try testStack(allocator, "minecraft:test_api_veto", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    var bus = events.Events.init(allocator);
-    defer bus.deinit();
-
-    const listeners = struct {
-        fn veto(_: *events.EventContext, event: *events.types.EnchantmentApplyEvent) events.EventResult {
-            if (event.stack.enchantments.count() > 0) return .cancel;
-            return .continue_;
-        }
-    };
-    _ = try bus.subscribe(.EnchantmentApply, .pre, 10, 1, listeners.veto);
-
-    try std.testing.expect(enchantName(&stack, "sharpness", 3, .{ .events = &bus }) == .applied);
-    try expectReject(enchantName(&stack, "unbreaking", 1, .{ .events = &bus }), error.rule_vetoed);
-    try std.testing.expectEqual(@as(u8, 1), count(&stack));
-    try std.testing.expect(remove(&stack, 9, .{}) == .removed);
+    try @import("ops_test.zig").Suite(test_scope).case_010();
 }
 
 test "events can rewrite the requested level" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-
-    var stack = try testStack(allocator, "minecraft:test_api_rewrite", true);
-    defer stack.deinit();
-    defer stack.item_type.deinit();
-
-    var bus = events.Events.init(allocator);
-    defer bus.deinit();
-
-    const listeners = struct {
-        fn downgrade(_: *events.EventContext, event: *events.types.EnchantmentApplyEvent) events.EventResult {
-            event.level = 1;
-            return .continue_;
-        }
-    };
-    _ = try bus.subscribe(.EnchantmentApply, .pre, 10, 1, listeners.downgrade);
-
-    switch (enchantName(&stack, "sharpness", 5, .{ .events = &bus, .source = .plugin })) {
-        .applied => |applied| {
-            try std.testing.expectEqual(@as(u8, 1), applied.instance.level);
-            try std.testing.expect(applied.clamped);
-        },
-        else => return error.ExpectedApplied,
-    }
+    try @import("ops_test.zig").Suite(test_scope).case_011();
 }
 
 test "absorb merges, skips conflicts and transferTo drains the source" {
-    const allocator = std.testing.allocator;
-    _ = try registry_mod.load();
-    const registry = registry_mod.global().?;
-
-    var target = try testStack(allocator, "minecraft:test_api_target", false);
-    defer target.deinit();
-    defer target.item_type.deinit();
-    var source = try testStack(allocator, "minecraft:test_api_source", false);
-    defer source.deinit();
-    defer source.item_type.deinit();
-
-    _ = target.enchantments.set(registry.resolve("silk_touch").?.id, 1);
-    _ = target.enchantments.set(17, 1);
-    _ = source.enchantments.set(registry.resolve("fortune").?.id, 3);
-    _ = source.enchantments.set(17, 2);
-    _ = source.enchantments.set(26, 1);
-
-    const report = try transferTo(&source, &target, .{});
-    try std.testing.expectEqual(@as(u8, 1), report.moved);
-    try std.testing.expectEqual(@as(u8, 1), report.merged);
-    try std.testing.expectEqual(@as(u8, 1), report.skipped);
-    try std.testing.expectEqual(@as(u8, 3), levelOf(&target, 17).?);
-    try std.testing.expectEqual(@as(u8, 1), levelOf(&target, 26).?);
-    try std.testing.expectEqual(@as(u8, 1), count(&source));
-    try std.testing.expect(levelOf(&source, 18) != null);
-
-    const copy_report = try copyTo(&source, &target, .{ .respect_conflicts = false });
-    try std.testing.expectEqual(@as(u8, 1), copy_report.moved);
-    try std.testing.expectEqual(@as(u8, 0), copy_report.skipped);
-    try std.testing.expectEqual(@as(u8, 3), levelOf(&target, 18).?);
-    try std.testing.expectEqual(@as(u8, 1), count(&source));
-
-    var clone = try source.cloneWithCount(allocator, 2);
-    defer clone.deinit();
-    try std.testing.expect(clone.enchantments.eql(&source.enchantments));
-    try std.testing.expectEqual(@as(u16, 2), clone.stack_size);
-
-    var other = try testStack(allocator, "minecraft:test_api_other", false);
-    defer other.deinit();
-    defer other.item_type.deinit();
-    try std.testing.expect(source.isStackCompatible(&clone));
-    try std.testing.expect(!source.isStackCompatible(&other));
-    _ = other.enchantments.set(9, 1);
-    try std.testing.expect(!clone.isStackCompatible(&other));
-
-    try std.testing.expectEqual(@as(u8, 1), try clear(&clone));
-    try std.testing.expect(clone.enchantments.isEmpty());
-    try std.testing.expect(!source.enchantments.isEmpty());
-    syncNbt(&clone) catch return error.UnexpectedSyncFailure;
+    try @import("ops_test.zig").Suite(test_scope).case_012();
 }

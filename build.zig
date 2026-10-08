@@ -131,8 +131,12 @@ pub fn build(b: *std.Build) void {
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
+    const chest_sources = b.addWriteFiles();
+    _ = chest_sources.addCopyDirectory(b.path("src/tecton"), "tecton", .{ .include_extensions = &.{ ".zig", ".json" } });
+    const chest_root = chest_sources.addCopyFile(b.path("tests/chest/root.zig"), "root.zig");
+    _ = chest_sources.addCopyFile(b.path("tests/architecture/root.zig"), "architecture_root.zig");
     const chest_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/tecton/chest_test_root.zig"),
+        .root_source_file = chest_root,
         .target = target,
         .optimize = optimize,
         .link_libcpp = true,
@@ -175,7 +179,11 @@ pub fn build(b: *std.Build) void {
     };
     const run_loadbot_tests = addLoadbot(b, target, optimize, zlib_dep, &loadbot_imports);
 
+    const deps_command = b.addSystemCommand(&.{ "python3", "tools/architecture-baseline/check_deps.py" });
+    const check_deps_step = b.step("check-deps", "Verify dependency boundaries and cyclic components");
+    check_deps_step.dependOn(&deps_command.step);
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&deps_command.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_chest_tests.step);
     test_step.dependOn(&run_library_tests.step);
