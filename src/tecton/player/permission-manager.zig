@@ -116,8 +116,8 @@ pub const PermissionManager = struct {
         defer file.close(self.io);
 
         var read_buf: [4096]u8 = undefined;
-        var reader = file.reader(self.io, &read_buf).interface;
-        const data = reader.allocRemaining(self.allocator, .limited(1024 * 1024)) catch return;
+        var reader = file.reader(self.io, &read_buf);
+        const data = reader.interface.allocRemaining(self.allocator, .limited(1024 * 1024)) catch return;
         defer self.allocator.free(data);
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, data, .{}) catch return;
@@ -224,6 +224,10 @@ pub const PermissionManager = struct {
         writer.writeAll("  }\n}\n") catch return;
     }
 };
+
+test "permission manager loads existing groups and assignments without rewriting the file" {
+    try @import("permission_manager_test.zig").test_existing_permissions(PermissionManager);
+}
 
 test "permission manager defaults restrict players to the member group" {
     var mgr = PermissionManager.init(std.testing.io, std.testing.allocator, "test-permissions-missing.json", "member");
