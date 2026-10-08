@@ -87,6 +87,13 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(?u32, 0), edit.params[0].enum_index);
             try std.testing.expectEqual(@as(?u32, 0), remove.params[0].enum_index);
             try std.testing.expectEqual(@as(?u32, 0), info.params[0].enum_index);
+            const list = cmd.subcommands.get("list") orelse return error.TestUnexpectedResult;
+            try std.testing.expect(cmd.handler == &scope.handle);
+            try std.testing.expect(add.handler == &scope.handle_add);
+            try std.testing.expect(edit.handler == &scope.handle_edit);
+            try std.testing.expect(remove.handler == &scope.handle_remove);
+            try std.testing.expect(list.handler == &scope.handle_list);
+            try std.testing.expect(info.handler == &scope.handle_info);
         }
 
         pub fn case_007() !void {
@@ -106,6 +113,45 @@ pub fn Suite(comptime scope: type) type {
             const decoded = try Protocol.FloatingText.decodeEscapes(allocator, "\\n\\n");
             defer allocator.free(decoded);
             try std.testing.expectError(error.EmptyText, validateText(decoded));
+        }
+        pub fn case_009() !void {
+            const Context = struct {
+                buffer: [256]u8 = undefined,
+                message: []const u8 = &.{},
+                success: bool = true,
+
+                pub fn sendOutput(self: *@This(), success: bool, message: []const u8) void {
+                    @memcpy(self.buffer[0..message.len], message);
+                    self.message = self.buffer[0..message.len];
+                    self.success = success;
+                }
+            };
+            var ctx = Context{};
+            const argument_cases = .{
+                .{ error.MissingName, "usage" },
+                .{ error.InvalidName, "Name may only contain letters, numbers, '_', '-' and '.'" },
+                .{ error.NameTooLong, "Name must be 32 characters or less" },
+                .{ error.MissingText, "Floating text cannot be empty" },
+                .{ error.TextTooLong, "Floating text is too long" },
+            };
+            inline for (argument_cases) |entry| {
+                scope.output.send_text_args_error(&ctx, entry[0], "usage");
+                try std.testing.expect(!ctx.success);
+                try std.testing.expectEqualStrings(entry[1], ctx.message);
+            }
+            scope.output.send_text_error(&ctx, error.EmptyText);
+            try std.testing.expectEqualStrings("Floating text cannot be empty", ctx.message);
+            scope.output.send_text_error(&ctx, error.InvalidText);
+            try std.testing.expectEqualStrings("Floating text contains invalid characters", ctx.message);
+            scope.output.report_not_found(&ctx, "shop");
+            try std.testing.expectEqualStrings("Floating text 'shop' not found", ctx.message);
+            inline for (argument_cases, 0..) |entry, index| {
+                if (comptime index < 3) {
+                    scope.output.send_name_error(&ctx, entry[0], "usage");
+                    try std.testing.expect(!ctx.success);
+                    try std.testing.expectEqualStrings(entry[1], ctx.message);
+                }
+            }
         }
     };
 }

@@ -6,157 +6,34 @@ const Tecton = @import("../../tecton.zig").Tecton;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const FloatingTextManager = @import("../../entity/floating_text.zig").FloatingTextManager;
-const Command = @import("../command.zig").Command;
-const SubCommand = @import("../command.zig").SubCommand;
+const registration = @import("floating_text_registration.zig");
+const output = @import("floating_text_output.zig");
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
 
-pub const PERMISSION: []const u8 = "tecton.command.floatingtext";
-pub const MAX_NAME_LENGTH: usize = 32;
-pub const MAX_TEXT_LENGTH: usize = 1024;
-
-pub const AddArgs = struct {
-    name: []const u8,
-    text: []const u8,
-};
-
-pub const NameError = error{
-    MissingName,
-    InvalidName,
-    NameTooLong,
-};
-
-pub const AddArgsError = NameError || error{
-    MissingText,
-    TextTooLong,
-};
-
-pub const TextError = error{
-    EmptyText,
-    InvalidText,
-};
-
-pub fn hasValidNameCharacters(name: []const u8) bool {
-    for (name) |byte| {
-        const is_alpha = (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z');
-        const is_digit = byte >= '0' and byte <= '9';
-        if (!is_alpha and !is_digit and byte != '_' and byte != '-' and byte != '.') return false;
-    }
-    return true;
-}
-
-pub fn validateText(text: []const u8) TextError!void {
-    var has_content = false;
-    for (text) |byte| {
-        if (byte == 0x7f) return error.InvalidText;
-        if (byte < 0x20) {
-            if (byte != '\n') return error.InvalidText;
-            continue;
-        }
-        if (byte != ' ') has_content = true;
-    }
-    if (!has_content) return error.EmptyText;
-}
-
-pub fn parseAddArgs(args: []const u8) AddArgsError!AddArgs {
-    const trimmed = std.mem.trimStart(u8, args, " ");
-    const name_end = std.mem.indexOfScalar(u8, trimmed, ' ') orelse return error.MissingName;
-    const name = trimmed[0..name_end];
-    const text = std.mem.trim(u8, trimmed[name_end + 1 ..], " ");
-
-    if (name.len == 0) return error.MissingName;
-    if (name.len > MAX_NAME_LENGTH) return error.NameTooLong;
-    if (!hasValidNameCharacters(name)) return error.InvalidName;
-    if (text.len == 0) return error.MissingText;
-    if (text.len > MAX_TEXT_LENGTH) return error.TextTooLong;
-
-    return .{ .name = name, .text = text };
-}
-
-pub fn parseRemoveArgs(args: []const u8) NameError![]const u8 {
-    const trimmed = std.mem.trim(u8, args, " ");
-    const name_end = std.mem.indexOfScalar(u8, trimmed, ' ') orelse trimmed.len;
-    const name = trimmed[0..name_end];
-
-    if (name.len == 0) return error.MissingName;
-    if (name.len > MAX_NAME_LENGTH) return error.NameTooLong;
-    if (!hasValidNameCharacters(name)) return error.InvalidName;
-
-    return name;
-}
+const text_args = @import("floating_text_args.zig");
+pub const PERMISSION = text_args.PERMISSION;
+pub const MAX_NAME_LENGTH = text_args.MAX_NAME_LENGTH;
+pub const MAX_TEXT_LENGTH = text_args.MAX_TEXT_LENGTH;
+pub const AddArgs = text_args.AddArgs;
+pub const NameError = text_args.NameError;
+pub const AddArgsError = text_args.AddArgsError;
+pub const TextError = text_args.TextError;
+pub const hasValidNameCharacters = text_args.has_valid_name_characters;
+pub const validateText = text_args.validate_text;
+pub const parseAddArgs = text_args.parse_add_args;
+pub const parseRemoveArgs = text_args.parse_remove_args;
+const writeHologramLine = text_args.write_hologram_line;
 
 pub fn register(registry: *CommandRegistry) !void {
-    const name_enum_idx = try registry.registerEnum(.{
-        .name = "FloatingTextName",
-        .values = &.{},
-        .owned = false,
+    try registration.register(registry, .{
+        .handle = &handle,
+        .add = &handleAdd,
+        .edit = &handleEdit,
+        .remove = &handleRemove,
+        .list = &handleList,
+        .info = &handleInfo,
     });
-
-    const cmd = try Command.init(
-        registry.allocator,
-        "floatingtext",
-        "Create and remove floating text holograms (operators only)",
-        PERMISSION,
-        &.{"ft"},
-        @ptrCast(&handle),
-    );
-
-    const add_sub = try registry.allocator.create(SubCommand);
-    add_sub.* = .{
-        .name = "add",
-        .aliases = &.{},
-        .params = &.{
-            .{ .name = "name", .param_type = .String, .optional = false },
-            .{ .name = "text", .param_type = .Message, .optional = false },
-        },
-        .handler = @ptrCast(&handleAdd),
-    };
-    try cmd.registerSubCommand(add_sub);
-
-    const edit_sub = try registry.allocator.create(SubCommand);
-    edit_sub.* = .{
-        .name = "edit",
-        .aliases = &.{},
-        .params = &.{
-            .{ .name = "name", .param_type = .String, .optional = false, .enum_index = name_enum_idx },
-            .{ .name = "text", .param_type = .Message, .optional = false },
-        },
-        .handler = @ptrCast(&handleEdit),
-    };
-    try cmd.registerSubCommand(edit_sub);
-
-    const remove_sub = try registry.allocator.create(SubCommand);
-    remove_sub.* = .{
-        .name = "remove",
-        .aliases = &.{},
-        .params = &.{
-            .{ .name = "name", .param_type = .String, .optional = false, .enum_index = name_enum_idx },
-        },
-        .handler = @ptrCast(&handleRemove),
-    };
-    try cmd.registerSubCommand(remove_sub);
-
-    const list_sub = try registry.allocator.create(SubCommand);
-    list_sub.* = .{
-        .name = "list",
-        .aliases = &.{},
-        .params = &.{},
-        .handler = @ptrCast(&handleList),
-    };
-    try cmd.registerSubCommand(list_sub);
-
-    const info_sub = try registry.allocator.create(SubCommand);
-    info_sub.* = .{
-        .name = "info",
-        .aliases = &.{},
-        .params = &.{
-            .{ .name = "name", .param_type = .String, .optional = false, .enum_index = name_enum_idx },
-        },
-        .handler = @ptrCast(&handleInfo),
-    };
-    try cmd.registerSubCommand(info_sub);
-
-    try registry.registerCommand(cmd);
 }
 
 fn handle(raw: *anyopaque) void {
@@ -182,7 +59,7 @@ fn handleAdd(raw: *anyopaque) void {
     };
 
     const parsed = parseAddArgs(ctx.args) catch |err| {
-        sendTextArgsError(ctx, err, "Usage: /floatingtext add <name> <text>");
+        output.send_text_args_error(ctx, err, "Usage: /floatingtext add <name> <text>");
         return;
     };
 
@@ -193,7 +70,7 @@ fn handleAdd(raw: *anyopaque) void {
     defer ctx.allocator.free(text);
 
     validateText(text) catch |err| {
-        sendTextError(ctx, err);
+        output.send_text_error(ctx, err);
         return;
     };
 
@@ -212,28 +89,11 @@ fn handleAdd(raw: *anyopaque) void {
     ctx.sendOutput(true, msg);
 }
 
-fn sendTextArgsError(ctx: *CommandContext, err: AddArgsError, usage: []const u8) void {
-    switch (err) {
-        error.MissingName => ctx.sendOutput(false, usage),
-        error.InvalidName => ctx.sendOutput(false, "Name may only contain letters, numbers, '_', '-' and '.'"),
-        error.NameTooLong => ctx.sendOutput(false, "Name must be 32 characters or less"),
-        error.MissingText => ctx.sendOutput(false, "Floating text cannot be empty"),
-        error.TextTooLong => ctx.sendOutput(false, "Floating text is too long"),
-    }
-}
-
-fn sendTextError(ctx: *CommandContext, err: TextError) void {
-    switch (err) {
-        error.EmptyText => ctx.sendOutput(false, "Floating text cannot be empty"),
-        error.InvalidText => ctx.sendOutput(false, "Floating text contains invalid characters"),
-    }
-}
-
 fn handleEdit(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
 
     const parsed = parseAddArgs(ctx.args) catch |err| {
-        sendTextArgsError(ctx, err, "Usage: /floatingtext edit <name> <text>");
+        output.send_text_args_error(ctx, err, "Usage: /floatingtext edit <name> <text>");
         return;
     };
 
@@ -244,12 +104,12 @@ fn handleEdit(raw: *anyopaque) void {
     defer ctx.allocator.free(text);
 
     validateText(text) catch |err| {
-        sendTextError(ctx, err);
+        output.send_text_error(ctx, err);
         return;
     };
 
     const manager = findManager(ctx.tecton, ctx.player, parsed.name) orelse {
-        reportNotFound(ctx, parsed.name);
+        output.report_not_found(ctx, parsed.name);
         return;
     };
 
@@ -261,20 +121,6 @@ fn handleEdit(raw: *anyopaque) void {
     var msg_buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' updated", .{parsed.name}) catch return;
     ctx.sendOutput(true, msg);
-}
-
-fn reportNotFound(ctx: *CommandContext, name: []const u8) void {
-    var msg_buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' not found", .{name}) catch return;
-    ctx.sendOutput(false, msg);
-}
-
-fn sendNameError(ctx: *CommandContext, err: NameError, usage: []const u8) void {
-    switch (err) {
-        error.MissingName => ctx.sendOutput(false, usage),
-        error.InvalidName => ctx.sendOutput(false, "Name may only contain letters, numbers, '_', '-' and '.'"),
-        error.NameTooLong => ctx.sendOutput(false, "Name must be 32 characters or less"),
-    }
 }
 
 fn handleList(raw: *anyopaque) void {
@@ -313,16 +159,16 @@ fn handleInfo(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
 
     const name = parseRemoveArgs(ctx.args) catch |err| {
-        sendNameError(ctx, err, "Usage: /floatingtext info <name>");
+        output.send_name_error(ctx, err, "Usage: /floatingtext info <name>");
         return;
     };
 
     const manager = findManager(ctx.tecton, ctx.player, name) orelse {
-        reportNotFound(ctx, name);
+        output.report_not_found(ctx, name);
         return;
     };
     const hologram = manager.find(name) orelse {
-        reportNotFound(ctx, name);
+        output.report_not_found(ctx, name);
         return;
     };
 
@@ -362,27 +208,17 @@ fn writeDimensionHolograms(writer: *std.Io.Writer, dimension: *const Dimension) 
     }
 }
 
-fn writeHologramLine(writer: *std.Io.Writer, name: []const u8, position: Protocol.Vector3f, viewers: usize) !void {
-    try std.Io.Writer.print(writer, "\n  §b{s}§r §8- §a{d:.1}§7,§a{d:.1}§7,§a{d:.1}§r §8(§7viewers: §f{d}§8)", .{
-        name,
-        position.x,
-        position.y,
-        position.z,
-        viewers,
-    });
-}
-
 fn handleRemove(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
 
     const name = parseRemoveArgs(ctx.args) catch |err| {
-        sendNameError(ctx, err, "Usage: /floatingtext remove <name>");
+        output.send_name_error(ctx, err, "Usage: /floatingtext remove <name>");
         return;
     };
 
     const tecton = ctx.tecton;
     const manager = findManager(tecton, ctx.player, name) orelse {
-        reportNotFound(ctx, name);
+        output.report_not_found(ctx, name);
         return;
     };
 
@@ -431,6 +267,13 @@ const test_scope = struct {
     pub const parseRemoveArgs = test_owner.parseRemoveArgs;
     pub const register = test_owner.register;
     pub const writeHologramLine = test_owner.writeHologramLine;
+    pub const output = test_owner.output;
+    pub const handle = test_owner.handle;
+    pub const handle_add = test_owner.handleAdd;
+    pub const handle_edit = test_owner.handleEdit;
+    pub const handle_remove = test_owner.handleRemove;
+    pub const handle_list = test_owner.handleList;
+    pub const handle_info = test_owner.handleInfo;
 };
 
 test "parseAddArgs keeps free text with spaces and color codes" {
@@ -467,4 +310,8 @@ test "listing line reports name, position and viewers" {
 
 test "edit rejects text that decodes into blank lines" {
     try @import("floating_text_test.zig").Suite(test_scope).case_008();
+}
+
+test "floating text diagnostics retain their exact output" {
+    try @import("floating_text_test.zig").Suite(test_scope).case_009();
 }
