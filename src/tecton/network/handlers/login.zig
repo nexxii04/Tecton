@@ -287,53 +287,6 @@ fn testChain(allocator: std.mem.Allocator, xuid: []const u8, name: []const u8, c
     };
 }
 
-test "a chain that claims someone else's identity is replaced by one derived from the name" {
-    const allocator = testing.allocator;
-    const victim_uuid = "00000000-0000-4000-8000-000000000123";
-    const victim_xuid = "2533274799999999";
-
-    const tokens = try testChain(allocator, victim_xuid, "LoadBot", victim_uuid);
-    defer allocator.free(tokens.chain);
-    defer allocator.free(tokens.client);
-
-    var data = try Protocol.Login.Decoder.decodeLoginChain(allocator, tokens.chain, tokens.client);
-    defer data.deinit();
-
-    try testing.expectEqualStrings(victim_uuid, data.identity_data.identity);
-    try testing.expectEqualStrings(victim_xuid, data.identity_data.xuid);
-
-    try applyOfflineIdentity(allocator, &data);
-
-    const expected = try offline_identity.uuidForDisplayName(allocator, "LoadBot");
-    defer allocator.free(expected);
-
-    try testing.expectEqualStrings(expected, data.identity_data.identity);
-    try testing.expect(!std.mem.eql(u8, victim_uuid, data.identity_data.identity));
-    try testing.expectEqual(@as(usize, 0), data.identity_data.xuid.len);
-    try testing.expectEqualStrings("LoadBot", data.identity_data.display_name);
-}
-
-test "the same name always lands on the same identity" {
-    const allocator = testing.allocator;
-
-    const first = try testChain(allocator, "2533274799999999", "Steve", null);
-    defer allocator.free(first.chain);
-    defer allocator.free(first.client);
-    const second = try testChain(allocator, "9999999999999999", "Steve", "00000000-0000-4000-8000-000000000456");
-    defer allocator.free(second.chain);
-    defer allocator.free(second.client);
-
-    var first_data = try Protocol.Login.Decoder.decodeLoginChain(allocator, first.chain, first.client);
-    defer first_data.deinit();
-    var second_data = try Protocol.Login.Decoder.decodeLoginChain(allocator, second.chain, second.client);
-    defer second_data.deinit();
-
-    try applyOfflineIdentity(allocator, &first_data);
-    try applyOfflineIdentity(allocator, &second_data);
-
-    try testing.expectEqualStrings(first_data.identity_data.identity, second_data.identity_data.identity);
-}
-
 fn testVerified(allocator: std.mem.Allocator) !auth.Verified {
     const secret = std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes([_]u8{11} ** 48) catch unreachable;
     const key_pair = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.fromSecretKey(secret) catch unreachable;
@@ -352,75 +305,42 @@ fn testVerified(allocator: std.mem.Allocator) !auth.Verified {
     };
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const offline_identity = test_owner.offline_identity;
+    pub const applyOfflineIdentity = test_owner.applyOfflineIdentity;
+    pub const applyVerifiedIdentity = test_owner.applyVerifiedIdentity;
+    pub const Policy = test_owner.Policy;
+    pub const policyFor = test_owner.policyFor;
+    pub const chainTokens = test_owner.chainTokens;
+    pub const testing = test_owner.testing;
+    pub const testJwt = test_owner.testJwt;
+    pub const testChain = test_owner.testChain;
+    pub const testVerified = test_owner.testVerified;
+};
+
+test "a chain that claims someone else's identity is replaced by one derived from the name" {
+    try @import("login_test.zig").Suite(test_scope).case_000();
+}
+
+test "the same name always lands on the same identity" {
+    try @import("login_test.zig").Suite(test_scope).case_001();
+}
+
 test "a verified identity replaces every claim the client made" {
-    const allocator = testing.allocator;
-    const tokens = try testChain(allocator, "9999999999999999", "Victim", "00000000-0000-4000-8000-000000000123");
-    defer allocator.free(tokens.chain);
-    defer allocator.free(tokens.client);
-
-    var data = try Protocol.Login.Decoder.decodeLoginChain(allocator, tokens.chain, tokens.client);
-    defer data.deinit();
-
-    var verified = try testVerified(allocator);
-    defer verified.deinit(allocator);
-    try applyVerifiedIdentity(allocator, &data, &verified);
-
-    try testing.expectEqualStrings("2533274799999999", data.identity_data.xuid);
-    try testing.expectEqualStrings("Verified", data.identity_data.display_name);
-    try testing.expectEqualStrings(verified.identity.uuid, data.identity_data.identity);
-    try testing.expectEqualStrings("20CA2", data.identity_data.title_id);
-    try testing.expect(!std.mem.eql(u8, "00000000-0000-4000-8000-000000000123", data.identity_data.identity));
+    try @import("login_test.zig").Suite(test_scope).case_002();
 }
 
 test "an online login that did not verify is refused unless the fallback is on" {
-    try testing.expectEqual(Policy.offline, policyFor(false, false));
-    try testing.expectEqual(Policy.offline, policyFor(false, true));
-    try testing.expectEqual(Policy.reject, policyFor(true, false));
-    try testing.expectEqual(Policy.offline, policyFor(true, true));
+    try @import("login_test.zig").Suite(test_scope).case_003();
 }
 
 test "only a certificate chain produces chain tokens" {
-    const allocator = testing.allocator;
-
-    const oidc = try testChain(allocator, "2533274799999999", "Steve", null);
-    defer allocator.free(oidc.chain);
-    defer allocator.free(oidc.client);
-    var oidc_data = try Protocol.Login.Decoder.decodeLoginChain(allocator, oidc.chain, oidc.client);
-    defer oidc_data.deinit();
-    try testing.expectEqual(@as(usize, 0), (try chainTokens(allocator, &oidc_data)).len);
-
-    const last = try testJwt(
-        allocator,
-        "{\"identityPublicKey\":\"AQ==\",\"extraData\":{\"XUID\":\"2533274799999999\"," ++
-            "\"displayName\":\"Steve\",\"identity\":\"00000000-0000-4000-8000-000000000001\",\"titleId\":\"89692877\"}}",
-    );
-    defer allocator.free(last);
-    const chain_json = try std.fmt.allocPrint(
-        allocator,
-        "{{\"AuthenticationType\":2,\"Certificate\":\"{{\\\"chain\\\":[\\\"first\\\",\\\"{s}\\\"]}}\"}}",
-        .{last},
-    );
-    defer allocator.free(chain_json);
-
-    var chain_data = try Protocol.Login.Decoder.decodeLoginChain(allocator, chain_json, oidc.client);
-    defer chain_data.deinit();
-    const tokens = try chainTokens(allocator, &chain_data);
-    defer allocator.free(tokens);
-    try testing.expectEqual(@as(usize, 2), tokens.len);
-    try testing.expectEqualStrings("first", tokens[0]);
-    try testing.expectEqualStrings(last, tokens[1]);
+    try @import("login_test.zig").Suite(test_scope).case_004();
 }
 
 test "a display name outside the offline rules is refused before anything is replaced" {
-    const allocator = testing.allocator;
-
-    const tokens = try testChain(allocator, "2533274799999999", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", null);
-    defer allocator.free(tokens.chain);
-    defer allocator.free(tokens.client);
-
-    var data = try Protocol.Login.Decoder.decodeLoginChain(allocator, tokens.chain, tokens.client);
-    defer data.deinit();
-
-    try testing.expectError(error.DisplayNameTooLong, applyOfflineIdentity(allocator, &data));
-    try testing.expectEqual(@as(usize, 36), data.identity_data.identity.len);
+    try @import("login_test.zig").Suite(test_scope).case_005();
 }

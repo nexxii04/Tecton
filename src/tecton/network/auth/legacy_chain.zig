@@ -231,122 +231,44 @@ const SecpKey = struct {
     }
 };
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const chain_slice = test_owner.Chain.slice;
+    pub const chain_deinit = test_owner.Chain.deinit;
+    pub const std = test_owner.std;
+    pub const signature = test_owner.signature;
+    pub const identity = test_owner.identity;
+    pub const issuer = test_owner.issuer;
+    pub const verify = test_owner.verify;
+    pub const testing = test_owner.testing;
+    pub const testKey = test_owner.testKey;
+    pub const spkiOf = test_owner.spkiOf;
+    pub const signToken = test_owner.signToken;
+    pub const buildChain = test_owner.buildChain;
+    pub const SecpKey = test_owner.SecpKey;
+    pub const private_secpkey_public = test_owner.SecpKey.public;
+};
+
 test "a chain signed by the pinned root key yields the identity it carries" {
-    const allocator = testing.allocator;
-    const now: i64 = 1800000000;
-
-    const anchor = testKey(1);
-    const client = testKey(3);
-    const chain = try buildChain(allocator, anchor, anchor, client, "2533274799999999", now);
-    defer chain.deinit(allocator);
-
-    var result = try verify(allocator, chain.slice(), try SecpKey.public(anchor), now);
-    defer result.identity.deinit(allocator);
-
-    const expected_uuid = try identity.uuidFromXuid(allocator, "2533274799999999");
-    defer allocator.free(expected_uuid);
-
-    try testing.expectEqualStrings("2533274799999999", result.identity.xuid);
-    try testing.expectEqualStrings("Verified", result.identity.display_name);
-    try testing.expectEqualStrings(expected_uuid, result.identity.uuid);
-    try testing.expectEqualStrings("896928775", result.identity.title_id);
-    try testing.expectEqual(identity.Source.legacy_chain, result.identity.source);
-    try testing.expect(signature.Secp384PublicKey.eql(result.client_public_key, try SecpKey.public(client)));
+    try @import("legacy_chain_test.zig").Suite(test_scope).case_000();
 }
 
 test "a chain that only verifies against itself is not anchored" {
-    const allocator = testing.allocator;
-    const now: i64 = 1800000000;
-
-    const anchor = testKey(1);
-    const forger = testKey(9);
-    const client = testKey(3);
-    const chain = try buildChain(allocator, forger, forger, client, "2533274799999999", now);
-    defer chain.deinit(allocator);
-
-    try testing.expectError(
-        error.NotAnchoredAtRoot,
-        verify(allocator, chain.slice(), try SecpKey.public(anchor), now),
-    );
-    var result = try verify(allocator, chain.slice(), try SecpKey.public(forger), now);
-    defer result.identity.deinit(allocator);
+    try @import("legacy_chain_test.zig").Suite(test_scope).case_001();
 }
 
 test "a chain whose links do not sign each other is refused" {
-    const allocator = testing.allocator;
-    const now: i64 = 1800000000;
-
-    const anchor = testKey(1);
-    const client = testKey(3);
-    const chain = try buildChain(allocator, anchor, anchor, client, "2533274799999999", now);
-    defer chain.deinit(allocator);
-
-    const swapped = [_][]const u8{ chain.tokens[0], chain.tokens[2], chain.tokens[1] };
-    try testing.expectError(error.InvalidSignature, verify(allocator, &swapped, try SecpKey.public(anchor), now));
+    try @import("legacy_chain_test.zig").Suite(test_scope).case_002();
 }
 
 test "an expired chain, a wrong issuer and an unknown length are refused" {
-    const allocator = testing.allocator;
-
-    const anchor = testKey(1);
-    const client = testKey(3);
-    const expired_at: i64 = 1800000000;
-    const chain = try buildChain(allocator, anchor, anchor, client, "2533274799999999", expired_at);
-    defer chain.deinit(allocator);
-
-    try testing.expectError(
-        error.ExpiredToken,
-        verify(allocator, chain.slice(), try SecpKey.public(anchor), expired_at + 7200),
-    );
-    try testing.expectError(
-        error.UnexpectedChainLength,
-        verify(allocator, chain.slice()[0..2], try SecpKey.public(anchor), expired_at),
-    );
-    try testing.expectError(
-        error.EmptyChain,
-        verify(allocator, &.{}, try SecpKey.public(anchor), expired_at),
-    );
+    try @import("legacy_chain_test.zig").Suite(test_scope).case_003();
 }
 
 test "an anchored chain that carries no xuid is a mismatch" {
-    const allocator = testing.allocator;
-    const now: i64 = 1800000000;
-
-    const anchor = testKey(1);
-    const client = testKey(3);
-    const chain = try buildChain(allocator, anchor, anchor, client, "", now);
-    defer chain.deinit(allocator);
-
-    try testing.expectError(
-        error.IdentityMismatch,
-        verify(allocator, chain.slice(), try SecpKey.public(anchor), now),
-    );
+    try @import("legacy_chain_test.zig").Suite(test_scope).case_004();
 }
 
 test "a single self-signed link proves nothing" {
-    const allocator = testing.allocator;
-    const now: i64 = 1800000000;
-
-    const client = testKey(3);
-    const client_key = try SecpKey.public(client);
-    const client_spki = try spkiOf(allocator, client_key);
-    defer allocator.free(client_spki);
-
-    const header = try std.fmt.allocPrint(allocator, "{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
-    defer allocator.free(header);
-    const payload = try std.fmt.allocPrint(
-        allocator,
-        "{{\"identityPublicKey\":\"{s}\",\"iss\":\"self\",\"exp\":{d}," ++
-            "\"extraData\":{{\"XUID\":\"2533274799999999\",\"displayName\":\"Offliner\",\"identity\":\"{s}\",\"titleId\":\"\"}}}}",
-        .{ client_spki, now + 3600, "00000000-0000-4000-8000-000000000001" },
-    );
-    defer allocator.free(payload);
-
-    const token = try signToken(allocator, client, header, payload);
-    defer allocator.free(token);
-
-    try testing.expectError(
-        error.NotAnchoredAtRoot,
-        verify(allocator, &.{token}, try SecpKey.public(testKey(1)), now),
-    );
+    try @import("legacy_chain_test.zig").Suite(test_scope).case_005();
 }

@@ -329,58 +329,23 @@ fn resolveAirBlockRuntimeId(allocator: std.mem.Allocator) i32 {
     return air.network_id;
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const Compression = test_owner.Compression;
+    pub const CompressionOptions = test_owner.CompressionOptions;
+    pub const FloatingText = test_owner.FloatingText;
+};
+
 test "setText refreshes the name tag and the actor packets" {
-    const allocator = std.testing.allocator;
-
-    const hologram = try FloatingText.create(allocator, undefined, "shop", "", "Hola", Protocol.Vector3f.init(1, 2, 3), 7, 0);
-    defer hologram.destroy();
-
-    try std.testing.expectEqualStrings("Hola", hologram.name_tag);
-
-    try hologram.setText("Adios\nLinea 2");
-
-    try std.testing.expectEqualStrings("Adios\nLinea 2", hologram.text);
-    try std.testing.expectEqualStrings("Adios\nLinea 2", hologram.name_tag);
-    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.RemoveActor)), hologram.remove_packet[0]);
-    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), hologram.add_packet[0]);
-    try std.testing.expectEqual(@as(usize, 2), hologram.remove_packet.len);
+    try @import("floating_text_test.zig").Suite(test_scope).case_000();
 }
 
 test "the refresh travels as two batch entries" {
-    const allocator = std.testing.allocator;
-
-    const hologram = try FloatingText.create(allocator, undefined, "shop", "", "Hola", Protocol.Vector3f.init(1, 2, 3), 7, 0);
-    defer hologram.destroy();
-
-    try hologram.setText("Adios");
-
-    try std.testing.expect(std.mem.indexOf(u8, hologram.add_packet, "Adios") != null);
-
-    const entries = [_][]const u8{ hologram.remove_packet, hologram.add_packet };
-    const options = CompressionOptions{ .compression_method = .Zlib, .compression_threshold = 0 };
-    const batch = try Compression.compress(&entries, options, allocator);
-    defer allocator.free(batch);
-
-    const result = try Compression.decompress(batch, options, allocator);
-    defer result.deinit();
-
-    try std.testing.expectEqual(@as(usize, 2), result.packets.len);
-    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.RemoveActor)), result.packets[0][0]);
-    try std.testing.expectEqual(@as(u8, @intCast(Protocol.Packet.AddEntity)), result.packets[1][0]);
+    try @import("floating_text_test.zig").Suite(test_scope).case_001();
 }
 
 test "setText keeps tracked viewers across repeated edits" {
-    const allocator = std.testing.allocator;
-
-    const hologram = try FloatingText.create(allocator, undefined, "shop", "", "Uno", Protocol.Vector3f.init(0, 0, 0), 9, 0);
-    defer hologram.destroy();
-
-    try hologram.viewers.put(11, {});
-    try hologram.viewers.put(22, {});
-
-    try hologram.setText("Dos");
-    try hologram.setText("Tres");
-
-    try std.testing.expectEqualStrings("Tres", hologram.name_tag);
-    try std.testing.expectEqual(@as(usize, 2), hologram.viewers.count());
+    try @import("floating_text_test.zig").Suite(test_scope).case_002();
 }

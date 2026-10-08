@@ -232,248 +232,81 @@ pub const ServerProperties = struct {
     }
 };
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const set_field = test_owner.ServerProperties.setField;
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const WorkerLayout = test_owner.WorkerLayout;
+    pub const shouldEmitVerboseStartupLogs = test_owner.shouldEmitVerboseStartupLogs;
+    pub const shouldEmitStartupLogs = test_owner.shouldEmitStartupLogs;
+    pub const ServerProperties = test_owner.ServerProperties;
+};
+
 test "gamemode defaults to survival and validates configured modes" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expectEqual(Protocol.GameMode.Survival, properties.gameMode());
-    try properties.setField("gamemode", "creative");
-    try std.testing.expectEqual(Protocol.GameMode.Creative, properties.gameMode());
-    try properties.setField("gamemode", "Adventure");
-    try std.testing.expectEqual(Protocol.GameMode.Adventure, properties.gameMode());
-    try properties.setField("gamemode", "spectator");
-    try std.testing.expectEqual(Protocol.GameMode.Spectator, properties.gameMode());
-    try properties.setField("gamemode", "survival");
-    try std.testing.expectEqual(Protocol.GameMode.Survival, properties.gameMode());
-    try std.testing.expectError(error.InvalidValue, properties.setField("gamemode", "invalid"));
-    try std.testing.expectEqual(Protocol.GameMode.Survival, properties.gameMode());
+    try @import("config_test.zig").Suite(test_scope).case_000();
 }
 
 test "gamemode survives saving and loading properties" {
-    const path = "test-gamemode.properties";
-    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try properties.setField("gamemode", "adventure");
-    try properties.save(std.testing.io, path);
-    var loaded = try ServerProperties.load(std.testing.io, std.testing.allocator, path);
-    defer loaded.deinit();
-    try std.testing.expectEqual(Protocol.GameMode.Adventure, loaded.gameMode());
+    try @import("config_test.zig").Suite(test_scope).case_001();
 }
 
 test "max mtu clamps to the range RakNet supports" {
-    const clamp = ServerProperties.clampMaxMtu;
-    try std.testing.expectEqual(ServerProperties.max_max_mtu, clamp(ServerProperties.max_max_mtu));
-    try std.testing.expectEqual(@as(u16, 1400), clamp(1492));
-    try std.testing.expectEqual(ServerProperties.max_max_mtu, clamp(std.math.maxInt(u16)));
-    try std.testing.expectEqual(@as(u16, 1028), clamp(1028));
-    try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(ServerProperties.min_max_mtu));
-    try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(0));
+    try @import("config_test.zig").Suite(test_scope).case_002();
 }
 
 test "movement-send-priority keeps whatever the file says and defaults to immediate" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expectEqualStrings("immediate", properties.movement_send_priority);
-
-    try properties.setField("movement-send-priority", "normal");
-    try std.testing.expectEqualStrings("normal", properties.movement_send_priority);
-
-    try std.testing.expectError(error.UnknownProperty, properties.setField("movement-send_priority", "normal"));
+    try @import("config_test.zig").Suite(test_scope).case_003();
 }
 
 test "a saved properties file carries movement-send-priority and loads it back" {
-    const io = std.testing.io;
-    const allocator = std.testing.allocator;
-    const path = "test-movement-priority.properties";
-    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
-
-    var properties = ServerProperties{ .allocator = allocator };
-    defer properties.deinit();
-    properties.movement_send_priority = "immediate";
-    try properties.save(io, path);
-
-    var content: [8192]u8 = undefined;
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    var read_buf: [512]u8 = undefined;
-    var reader = file.reader(io, &read_buf);
-    const bytes = try reader.interface.readSliceShort(&content);
-    try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nmovement-send-priority=immediate\n") != null);
-
-    var loaded = try ServerProperties.load(io, allocator, path);
-    defer loaded.deinit();
-    try std.testing.expectEqualStrings("immediate", loaded.movement_send_priority);
+    try @import("config_test.zig").Suite(test_scope).case_004();
 }
 
 test "movement distance bands default on and only accept true or false" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expect(properties.movement_distance_bands);
-
-    try properties.setField("movement-distance-bands", "false");
-    try std.testing.expect(!properties.movement_distance_bands);
-
-    try properties.setField("movement-distance-bands", "true");
-    try std.testing.expect(properties.movement_distance_bands);
-
-    try std.testing.expectError(error.InvalidValue, properties.setField("movement-distance-bands", "maybe"));
+    try @import("config_test.zig").Suite(test_scope).case_005();
 }
 
 test "worker layout parses split and shared and rejects garbage" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expectEqual(WorkerLayout.split, properties.worker_layout);
-
-    try properties.setField("worker-layout", "shared");
-    try std.testing.expectEqual(WorkerLayout.shared, properties.worker_layout);
-    try properties.setField("worker-layout", "split");
-    try std.testing.expectEqual(WorkerLayout.split, properties.worker_layout);
-
-    try std.testing.expectError(error.InvalidValue, properties.setField("worker-layout", "chunky"));
-    try std.testing.expectError(error.UnknownProperty, properties.setField("worker-layouts", "split"));
+    try @import("config_test.zig").Suite(test_scope).case_006();
 }
 
 test "inbound ring properties parse and clamp" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expect(properties.network_inbound_ring);
-    try std.testing.expectEqual(@as(u32, 8192), properties.inbound_ring_slots);
-    try std.testing.expectEqual(@as(u32, 1536), properties.inbound_ring_slot_size);
-
-    try properties.setField("network-inbound-ring", "false");
-    try std.testing.expect(!properties.network_inbound_ring);
-    try properties.setField("network-inbound-ring", "true");
-    try std.testing.expect(properties.network_inbound_ring);
-    try std.testing.expectError(error.InvalidValue, properties.setField("network-inbound-ring", "maybe"));
-
-    try properties.setField("inbound-ring-slots", "16384");
-    try std.testing.expectEqual(@as(u32, 16384), properties.inbound_ring_slots);
-    try properties.setField("inbound-ring-slot-size", "2048");
-    try std.testing.expectEqual(@as(u32, 2048), properties.inbound_ring_slot_size);
-
-    try std.testing.expectEqual(ServerProperties.min_inbound_ring_slots, ServerProperties.clampInboundRingSlots(0));
-    try std.testing.expectEqual(ServerProperties.max_inbound_ring_slots, ServerProperties.clampInboundRingSlots(std.math.maxInt(u32)));
-    try std.testing.expectEqual(ServerProperties.min_inbound_ring_slot_size, ServerProperties.clampInboundRingSlotSize(1));
-    try std.testing.expectEqual(ServerProperties.max_inbound_ring_slot_size, ServerProperties.clampInboundRingSlotSize(std.math.maxInt(u32)));
+    try @import("config_test.zig").Suite(test_scope).case_007();
 }
 
 test "the mob broadcast interval clamps to the supported range" {
-    const clamp = ServerProperties.clampMobBroadcastInterval;
-    try std.testing.expectEqual(@as(u8, 1), clamp(0));
-    try std.testing.expectEqual(@as(u8, 1), clamp(1));
-    try std.testing.expectEqual(@as(u8, 2), clamp(2));
-    try std.testing.expectEqual(@as(u8, 20), clamp(20));
-    try std.testing.expectEqual(@as(u8, 20), clamp(std.math.maxInt(u8)));
-
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expectEqual(@as(u8, 2), properties.mob_broadcast_interval);
-    try properties.setField("mob-broadcast-interval", "4");
-    try std.testing.expectEqual(@as(u8, 4), properties.mob_broadcast_interval);
-    try std.testing.expectError(error.InvalidValue, properties.setField("mob-broadcast-interval", "fast"));
+    try @import("config_test.zig").Suite(test_scope).case_008();
 }
 
 test "max mtu defaults to the RakNet ceiling" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expectEqual(ServerProperties.max_max_mtu, properties.max_mtu);
+    try @import("config_test.zig").Suite(test_scope).case_009();
 }
 
 test "an existing max-mtu line overrides the default and rejects garbage" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-
-    try properties.setField("max-mtu", "1028");
-    try std.testing.expectEqual(@as(u16, 1028), properties.max_mtu);
-
-    try std.testing.expectError(error.InvalidValue, properties.setField("max-mtu", "big"));
-    try std.testing.expectError(error.UnknownProperty, properties.setField("mtu", "1028"));
+    try @import("config_test.zig").Suite(test_scope).case_010();
 }
 
 test "a saved properties file carries max-mtu and loads it back" {
-    const io = std.testing.io;
-    const allocator = std.testing.allocator;
-    const path = "test-max-mtu.properties";
-    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
-
-    var properties = ServerProperties{ .allocator = allocator };
-    defer properties.deinit();
-    properties.max_mtu = 1188;
-    try properties.save(io, path);
-
-    var content: [4096]u8 = undefined;
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    var read_buf: [512]u8 = undefined;
-    var reader = file.reader(io, &read_buf);
-    const bytes = try reader.interface.readSliceShort(&content);
-    try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nmax-mtu=1188\n") != null);
-
-    var loaded = try ServerProperties.load(io, allocator, path);
-    defer loaded.deinit();
-    try std.testing.expectEqual(@as(u16, 1188), loaded.max_mtu);
-    try std.testing.expectEqual(@as(u16, 19132), loaded.port);
+    try @import("config_test.zig").Suite(test_scope).case_011();
 }
 
 test "online mode defaults to off and only accepts true or false" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expect(!properties.online_mode);
-
-    try properties.setField("online-mode", "true");
-    try std.testing.expect(properties.online_mode);
-
-    try properties.setField("online-mode", "false");
-    try std.testing.expect(!properties.online_mode);
-
-    try std.testing.expectError(error.InvalidValue, properties.setField("online-mode", "yes"));
-    try std.testing.expect(!properties.online_mode);
+    try @import("config_test.zig").Suite(test_scope).case_012();
 }
 
 test "unverified online logins are refused unless the fallback is switched on" {
-    var properties = ServerProperties{ .allocator = std.testing.allocator };
-    defer properties.deinit();
-    try std.testing.expect(!properties.online_mode_offline_fallback);
-
-    try properties.setField("online-mode-offline-fallback", "true");
-    try std.testing.expect(properties.online_mode_offline_fallback);
-
-    try properties.setField("online-mode-offline-fallback", "false");
-    try std.testing.expect(!properties.online_mode_offline_fallback);
-
-    try std.testing.expectError(error.InvalidValue, properties.setField("online-mode-offline-fallback", "maybe"));
+    try @import("config_test.zig").Suite(test_scope).case_013();
 }
 
 test "a saved properties file carries online-mode and loads it back" {
-    const io = std.testing.io;
-    const allocator = std.testing.allocator;
-    const path = "test-online-mode.properties";
-    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
-
-    var properties = ServerProperties{ .allocator = allocator };
-    defer properties.deinit();
-    try properties.save(io, path);
-
-    var content: [8192]u8 = undefined;
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    var read_buf: [512]u8 = undefined;
-    var reader = file.reader(io, &read_buf);
-    const bytes = try reader.interface.readSliceShort(&content);
-    try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nonline-mode=false\n") != null);
-
-    var loaded = try ServerProperties.load(io, allocator, path);
-    defer loaded.deinit();
-    try std.testing.expect(!loaded.online_mode);
+    try @import("config_test.zig").Suite(test_scope).case_014();
 }
 
 test "verbose startup logs are disabled in release modes" {
-    try std.testing.expect(shouldEmitVerboseStartupLogs(.Debug));
-    try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseFast));
-    try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseSafe));
-    try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseSmall));
+    try @import("config_test.zig").Suite(test_scope).case_015();
 }
 
 test "startup logs are never emitted from a test binary" {
-    try std.testing.expect(!shouldEmitStartupLogs());
+    try @import("config_test.zig").Suite(test_scope).case_016();
 }

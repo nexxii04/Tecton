@@ -424,18 +424,12 @@ fn handleTp(raw: *anyopaque) void {
     }
 }
 
-test "world name validation accepts safe names and rejects traversal" {
-    try std.testing.expect(isValidWorldName("world"));
-    try std.testing.expect(isValidWorldName("World_2-test"));
-    try std.testing.expect(isValidWorldName("a"));
-    try std.testing.expect(isValidWorldName("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"));
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const isValidWorldName = test_owner.isValidWorldName;
+};
 
-    try std.testing.expect(!isValidWorldName(""));
-    try std.testing.expect(!isValidWorldName("."));
-    try std.testing.expect(!isValidWorldName(".."));
-    try std.testing.expect(!isValidWorldName("../etc"));
-    try std.testing.expect(!isValidWorldName("a/b"));
-    try std.testing.expect(!isValidWorldName("a b"));
-    try std.testing.expect(!isValidWorldName("world!"));
-    try std.testing.expect(!isValidWorldName("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"));
+test "world name validation accepts safe names and rejects traversal" {
+    try @import("world_test.zig").Suite(test_scope).case_000();
 }

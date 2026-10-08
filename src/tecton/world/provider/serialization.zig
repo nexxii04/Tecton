@@ -321,62 +321,28 @@ fn copyCompound(allocator: std.mem.Allocator, src: *const CompoundTag) !Compound
     return try CompoundTag.read(&read_stream, allocator, ReadWriteOptions.default);
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const testing = test_owner.testing;
+    pub const CompoundTag = test_owner.CompoundTag;
+    pub const ListTag = test_owner.ListTag;
+    pub const Tag = test_owner.Tag;
+    pub const FloatTag = test_owner.FloatTag;
+    pub const EntityType = test_owner.EntityType;
+    pub const Entity = test_owner.Entity;
+    pub const EnchantmentTesting = test_owner.EnchantmentTesting;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const serializeItemStack = test_owner.serializeItemStack;
+    pub const deserializeEntity = test_owner.deserializeEntity;
+    pub const world_border = test_owner.world_border;
+    pub const max_motion = test_owner.max_motion;
+};
+
 test "a corrupt position and motion from disk are clamped on load" {
-    const allocator = testing.allocator;
-
-    const entity_type = EntityType.init("minecraft:zombie", 1, &.{}, &.{});
-    var entity = Entity.init(allocator, &entity_type, null);
-    defer entity.deinit();
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-
-    const pos = try allocator.alloc(Tag, 3);
-    pos[0] = .{ .Float = FloatTag.init(std.math.inf(f32), null) };
-    pos[1] = .{ .Float = FloatTag.init(std.math.nan(f32), null) };
-    pos[2] = .{ .Float = FloatTag.init(-1e30, null) };
-    try tag.set("Pos", .{ .List = ListTag.init(pos, null) });
-
-    const motion = try allocator.alloc(Tag, 3);
-    motion[0] = .{ .Float = FloatTag.init(std.math.nan(f32), null) };
-    motion[1] = .{ .Float = FloatTag.init(1e30, null) };
-    motion[2] = .{ .Float = FloatTag.init(0.02, null) };
-    try tag.set("Motion", .{ .List = ListTag.init(motion, null) });
-
-    deserializeEntity(allocator, &entity, &tag);
-
-    try testing.expectEqual(@as(f32, 0.0), entity.position.x);
-    try testing.expectEqual(@as(f32, 0.0), entity.position.y);
-    try testing.expectEqual(@as(f32, -world_border), entity.position.z);
-    try testing.expectEqual(@as(f32, 0.0), entity.motion.x);
-    try testing.expectEqual(@as(f32, max_motion), entity.motion.y);
-    try testing.expectEqual(@as(f32, 0.02), entity.motion.z);
+    try @import("serialization_test.zig").Suite(test_scope).case_000();
 }
 
 test "writing a stack syncs the enchantments the ops never wrote" {
-    const allocator = testing.allocator;
-
-    const item_type = try EnchantmentTesting.itemType(allocator, "minecraft:test_serialize_sword", &.{"minecraft:is_sword"}, false);
-    defer item_type.deinit();
-
-    var item = ItemStack.init(allocator, item_type, .{});
-    defer item.deinit();
-
-    _ = item.enchantments.set(9, 3);
-    try testing.expect(item.enchantments.dirty);
-    try testing.expect(item.nbt == null);
-
-    var tag = try serializeItemStack(allocator, &item);
-    defer tag.deinit(allocator);
-
-    const inner = tag.get("tag").?.Compound;
-    try testing.expect(inner.get("ench") != null);
-    try testing.expect(inner.get("Name") == null);
-    try testing.expect(!item.enchantments.dirty);
-
-    const ench = inner.get("ench").?;
-    try testing.expect(ench == .List);
-    try testing.expectEqual(@as(usize, 1), ench.List.value.len);
-    try testing.expectEqual(@as(i16, 9), ench.List.value[0].Compound.get("id").?.Short.value);
-    try testing.expectEqual(@as(i16, 3), ench.List.value[0].Compound.get("lvl").?.Short.value);
+    try @import("serialization_test.zig").Suite(test_scope).case_001();
 }

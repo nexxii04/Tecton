@@ -504,30 +504,24 @@ fn sendRemoveEntity(player: *Player, unique_entity_id: i64) void {
     player.network.sendPacket(player.connection, serialized) catch {};
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const damageable = test_owner.damageable;
+    pub const MAX_ATTACK_REACH = test_owner.MAX_ATTACK_REACH;
+    pub const withinAttackReach = test_owner.withinAttackReach;
+    pub const playerDropVelocity = test_owner.playerDropVelocity;
+};
+
 test "only survival and adventure players take damage" {
-    try std.testing.expect(damageable(.Survival));
-    try std.testing.expect(damageable(.Adventure));
-    try std.testing.expect(!damageable(.Creative));
-    try std.testing.expect(!damageable(.Spectator));
-    try std.testing.expect(!damageable(.CreativeSpectator));
-    try std.testing.expect(!damageable(.SurvivalSpectator));
+    try @import("player_test.zig").Suite(test_scope).case_000();
 }
 
 test "an attack has to be within reach of the attacker" {
-    const attacker = Protocol.Vector3f.init(0, 0, 0);
-
-    try std.testing.expect(withinAttackReach(attacker, Protocol.Vector3f.init(0, 0, 0)));
-    try std.testing.expect(withinAttackReach(attacker, Protocol.Vector3f.init(2.5, 1, -2)));
-    try std.testing.expect(withinAttackReach(attacker, Protocol.Vector3f.init(MAX_ATTACK_REACH, 0, 0)));
-    try std.testing.expect(!withinAttackReach(attacker, Protocol.Vector3f.init(MAX_ATTACK_REACH + 0.01, 0, 0)));
-    try std.testing.expect(!withinAttackReach(attacker, Protocol.Vector3f.init(0, MAX_ATTACK_REACH + 1, 0)));
-    try std.testing.expect(!withinAttackReach(attacker, Protocol.Vector3f.init(500, 64, -500)));
+    try @import("player_test.zig").Suite(test_scope).case_001();
 }
 
 test "player drop velocity matches pocketmine direction toss" {
-    const vel = playerDropVelocity(Protocol.Vector2f.init(0, 0));
-
-    try std.testing.expectApproxEqAbs(@as(f32, 0), vel.x, 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), vel.y, 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.4), vel.z, 0.0001);
+    try @import("player_test.zig").Suite(test_scope).case_002();
 }

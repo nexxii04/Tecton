@@ -254,31 +254,6 @@ fn withTrailingSlash(allocator: std.mem.Allocator, value: []const u8) Error![]co
 
 const testing = std.testing;
 
-test "the discovery document is only read for the auth environment" {
-    const allocator = testing.allocator;
-    var document = try std.json.parseFromSlice(
-        std.json.Value,
-        allocator,
-        \\{"result":{"serviceEnvironments":{
-        \\"store":{"prod":{"serviceUri":"https://store.mctest"}},
-        \\"auth":{"prod":{"serviceUri":"https://authorization.test","issuer":"https://authorization.test","playfabTitleId":"20CA2"}}}}}
-    ,
-        .{},
-    );
-    defer document.deinit();
-
-    const result = document.value.object.get("result").?;
-    const auth = try authEnvironment(result);
-    try testing.expectEqualStrings("https://authorization.test", (try jwt.stringClaim(auth, "issuer")).?);
-
-    const missing = try std.json.parseFromSlice(std.json.Value, allocator, "{\"result\":{}}", .{});
-    defer missing.deinit();
-    try testing.expectError(
-        error.MissingAuthEnvironment,
-        authEnvironment(missing.value.object.get("result").?),
-    );
-}
-
 var stub_fetch_calls: usize = 0;
 
 fn stubFetcher(http: *wire.HttpClient, allocator: std.mem.Allocator, jwks_uri: []const u8) Error!jwks.KeySet {
@@ -312,79 +287,34 @@ fn base64Length(source_len: usize) usize {
     return (4 * source_len + 2) / 3;
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const jwks = test_owner.jwks;
+    pub const jwt = test_owner.jwt;
+    pub const default_refresh_min_interval_seconds = test_owner.default_refresh_min_interval_seconds;
+    pub const LoginMaterial = test_owner.LoginMaterial;
+    pub const AuthService = test_owner.AuthService;
+    pub const authEnvironment = test_owner.authEnvironment;
+    pub const withTrailingSlash = test_owner.withTrailingSlash;
+    pub const testing = test_owner.testing;
+    pub const stub_fetch_calls = &test_owner.stub_fetch_calls;
+    pub const stubFetcher = test_owner.stubFetcher;
+    pub const tokenWithKeyId = test_owner.tokenWithKeyId;
+};
+
+test "the discovery document is only read for the auth environment" {
+    try @import("service_test.zig").Suite(test_scope).case_000();
+}
+
 test "an unknown key id refetches the keys at most once per interval" {
-    const allocator = testing.allocator;
-    stub_fetch_calls = 0;
-
-    const keys = try jwks.KeySet.parse(allocator, "{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"present\",\"n\":\"AQAB\",\"e\":\"AQAB\"}]}");
-    var service = try AuthService.init(testing.io, allocator, .{
-        .issuer = "https://authorization.test",
-        .jwks_uri = "https://authorization.test/.well-known/keys",
-        .keys = keys,
-        .fetcher = stubFetcher,
-    });
-    defer service.deinit();
-
-    const multiplayer_token = try tokenWithKeyId(allocator, "missing");
-    defer allocator.free(multiplayer_token);
-
-    const material = LoginMaterial{
-        .authentication_type = 2,
-        .chain = &.{},
-        .multiplayer_token = multiplayer_token,
-        .client_data_token = "",
-    };
-
-    try testing.expectError(error.UnknownKeyId, service.verifyLogin(material, 1000));
-    try testing.expectEqual(@as(usize, 1), stub_fetch_calls);
-
-    try testing.expectError(error.UnknownKeyId, service.verifyLogin(material, 1000));
-    try testing.expectEqual(@as(usize, 1), stub_fetch_calls);
-
-    try testing.expectError(error.UnknownKeyId, service.verifyLogin(material, 1000 + default_refresh_min_interval_seconds));
-    try testing.expectEqual(@as(usize, 2), stub_fetch_calls);
+    try @import("service_test.zig").Suite(test_scope).case_001();
 }
 
 test "a guest login is never verified and never talks to the network" {
-    const allocator = testing.allocator;
-    stub_fetch_calls = 0;
-
-    const keys = try jwks.KeySet.parse(allocator, "{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"present\",\"n\":\"AQAB\",\"e\":\"AQAB\"}]}");
-    var service = try AuthService.init(testing.io, allocator, .{
-        .issuer = "https://authorization.test",
-        .jwks_uri = "https://authorization.test/.well-known/keys",
-        .keys = keys,
-        .fetcher = stubFetcher,
-    });
-    defer service.deinit();
-
-    const multiplayer_token = try tokenWithKeyId(allocator, "missing");
-    defer allocator.free(multiplayer_token);
-
-    try testing.expectError(error.NothingToVerify, service.verifyLogin(.{
-        .authentication_type = 1,
-        .chain = &.{},
-        .multiplayer_token = multiplayer_token,
-        .client_data_token = "",
-    }, 1000));
-    try testing.expectEqual(@as(usize, 0), stub_fetch_calls);
-
-    try testing.expectError(error.NothingToVerify, service.verifyLogin(.{
-        .authentication_type = 0,
-        .chain = &.{},
-        .multiplayer_token = null,
-        .client_data_token = "",
-    }, 1000));
-    try testing.expectEqual(@as(usize, 0), stub_fetch_calls);
+    try @import("service_test.zig").Suite(test_scope).case_002();
 }
 
 test "an issuer without a trailing slash is normalised" {
-    const allocator = testing.allocator;
-    const normalised = try withTrailingSlash(allocator, "https://authorization.test");
-    defer allocator.free(normalised);
-    try testing.expectEqualStrings("https://authorization.test/", normalised);
-
-    const kept = try withTrailingSlash(allocator, "https://authorization.test/");
-    defer allocator.free(kept);
-    try testing.expectEqualStrings("https://authorization.test/", kept);
+    try @import("service_test.zig").Suite(test_scope).case_003();
 }

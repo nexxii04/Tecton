@@ -61,23 +61,6 @@ pub fn getHeldItem(state: *const State) ?*const ItemStack {
     return state.container.base.getItem(state.selected_slot);
 }
 
-test "selectHeldSlot updates held slot without packet side effects" {
-    const allocator = std.testing.allocator;
-
-    var container = try EntityContainer.init(allocator, undefined, .Inventory, 36);
-    defer container.deinit();
-
-    var state = State{
-        .container = container,
-        .selected_slot = 0,
-        .opened = false,
-    };
-
-    selectHeldSlot(&state, 5);
-
-    try std.testing.expectEqual(@as(u8, 5), state.selected_slot);
-}
-
 pub fn setHeldItem(state: *State, entity: *Entity, slot: u8) void {
     const player = getPlayer(entity) orelse return;
     selectHeldSlot(state, slot);
@@ -265,138 +248,6 @@ fn testArmorPiece(allocator: std.mem.Allocator, identifier: []const u8, network_
     return kind;
 }
 
-test "the armor packet reports the four worn pieces in slot order" {
-    const allocator = std.testing.allocator;
-
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-
-    const kinds = [4]*ItemType{
-        try testArmorPiece(allocator, "minecraft:test_inventory_helmet", 11),
-        try testArmorPiece(allocator, "minecraft:test_inventory_chestplate", 12),
-        try testArmorPiece(allocator, "minecraft:test_inventory_leggings", 13),
-        try testArmorPiece(allocator, "minecraft:test_inventory_boots", 14),
-    };
-
-    var state = State{
-        .container = try EntityContainer.init(allocator, undefined, .Inventory, 36),
-        .armor = try Container.init(allocator, .Inventory, 4),
-        .selected_slot = 0,
-        .opened = false,
-    };
-    defer state.container.deinit();
-    defer if (state.armor) |*armor| armor.deinit();
-
-    for (kinds, 0..) |kind, slot| {
-        state.armor.?.setItem(@intCast(slot), ItemStack.init(allocator, kind, .{}));
-    }
-
-    var stream = BinaryStream.init(allocator, null, null);
-    defer stream.deinit();
-
-    const serialized = serializeArmor(&state, 7, &stream) orelse return error.TestUnexpectedResult;
-
-    var reader = BinaryStream.init(allocator, serialized, null);
-    defer reader.deinit();
-
-    _ = try reader.readVarInt();
-    _ = try reader.readVarLong();
-
-    var pieces: [5]Protocol.NetworkItemStackDescriptor = undefined;
-    for (&pieces) |*piece| piece.* = try Protocol.NetworkItemStackDescriptor.readShort(&reader, allocator);
-    defer {
-        for (&pieces) |*piece| piece.deinit(allocator);
-    }
-
-    for (kinds, 0..) |kind, slot| {
-        try std.testing.expectEqual(kind.network_id, pieces[slot].network);
-    }
-    try std.testing.expectEqual(@as(i32, 0), pieces[4].network);
-}
-
-test "armor slots are read off the item name" {
-    const allocator = std.testing.allocator;
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-
-    const kinds = [6]*ItemType{
-        try testArmorPiece(allocator, "minecraft:test_equip_helmet", 21),
-        try testArmorPiece(allocator, "minecraft:test_equip_chestplate", 22),
-        try testArmorPiece(allocator, "minecraft:test_equip_leggings", 23),
-        try testArmorPiece(allocator, "minecraft:test_equip_boots", 24),
-        try testArmorPiece(allocator, "minecraft:elytra", 25),
-        try testArmorPiece(allocator, "minecraft:test_equip_sword", 26),
-    };
-
-    try std.testing.expectEqual(@as(?u8, 0), armorSlotFor(kinds[0]));
-    try std.testing.expectEqual(@as(?u8, 1), armorSlotFor(kinds[1]));
-    try std.testing.expectEqual(@as(?u8, 2), armorSlotFor(kinds[2]));
-    try std.testing.expectEqual(@as(?u8, 3), armorSlotFor(kinds[3]));
-    try std.testing.expectEqual(@as(?u8, 1), armorSlotFor(kinds[4]));
-    try std.testing.expectEqual(@as(?u8, null), armorSlotFor(kinds[5]));
-}
-
-test "equipping into an empty armor slot leaves the hotbar slot cleared" {
-    const allocator = std.testing.allocator;
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-
-    const chestplate = try testArmorPiece(allocator, "minecraft:test_empty_chestplate", 41);
-
-    var state = State{
-        .container = try EntityContainer.init(allocator, undefined, .Inventory, 36),
-        .armor = try Container.init(allocator, .Inventory, 4),
-        .selected_slot = 2,
-        .opened = false,
-    };
-    defer state.container.deinit();
-    defer if (state.armor) |*armor| armor.deinit();
-
-    state.container.base.setItem(2, ItemStack.init(allocator, chestplate, .{}));
-
-    const item_type = state.container.base.getItem(2).?.item_type;
-
-    try std.testing.expectEqual(@as(?u8, 1), swapIntoArmor(&state, 2));
-    try std.testing.expect(state.container.base.getItem(2) == null);
-    try std.testing.expectEqual(@as(i32, 41), item_type.network_id);
-}
-
-test "a right-click equip swaps the piece with the armor it lands on" {
-    const allocator = std.testing.allocator;
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-
-    const helmet = try testArmorPiece(allocator, "minecraft:test_swap_helmet", 31);
-    const boots = try testArmorPiece(allocator, "minecraft:test_swap_boots", 32);
-    const sword = try testArmorPiece(allocator, "minecraft:test_swap_sword", 33);
-
-    var state = State{
-        .container = try EntityContainer.init(allocator, undefined, .Inventory, 36),
-        .armor = try Container.init(allocator, .Inventory, 4),
-        .selected_slot = 3,
-        .opened = false,
-    };
-    defer state.container.deinit();
-    defer if (state.armor) |*armor| armor.deinit();
-
-    state.armor.?.setItem(0, ItemStack.init(allocator, helmet, .{ .metadata = 7 }));
-    state.container.base.setItem(3, ItemStack.init(allocator, boots, .{}));
-
-    try std.testing.expectEqual(@as(?u8, 3), swapIntoArmor(&state, 3));
-    try std.testing.expectEqual(@as(i32, 32), state.armor.?.getItem(3).?.item_type.network_id);
-    try std.testing.expect(state.container.base.getItem(3) == null);
-
-    state.container.base.setItem(3, ItemStack.init(allocator, helmet, .{ .metadata = 1 }));
-    try std.testing.expectEqual(@as(?u8, 0), swapIntoArmor(&state, 3));
-    try std.testing.expectEqual(@as(i32, 31), state.armor.?.getItem(0).?.item_type.network_id);
-    try std.testing.expectEqual(@as(u32, 1), state.armor.?.getItem(0).?.metadata);
-    try std.testing.expectEqual(@as(u32, 7), state.container.base.getItem(3).?.metadata);
-
-    state.container.base.setItem(3, ItemStack.init(allocator, sword, .{}));
-    try std.testing.expectEqual(@as(?u8, null), swapIntoArmor(&state, 3));
-    try std.testing.expectEqual(@as(i32, 33), state.container.base.getItem(3).?.item_type.network_id);
-}
-
 pub const InventoryTrait = EntityTrait(State, .{
     .identifier = "inventory",
     .on_attach = onAttach,
@@ -405,3 +256,40 @@ pub const InventoryTrait = EntityTrait(State, .{
     .on_tick = onTick,
     .on_container_update = onContainerUpdate,
 });
+
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const BinaryStream = test_owner.BinaryStream;
+    pub const Protocol = test_owner.Protocol;
+    pub const Container = test_owner.Container;
+    pub const EntityContainer = test_owner.EntityContainer;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const ItemType = test_owner.ItemType;
+    pub const State = test_owner.State;
+    pub const selectHeldSlot = test_owner.selectHeldSlot;
+    pub const serializeArmor = test_owner.serializeArmor;
+    pub const armorSlotFor = test_owner.armorSlotFor;
+    pub const swapIntoArmor = test_owner.swapIntoArmor;
+    pub const testArmorPiece = test_owner.testArmorPiece;
+};
+
+test "selectHeldSlot updates held slot without packet side effects" {
+    try @import("inventory_test.zig").Suite(test_scope).case_000();
+}
+
+test "the armor packet reports the four worn pieces in slot order" {
+    try @import("inventory_test.zig").Suite(test_scope).case_001();
+}
+
+test "armor slots are read off the item name" {
+    try @import("inventory_test.zig").Suite(test_scope).case_002();
+}
+
+test "equipping into an empty armor slot leaves the hotbar slot cleared" {
+    try @import("inventory_test.zig").Suite(test_scope).case_003();
+}
+
+test "a right-click equip swaps the piece with the armor it lands on" {
+    try @import("inventory_test.zig").Suite(test_scope).case_004();
+}

@@ -258,83 +258,44 @@ fn sendReject(
     }
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const EnchantmentRegistry = test_owner.EnchantmentRegistry;
+    pub const DESCRIPTION = test_owner.DESCRIPTION;
+    pub const USAGE = test_owner.USAGE;
+    pub const MESSAGE_SUCCESS = test_owner.MESSAGE_SUCCESS;
+    pub const MESSAGE_NO_ITEM = test_owner.MESSAGE_NO_ITEM;
+    pub const MESSAGE_CANT_ENCHANT = test_owner.MESSAGE_CANT_ENCHANT;
+    pub const MESSAGE_CANT_COMBINE = test_owner.MESSAGE_CANT_COMBINE;
+    pub const MESSAGE_INVALID_LEVEL = test_owner.MESSAGE_INVALID_LEVEL;
+    pub const MESSAGE_NOT_FOUND = test_owner.MESSAGE_NOT_FOUND;
+    pub const successMessage = test_owner.successMessage;
+    pub const noItemMessage = test_owner.noItemMessage;
+    pub const cantEnchantMessage = test_owner.cantEnchantMessage;
+    pub const cantCombineMessage = test_owner.cantCombineMessage;
+    pub const invalidLevelMessage = test_owner.invalidLevelMessage;
+    pub const notFoundMessage = test_owner.notFoundMessage;
+    pub const testing = test_owner.testing;
+    pub const enchant_testing = test_owner.enchant_testing;
+    pub const parseLevel = test_owner.parseLevel;
+    pub const levelInRange = test_owner.levelInRange;
+    pub const resolve = test_owner.resolve;
+};
+
 test "the enchantment argument accepts a numeric id or a name" {
-    const allocator = std.testing.allocator;
-    var registry = EnchantmentRegistry.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    var numeric_id: ?i64 = null;
-    try std.testing.expectEqual(@as(u16, 9), resolve(&registry, "9", &numeric_id).?.id);
-    try std.testing.expectEqual(@as(?i64, 9), numeric_id);
-
-    numeric_id = null;
-    try std.testing.expectEqual(@as(u16, 9), resolve(&registry, "sharpness", &numeric_id).?.id);
-    try std.testing.expect(numeric_id == null);
-    try std.testing.expectEqual(@as(u16, 9), resolve(&registry, "minecraft:SHARPNESS", &numeric_id).?.id);
-    try std.testing.expect(resolve(&registry, "not_an_enchantment", &numeric_id) == null);
-
-    numeric_id = null;
-    try std.testing.expect(resolve(&registry, "999", &numeric_id) == null);
-    try std.testing.expectEqual(@as(?i64, 999), numeric_id);
-    try std.testing.expect(resolve(&registry, "-3", &numeric_id) == null);
-    try std.testing.expect(resolve(&registry, "4000000000", &numeric_id) == null);
-    try std.testing.expect(resolve(&registry, "0", &numeric_id).?.id == 0);
+    try @import("enchant_test.zig").Suite(test_scope).case_000();
 }
 
 test "every message names the argument the design decided" {
-    const allocator = std.testing.allocator;
-    var registry = EnchantmentRegistry.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    const sharpness = registry.resolve("sharpness").?;
-    const smite = registry.resolve("smite").?;
-
-    const item_type = try enchant_testing.itemType(allocator, "minecraft:test_message_sword", &.{"minecraft:is_sword"}, false);
-    defer item_type.deinit();
-    var item = ItemStack.init(allocator, item_type, .{});
-    defer item.deinit();
-
-    var buffer: [320]u8 = undefined;
-
-    try testing.expectEqualStrings("Enchanting succeeded for Steve", successMessage(&buffer, "Steve"));
-    try testing.expectEqualStrings("The target doesn't hold an item: Steve", noItemMessage(&buffer, "Steve"));
-    try testing.expectEqualStrings("The selected enchantment can't be added to the target item: minecraft:test_message_sword", cantEnchantMessage(&buffer, &item));
-    try testing.expectEqualStrings("Smite can't be combined with Sharpness", cantCombineMessage(&buffer, smite, sharpness));
-    try testing.expectEqualStrings("Sharpness does not support level 10", invalidLevelMessage(&buffer, sharpness, 10));
-    try testing.expectEqualStrings("There is no such enchantment with ID 999", notFoundMessage(&buffer, 999));
+    try @import("enchant_test.zig").Suite(test_scope).case_001();
 }
 
 test "the level argument defaults to one, accepts the removal level and rejects the rest" {
-    const allocator = std.testing.allocator;
-    var registry = EnchantmentRegistry.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    const sharpness = registry.resolve("sharpness").?;
-
-    try std.testing.expectEqual(@as(?i64, 1), parseLevel(null));
-    try std.testing.expectEqual(@as(?i64, 3), parseLevel("3"));
-    try std.testing.expect(parseLevel("three") == null);
-    try std.testing.expect(parseLevel("") == null);
-    try std.testing.expect(parseLevel("1.5") == null);
-
-    try std.testing.expect(levelInRange(sharpness, 1));
-    try std.testing.expect(levelInRange(sharpness, 5));
-    try std.testing.expect(!levelInRange(sharpness, 6));
-    try std.testing.expect(levelInRange(sharpness, 0));
-    try std.testing.expect(!levelInRange(sharpness, -1));
-    try std.testing.expect(!levelInRange(sharpness, 2147483647));
+    try @import("enchant_test.zig").Suite(test_scope).case_002();
 }
 
 test "the command exposes the vanilla syntax, description and messages" {
-    try std.testing.expectEqualStrings("Adds an enchantment to a player's selected item.", DESCRIPTION);
-    try std.testing.expectEqualStrings("/enchant <player: target> <enchantment: Enchant> [level: int]", USAGE);
-    try std.testing.expectEqualStrings("Enchanting succeeded for {s}", MESSAGE_SUCCESS);
-    try std.testing.expectEqualStrings("The target doesn't hold an item: {s}", MESSAGE_NO_ITEM);
-    try std.testing.expectEqualStrings("The selected enchantment can't be added to the target item: {s}", MESSAGE_CANT_ENCHANT);
-    try std.testing.expectEqualStrings("{s} can't be combined with {s}", MESSAGE_CANT_COMBINE);
-    try std.testing.expectEqualStrings("{s} does not support level {d}", MESSAGE_INVALID_LEVEL);
-    try std.testing.expectEqualStrings("There is no such enchantment with ID {d}", MESSAGE_NOT_FOUND);
+    try @import("enchant_test.zig").Suite(test_scope).case_003();
 }
