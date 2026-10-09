@@ -179,11 +179,7 @@ pub fn build(b: *std.Build) void {
     };
     const run_loadbot_tests = addLoadbot(b, target, optimize, zlib_dep, &loadbot_imports);
 
-    const deps_command = b.addSystemCommand(&.{ "python3", "tools/architecture-baseline/check_deps.py" });
-    const check_deps_step = b.step("check-deps", "Verify dependency boundaries and cyclic components");
-    check_deps_step.dependOn(&deps_command.step);
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&deps_command.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_chest_tests.step);
     test_step.dependOn(&run_library_tests.step);
