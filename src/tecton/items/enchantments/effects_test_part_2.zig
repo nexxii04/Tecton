@@ -1,0 +1,133 @@
+pub fn Suite(comptime scope: type) type {
+    return struct {
+        const std = scope.std;
+        const Protocol = scope.Protocol;
+        const ItemStack = scope.ItemStack;
+        const Container = scope.Container;
+        const compat = scope.compat;
+        const Family = scope.Family;
+        const FIST_DAMAGE = scope.FIST_DAMAGE;
+        const TRIDENT_DAMAGE = scope.TRIDENT_DAMAGE;
+        const BASE_KNOCKBACK = scope.BASE_KNOCKBACK;
+        const PROTECTION_MAX_LEVELS = scope.PROTECTION_MAX_LEVELS;
+        const FIRE_PROTECTION_MAX_LEVELS = scope.FIRE_PROTECTION_MAX_LEVELS;
+        const THORNS_MIN_DAMAGE = scope.THORNS_MIN_DAMAGE;
+        const THORNS_MAX_DAMAGE = scope.THORNS_MAX_DAMAGE;
+        const FAMILY_MAP = scope.FAMILY_MAP;
+        const familyOf = scope.familyOf;
+        const baseAttackDamage = scope.baseAttackDamage;
+        const attackDamage = scope.attackDamage;
+        const knockbackImpulse = scope.knockbackImpulse;
+        const meleeImpact = scope.meleeImpact;
+        const blocksArmorRemoval = scope.blocksArmorRemoval;
+        const mitigatedDamage = scope.mitigatedDamage;
+        const mitigatedFireDamage = scope.mitigatedFireDamage;
+        const fireBurnDuration = scope.fireBurnDuration;
+        const fireAspectDurationTicks = scope.fireAspectDurationTicks;
+        const thornsReflection = scope.thornsReflection;
+        const testing = scope.testing;
+        const test_helpers = scope.test_helpers;
+        const FixedEntropy = scope.FixedEntropy;
+        const thornsArmor = scope.thornsArmor;
+
+        pub fn case_011() !void {
+            const allocator = testing.allocator;
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_thorns_helm", &.{"minecraft:is_armor"}, false);
+            defer kind.deinit();
+
+            var armor: Container = try thornsArmor(allocator, kind, .{ 0, 0, 3, 0 });
+            defer armor.deinit();
+
+            var rng = std.Random.DefaultPrng.init(0x5eed7a11);
+            const random = rng.random();
+
+            const trials: u32 = 20_000;
+            var hits: u32 = 0;
+            var total: f64 = 0;
+            var index: u32 = 0;
+            while (index < trials) : (index += 1) {
+                const damage = thornsReflection(&armor, random);
+                if (damage > 0) {
+                    try testing.expect(damage >= THORNS_MIN_DAMAGE and damage <= THORNS_MAX_DAMAGE);
+                    hits += 1;
+                    total += damage;
+                }
+            }
+
+            const rate = @as(f64, @floatFromInt(hits)) / @as(f64, trials);
+            try testing.expect(rate > 0.44 and rate < 0.46);
+
+            const average = total / @as(f64, @floatFromInt(hits));
+            try testing.expect(average > 2.85 and average < 3.15);
+        }
+
+        pub fn case_012() !void {
+            const allocator = testing.allocator;
+
+            const boots = try test_helpers.itemType(allocator, "minecraft:test_effects_cursed_boots", &.{"minecraft:is_armor"}, false);
+            defer boots.deinit();
+
+            var plain = ItemStack.init(allocator, boots, .{});
+            defer plain.deinit();
+            try testing.expect(!blocksArmorRemoval(&plain));
+
+            _ = plain.enchantments.set(compat.CURSE_OF_VANISHING, 1);
+            try testing.expect(!blocksArmorRemoval(&plain));
+
+            _ = plain.enchantments.set(compat.CURSE_OF_BINDING, 1);
+            try testing.expect(blocksArmorRemoval(&plain));
+        }
+
+        pub fn case_013() !void {
+            try testing.expectEqual(@as(i32, 150), fireBurnDuration(150, 0));
+            try testing.expectEqual(@as(i32, 128), fireBurnDuration(150, 1));
+            try testing.expectEqual(@as(i32, 105), fireBurnDuration(150, 2));
+            try testing.expectEqual(@as(i32, 60), fireBurnDuration(150, FIRE_PROTECTION_MAX_LEVELS));
+            try testing.expectEqual(@as(i32, 60), fireBurnDuration(150, 200));
+            try testing.expectEqual(@as(i32, 0), fireBurnDuration(0, 2));
+            try testing.expectEqual(@as(i32, 0), fireBurnDuration(-40, 2));
+        }
+
+        pub fn case_014() !void {
+            var armor: compat.ArmorAggregate = .empty;
+
+            try testing.expectEqual(@as(f32, 1.0), mitigatedFireDamage(&armor, 1.0));
+
+            armor.fire_protection = 2;
+            try testing.expectApproxEqAbs(@as(f32, 0.84), mitigatedFireDamage(&armor, 1.0), 0.0001);
+
+            armor.fire_protection = FIRE_PROTECTION_MAX_LEVELS;
+            try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
+
+            armor.fire_protection = 200;
+            try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
+
+            armor.protection = 4;
+            try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
+        }
+
+        pub fn case_015() !void {
+            const allocator = testing.allocator;
+
+            try testing.expectEqual(@as(i32, 0), fireAspectDurationTicks(null));
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_fire_sword", &.{ "minecraft:is_sword", "minecraft:wooden_tier" }, false);
+            defer kind.deinit();
+
+            var plain = ItemStack.init(allocator, kind, .{});
+            defer plain.deinit();
+            try testing.expectEqual(@as(i32, 0), fireAspectDurationTicks(&plain));
+
+            var one = ItemStack.init(allocator, kind, .{});
+            defer one.deinit();
+            _ = one.enchantments.set(compat.FIRE_ASPECT, 1);
+            try testing.expectEqual(@as(i32, 80), fireAspectDurationTicks(&one));
+
+            var two = ItemStack.init(allocator, kind, .{});
+            defer two.deinit();
+            _ = two.enchantments.set(compat.FIRE_ASPECT, 2);
+            try testing.expectEqual(@as(i32, 160), fireAspectDurationTicks(&two));
+        }
+    };
+}
