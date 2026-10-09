@@ -9,7 +9,7 @@ const BarrelTrait = @import("../../world/block/traits/barrel.zig").BarrelTrait;
 const ChestTrait = @import("../../world/block/traits/chest.zig").ChestTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const broadcast = @import("../../world/dimension/broadcast.zig");
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 
 pub fn handleContainerClose(

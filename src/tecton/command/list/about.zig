@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 const Protocol = @import("protocol");
 
-const version = @import("../../version.zig").version;
+const version = @import("../../core/version.zig").version;
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;

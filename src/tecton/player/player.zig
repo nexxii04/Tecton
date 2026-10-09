@@ -18,12 +18,12 @@ const Health = @import("../entity/traits/health.zig");
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
 const TradeWindowTrait = @import("../entity/traits/trade_window.zig").TradeWindowTrait;
-pub const NetworkHandler = @import("../network/network_handler.zig").NetworkHandler;
+pub const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../tecton.zig").Tecton;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const MoveDelta = @import("move_delta.zig");
 const Pose = @import("pose.zig").Pose;
-const SharedBroadcast = @import("../network/shared_broadcast.zig").SharedBroadcast;
+const SharedBroadcast = @import("../transport/shared_broadcast.zig").SharedBroadcast;
 
 pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
 pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;

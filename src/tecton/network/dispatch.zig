@@ -6,8 +6,8 @@ const Packet = protocol.Packet;
 const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
-const NetworkHandler = @import("./network_handler.zig").NetworkHandler;
-const TickProfilerPhase = @import("../tick_profiler.zig").Phase;
+const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
+const TickProfilerPhase = @import("../core/tick_profiler.zig").Phase;
 
 const handleAnimate = @import("./handlers/animate.zig").handleAnimate;
 const handleBlockPickRequest = @import("./handlers/block_pick_request.zig").handleBlockPickRequest;

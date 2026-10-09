@@ -25,7 +25,7 @@ const Display = @import("../../items/traits/display.zig");
 const Player = @import("../../player/player.zig").Player;
 const PlayerMath = @import("../../player/player.zig");
 const entities = @import("../../world/dimension/entities.zig");
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 
 const HandlerContext = struct {

@@ -18,7 +18,7 @@ const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyT
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const entities = @import("../../world/dimension/entities.zig");
 const broadcast = @import("../../world/dimension/broadcast.zig");
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const processItemStackRequest = @import("./item_stack_request.zig").processItemStackRequest;
 

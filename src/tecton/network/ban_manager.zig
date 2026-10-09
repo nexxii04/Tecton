@@ -1,6 +1,6 @@
 const std = @import("std");
 const Raknet = @import("Raknet");
-const shouldEmitStartupLogs = @import("../config.zig").shouldEmitStartupLogs;
+const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
 
 pub const BanEntry = struct {
     uuid: []const u8,

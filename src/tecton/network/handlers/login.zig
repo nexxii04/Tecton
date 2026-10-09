@@ -5,11 +5,11 @@ const Raknet = @import("Raknet");
 
 const Events = @import("../../events/root.zig");
 const Player = @import("../../player/player.zig").Player;
-const auth = @import("../auth/root.zig");
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const auth = @import("../../auth/root.zig");
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const PlayerLog = @import("../player_log.zig");
-const offline_identity = @import("../offline_identity.zig");
+const offline_identity = @import("../../auth/offline_identity.zig");
 
 fn applyOfflineIdentity(allocator: std.mem.Allocator, data: *Protocol.Login.Decoder.LoginData) !void {
     try offline_identity.validateDisplayName(data.identity_data.display_name);

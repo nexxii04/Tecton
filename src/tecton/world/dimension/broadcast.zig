@@ -5,7 +5,7 @@ const Protocol = @import("protocol");
 const Entity = @import("../../entity/entity.zig").Entity;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("./dimension.zig").Dimension;
-const SharedBroadcast = @import("../../network/shared_broadcast.zig").SharedBroadcast;
+const SharedBroadcast = @import("../../transport/shared_broadcast.zig").SharedBroadcast;
 
 pub const SOUND_BROADCAST_RADIUS: f32 = 32.0;
 pub const PARTICLE_BROADCAST_RADIUS: f32 = 64.0;

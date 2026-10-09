@@ -3,7 +3,7 @@ const std = @import("std");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 
-const NetworkHandler = @import("../network/network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
 const Player = @import("../player/player.zig").Player;
 const Tecton = @import("../tecton.zig").Tecton;
 

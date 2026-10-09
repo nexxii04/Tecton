@@ -3,7 +3,7 @@ const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
 const inventory = @import("../../entity/traits/inventory.zig");
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 
 pub fn handleMobEquipment(

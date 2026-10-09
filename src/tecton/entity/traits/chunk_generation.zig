@@ -5,8 +5,8 @@ const NBT = @import("nbt");
 const Protocol = @import("protocol");
 
 const Tecton = @import("../../tecton.zig").Tecton;
-const Compression = @import("../../network/compression/compression.zig").Compression;
-const CompressionOptions = @import("../../network/compression/options.zig").CompressionOptions;
+const Compression = @import("../../transport/compression/compression.zig").Compression;
+const CompressionOptions = @import("../../transport/compression/options.zig").CompressionOptions;
 const BlockPermutation = @import("../../world/block/block_permutation.zig").BlockPermutation;
 const BlockState = @import("../../world/block/block_permutation.zig").BlockState;
 const BlockType = @import("../../world/block/block_type.zig").BlockType;

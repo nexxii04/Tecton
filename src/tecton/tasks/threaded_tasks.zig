@@ -9,243 +9,27 @@ pub fn currentWorkerIndex() ?usize {
     return if (index == NO_WORKER) null else index;
 }
 
-pub const WorkFn = *const fn (ctx: *anyopaque) void;
-pub const CallbackFn = *const fn (ctx: *anyopaque) void;
-pub const CleanupFn = *const fn (ctx: *anyopaque) void;
+pub const WorkFn = @import("task.zig").WorkFn;
+pub const CallbackFn = @import("task.zig").CallbackFn;
+pub const CleanupFn = @import("task.zig").CleanupFn;
+pub const Kind = @import("task.zig").Kind;
+pub const ThreadedTask = @import("task.zig").ThreadedTask;
+pub const ParallelJob = @import("task.zig").ParallelJob;
+pub const input_queue_capacity = @import("task.zig").input_queue_capacity;
+pub const world_queue_capacity = @import("task.zig").world_queue_capacity;
+pub const completed_queue_capacity = @import("task.zig").completed_queue_capacity;
 
-pub const Kind = enum { input, world };
+pub const WorkerLayout = @import("worker_layout.zig").WorkerLayout;
+pub const WorkerCountResolution = @import("worker_layout.zig").WorkerCountResolution;
+pub const WorkerLayoutResolution = @import("worker_layout.zig").WorkerLayoutResolution;
+pub const computeWorkerCount = @import("worker_layout.zig").computeWorkerCount;
+pub const totalServerThreadCount = @import("worker_layout.zig").totalServerThreadCount;
+pub const resolveWorkerCount = @import("worker_layout.zig").resolveWorkerCount;
+pub const resolveWorkerCountForCpu = @import("worker_layout.zig").resolveWorkerCountForCpu;
+pub const resolveWorkerLayout = @import("worker_layout.zig").resolveWorkerLayout;
 
-pub const WorkerLayout = enum { shared, split };
-
-pub const input_queue_capacity: usize = 128;
-pub const world_queue_capacity: usize = 512;
-pub const completed_queue_capacity: usize = 2048;
-
-pub const ThreadedTask = struct {
-    work: WorkFn,
-    callback: ?CallbackFn = null,
-    cleanup: ?CleanupFn = null,
-    ctx: *anyopaque,
-    shard_key: u64 = 0,
-    kind: Kind = .world,
-};
-
-pub const ParallelJob = struct {
-    next_index: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-    item_count: usize = 0,
-
-    remaining: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-    body: *const fn (index: usize, ctx: *anyopaque) void = undefined,
-    ctx: *anyopaque = undefined,
-
-    io: std.Io = undefined,
-    mutex: std.Io.Mutex = .init,
-    cond: std.Io.Condition = .init,
-
-    fn trampoline(raw: *anyopaque) void {
-        const self: *ParallelJob = @ptrCast(@alignCast(raw));
-        while (true) {
-            const index = self.next_index.fetchAdd(1, .monotonic);
-            if (index >= self.item_count) break;
-            self.body(index, self.ctx);
-        }
-        if (self.remaining.fetchSub(1, .release) == 1) {
-            self.mutex.lock(self.io) catch return;
-            self.cond.broadcast(self.io);
-            self.mutex.unlock(self.io);
-        }
-    }
-};
-
-pub const WorkerCountResolution = struct {
-    cpu_count: usize,
-    recommended_max: usize,
-    requested_count: usize,
-    resolved_count: usize,
-    auto_selected: bool,
-};
-
-pub const WorkerLayoutResolution = struct {
-    layout: WorkerLayout,
-    cpu_count: usize,
-    worker_count: usize,
-    input_worker_count: usize,
-    world_worker_count: usize,
-};
-
-pub fn computeWorkerCount(configured_count: usize) usize {
-    return resolveWorkerCount(configured_count).resolved_count;
-}
-
-pub fn totalServerThreadCount(worker_count: usize) usize {
-    return 1 + 2 + worker_count;
-}
-
-pub fn resolveWorkerCount(configured_count: usize) WorkerCountResolution {
-    const cpu_count = std.Thread.getCpuCount() catch 4;
-    return resolveWorkerCountForCpu(configured_count, cpu_count);
-}
-
-fn resolveWorkerCountForCpu(configured_count: usize, cpu_count: usize) WorkerCountResolution {
-    const recommended_max = recommendedWorkerCountForCpu(cpu_count);
-    if (configured_count > 0) {
-        return .{
-            .cpu_count = cpu_count,
-            .recommended_max = recommended_max,
-            .requested_count = configured_count,
-            .resolved_count = @min(configured_count, recommended_max),
-            .auto_selected = false,
-        };
-    }
-
-    return .{
-        .cpu_count = cpu_count,
-        .recommended_max = recommended_max,
-        .requested_count = 0,
-        .resolved_count = recommended_max,
-        .auto_selected = true,
-    };
-}
-
-fn recommendedWorkerCountForCpu(cpu_count: usize) usize {
-    if (cpu_count <= 2) return 1;
-    const count = cpu_count - 2;
-    return @max(@as(usize, 1), @min(count, 16));
-}
-
-pub fn resolveWorkerLayout(requested: WorkerLayout, worker_count: usize, cpu_count: usize) WorkerLayoutResolution {
-    if (requested == .split and worker_count >= 2) {
-        const requested_input = @max(@as(usize, 1), cpu_count / 4);
-        const input_count = @min(requested_input, worker_count - 1);
-        return .{
-            .layout = .split,
-            .cpu_count = cpu_count,
-            .worker_count = worker_count,
-            .input_worker_count = input_count,
-            .world_worker_count = worker_count - input_count,
-        };
-    }
-    return .{
-        .layout = .shared,
-        .cpu_count = cpu_count,
-        .worker_count = worker_count,
-        .input_worker_count = 0,
-        .world_worker_count = worker_count,
-    };
-}
-
-fn SpscRing(comptime T: type) type {
-    return struct {
-        const Self = @This();
-
-        slots: []T = &.{},
-        mask: usize = 0,
-        head: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-        tail: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-
-        fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
-            const size = std.math.ceilPowerOfTwo(usize, @max(capacity, 2)) catch return error.OutOfMemory;
-            const slots = try allocator.alloc(T, size);
-            return .{ .slots = slots, .mask = size - 1 };
-        }
-
-        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            if (self.slots.len > 0) allocator.free(self.slots);
-            self.slots = &.{};
-        }
-
-        fn empty(self: *const Self) bool {
-            return self.tail.load(.acquire) == self.head.load(.acquire);
-        }
-
-        fn push(self: *Self, item: T) bool {
-            const head = self.head.load(.monotonic);
-            const tail = self.tail.load(.acquire);
-            if (head -% tail >= self.slots.len) return false;
-            self.slots[head & self.mask] = item;
-            self.head.store(head +% 1, .release);
-            return true;
-        }
-
-        fn pop(self: *Self) ?T {
-            const tail = self.tail.load(.monotonic);
-            const head = self.head.load(.acquire);
-            if (tail == head) return null;
-            const item = self.slots[tail & self.mask];
-            self.tail.store(tail +% 1, .release);
-            return item;
-        }
-    };
-}
-
-fn MpmcRing(comptime T: type) type {
-    return struct {
-        const Self = @This();
-
-        const Slot = struct {
-            sequence: std.atomic.Value(usize),
-            value: T = undefined,
-        };
-
-        slots: []Slot = &.{},
-        mask: usize = 0,
-        enqueue_pos: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-        dequeue_pos: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-
-        fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
-            const size = std.math.ceilPowerOfTwo(usize, @max(capacity, 2)) catch return error.OutOfMemory;
-            const slots = try allocator.alloc(Slot, size);
-            for (slots, 0..) |*slot, i| slot.* = .{ .sequence = std.atomic.Value(usize).init(i) };
-            return .{ .slots = slots, .mask = size - 1 };
-        }
-
-        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            if (self.slots.len > 0) allocator.free(self.slots);
-            self.slots = &.{};
-        }
-
-        fn push(self: *Self, value: T) bool {
-            var pos = self.enqueue_pos.load(.monotonic);
-            while (true) {
-                const slot = &self.slots[pos & self.mask];
-                const sequence = slot.sequence.load(.acquire);
-                const diff = sequence -% pos;
-                if (diff == 0) {
-                    if (self.enqueue_pos.cmpxchgWeak(pos, pos +% 1, .monotonic, .monotonic)) |actual| {
-                        pos = actual;
-                        continue;
-                    }
-                    slot.value = value;
-                    slot.sequence.store(pos +% 1, .release);
-                    return true;
-                }
-                if (@as(isize, @bitCast(diff)) < 0) return false;
-                pos = self.enqueue_pos.load(.monotonic);
-            }
-        }
-
-        fn pop(self: *Self) ?T {
-            var pos = self.dequeue_pos.load(.monotonic);
-            while (true) {
-                const slot = &self.slots[pos & self.mask];
-                const sequence = slot.sequence.load(.acquire);
-                const diff = sequence -% (pos +% 1);
-                if (diff == 0) {
-                    if (self.dequeue_pos.cmpxchgWeak(pos, pos +% 1, .monotonic, .monotonic)) |actual| {
-                        pos = actual;
-                        continue;
-                    }
-                    break;
-                }
-                if (@as(isize, @bitCast(diff)) < 0) return null;
-                pos = self.dequeue_pos.load(.monotonic);
-            }
-            const value = self.slots[pos & self.mask].value;
-            self.slots[pos & self.mask].sequence.store(pos +% self.slots.len, .release);
-            return value;
-        }
-    };
-}
+const SpscRing = @import("rings.zig").SpscRing;
+const MpmcRing = @import("rings.zig").MpmcRing;
 
 const TaskShard = struct {
     queue: SpscRing(ThreadedTask),
@@ -424,106 +208,15 @@ pub const ThreadedTaskQueue = struct {
         self.drainCompletedRing(&self.completed_world, budget_ns);
     }
 
-    fn drainCompletedRing(self: *ThreadedTaskQueue, ring: *MpmcRing(ThreadedTask), budget_ns: u64) void {
-        const drain_start = std.Io.Timestamp.now(self.io, .awake);
-        while (ring.pop()) |task| {
-            if (task.callback) |cb| cb(task.ctx);
-            const elapsed: u64 = @intCast(@max(0, drain_start.durationTo(.now(self.io, .awake)).nanoseconds));
-            if (elapsed >= budget_ns) return;
-        }
-    }
+    const drainCompletedRing = @import("worker.zig").Methods(helper_scope).drainCompletedRing;
 
-    pub fn stop(self: *ThreadedTaskQueue) void {
-        self.stop_requested.store(true, .release);
-        self.running = false;
-        for (self.shards) |*shard| {
-            shard.mutex.lock(self.io) catch |err| {
-                std.log.err("failed to acquire lock: {}", .{err});
-                continue;
-            };
-            shard.idle.store(false, .release);
-            shard.cond.broadcast(self.io);
-            shard.mutex.unlock(self.io);
-        }
+    pub const stop = @import("worker.zig").Methods(helper_scope).stop;
 
-        for (self.workers) |*w| {
-            if (w.*) |t| {
-                t.join();
-                w.* = null;
-            }
-        }
-    }
+    pub const deinit = @import("worker.zig").Methods(helper_scope).deinit;
 
-    pub fn deinit(self: *ThreadedTaskQueue) void {
-        self.stop();
-        for (self.shards) |*shard| {
-            while (shard.queue.pop()) |task| {
-                if (task.cleanup) |c_fn| c_fn(task.ctx);
-            }
-            shard.queue.deinit(self.allocator);
-        }
-        if (self.shards.len > 0) self.allocator.free(self.shards);
-        self.shards = &.{};
+    const pushCompleted = @import("worker.zig").Methods(helper_scope).pushCompleted;
 
-        while (self.completed_input.pop()) |task| {
-            if (task.cleanup) |c_fn| c_fn(task.ctx);
-        }
-        while (self.completed_world.pop()) |task| {
-            if (task.cleanup) |c_fn| c_fn(task.ctx);
-        }
-        self.completed_input.deinit(self.allocator);
-        self.completed_world.deinit(self.allocator);
-        if (self.workers.len > 0) self.allocator.free(self.workers);
-        self.workers = &.{};
-    }
-
-    fn pushCompleted(self: *ThreadedTaskQueue, task: ThreadedTask) void {
-        const ring = switch (task.kind) {
-            .input => &self.completed_input,
-            .world => &self.completed_world,
-        };
-        var yields: usize = 0;
-        while (!ring.push(task)) {
-            if (self.stop_requested.load(.acquire) and yields >= 1000) {
-                if (task.cleanup) |c_fn| c_fn(task.ctx);
-                return;
-            }
-            std.Thread.yield() catch {};
-            yields += 1;
-        }
-    }
-
-    fn workerLoop(self: *ThreadedTaskQueue, shard_idx: usize) void {
-        current_worker_index = shard_idx;
-        defer current_worker_index = NO_WORKER;
-
-        const shard = &self.shards[shard_idx];
-        while (true) {
-            if (shard.queue.pop()) |task| {
-                task.work(task.ctx);
-                self.pushCompleted(task);
-                continue;
-            }
-
-            if (!self.running) return;
-
-            shard.mutex.lock(self.io) catch |err| {
-                std.log.err("failed to acquire lock: {}", .{err});
-                std.Thread.yield() catch {};
-                continue;
-            };
-            shard.idle.store(true, .release);
-            while (self.running and shard.queue.empty()) {
-                shard.cond.wait(self.io, &shard.mutex) catch |err| {
-                    std.log.err("worker condition wait failed: {}", .{err});
-                    shard.mutex.unlock(self.io);
-                    return;
-                };
-            }
-            shard.idle.store(false, .release);
-            shard.mutex.unlock(self.io);
-        }
-    }
+    const workerLoop = @import("worker.zig").Methods(helper_scope).workerLoop;
 };
 
 const test_owner = @This();
@@ -593,3 +286,15 @@ test "enqueue reports QueueFull instead of growing without bound" {
 test "bursts of completions drain without losing work" {
     try @import("threaded_tasks_test.zig").Suite(test_scope).case_010();
 }
+
+const helper_owner = @This();
+const helper_scope = struct {
+    pub const std = helper_owner.std;
+    pub const ThreadedTaskQueue = helper_owner.ThreadedTaskQueue;
+    pub const ThreadedTask = helper_owner.ThreadedTask;
+    pub const MpmcRing = helper_owner.MpmcRing;
+    pub const NO_WORKER = helper_owner.NO_WORKER;
+    pub fn workerIndex() *usize {
+        return &current_worker_index;
+    }
+};

@@ -3,8 +3,8 @@ const std = @import("std");
 const Protocol = @import("protocol");
 
 const BlockPermutation = @import("../world/block/block_permutation.zig").BlockPermutation;
-const Compression = @import("../network/compression/compression.zig").Compression;
-const CompressionOptions = @import("../network/compression/options.zig").CompressionOptions;
+const Compression = @import("../transport/compression/compression.zig").Compression;
+const CompressionOptions = @import("../transport/compression/options.zig").CompressionOptions;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const Entity = @import("./entity.zig").Entity;
 const Player = @import("../player/player.zig").Player;

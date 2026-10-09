@@ -21,7 +21,7 @@ const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").re
 const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
 const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
 const applyTraitsFromRegistry = @import("../../world/block/traits/trait.zig").applyTraitsFromRegistry;
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 
 pub fn handleInventoryTransaction(

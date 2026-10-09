@@ -1,11 +1,11 @@
 const std = @import("std");
 const Raknet = @import("Raknet");
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Compression = @import("../compression/compression.zig").Compression;
-const SharedBroadcast = @import("../shared_broadcast.zig").SharedBroadcast;
+const Compression = @import("../../transport/compression/compression.zig").Compression;
+const SharedBroadcast = @import("../../transport/shared_broadcast.zig").SharedBroadcast;
 
 const Player = @import("../../player/player.zig").Player;
 const buildAbilities = @import("./abilities.zig").buildAbilities;

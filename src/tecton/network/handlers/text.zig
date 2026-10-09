@@ -5,7 +5,7 @@ const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
 const Events = @import("../../events/root.zig");
-const NetworkHandler = @import("../network_handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const PlayerLog = @import("../player_log.zig");
 

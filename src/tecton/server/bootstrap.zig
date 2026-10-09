@@ -4,7 +4,7 @@ const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
-const shouldEmitStartupLogs = @import("../config.zig").shouldEmitStartupLogs;
+const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
 const worlds = @import("worlds.zig");
 const entities = @import("../world/dimension/entities.zig");
 
