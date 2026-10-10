@@ -1,8 +1,11 @@
 const std = @import("std");
+const Protocol = @import("protocol");
+const Raknet = @import("Raknet");
 
 const contracts = @import("../core/contracts.zig");
 const CommandContext = @import("../command/context.zig").CommandContext;
-const Tecton = @import("../tecton.zig").Tecton;
+const tecton_mod = @import("../tecton.zig");
+const Tecton = tecton_mod.Tecton;
 const Entity = @import("../entity/entity.zig").Entity;
 const EcsWorld = @import("../entity/ecs.zig").EcsWorld;
 const events_mod = @import("../events/root.zig");
@@ -14,8 +17,14 @@ const worlds = @import("./worlds.zig");
 
 pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
 
+pub const HostError = error{NetworkNotInitialized};
+
 pub fn host(tecton: *Tecton) Host {
-    std.debug.assert(tecton.network_initialized);
+    return hostChecked(tecton) catch std.debug.panic("services.host() called before the network handler exists", .{});
+}
+
+pub fn hostChecked(tecton: *Tecton) HostError!Host {
+    if (!tecton.network_initialized) return error.NetworkNotInitialized;
     return .{
         .ctx = tecton,
         .io = tecton.io,
@@ -171,4 +180,118 @@ fn destroyWorld(ctx: *anyopaque, world: *World) void {
 
 fn endOp(ctx: *anyopaque, name: []const u8) void {
     cast(ctx).worlds.endOp(name);
+}
+
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const Tecton = test_owner.Tecton;
+    pub const Host = test_owner.Host;
+    pub const host = test_owner.host;
+    pub const hostChecked = test_owner.hostChecked;
+    pub const Player = test_owner.Player;
+    pub const Entity = test_owner.Entity;
+    pub const EcsWorld = test_owner.EcsWorld;
+    pub const NetworkHandler = test_owner.NetworkHandler;
+    pub const Dimension = test_owner.Dimension;
+    pub const World = test_owner.World;
+    pub const Raknet = test_owner.Raknet;
+    pub const Protocol = test_owner.Protocol;
+    pub const block_root = test_owner.tecton_mod.block_root;
+};
+
+test "the host fails in a controlled way when built before the network exists" {
+    try @import("services_test.zig").Suite(test_scope).case_000();
+}
+
+test "players.by_runtime_id sees a player registered after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_001();
+}
+
+test "get_player_count sees a player registered after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_002();
+}
+
+test "get_player_snapshots sees a player registered after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_003();
+}
+
+test "find_player_by_runtime_id sees a player registered after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_004();
+}
+
+test "register_ecs_entity registers an entity created after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_005();
+}
+
+test "unregister_ecs_entity removes an entity created after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_006();
+}
+
+test "set_player_location stores a location that did not exist at construction" {
+    try @import("services_test.zig").Suite(test_scope).case_007();
+}
+
+test "enqueue_player_removal queues a player created after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_008();
+}
+
+test "remove_player removes a player registered after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_009();
+}
+
+test "remove_connection_mapping unmaps a connection registered after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_010();
+}
+
+test "target_tps reads the config value current at call time" {
+    try @import("services_test.zig").Suite(test_scope).case_011();
+}
+
+test "current_tps reads the value current at call time" {
+    try @import("services_test.zig").Suite(test_scope).case_012();
+}
+
+test "current_mspt reads the value current at call time" {
+    try @import("services_test.zig").Suite(test_scope).case_013();
+}
+
+test "tick_count reads the value current at call time" {
+    try @import("services_test.zig").Suite(test_scope).case_014();
+}
+
+test "refresh_world_command_enums sees worlds adopted after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_015();
+}
+
+test "refresh_floating_text_command_enums sees holograms added after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_016();
+}
+
+test "reply_to resolves the sender and the network current at call time" {
+    try @import("services_test.zig").Suite(test_scope).case_017();
+}
+
+test "worlds.build builds under the paths current at call time" {
+    try @import("services_test.zig").Suite(test_scope).case_018();
+}
+
+test "worlds.adopt registers a world created after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_019();
+}
+
+test "worlds.destroy removes a world adopted after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_020();
+}
+
+test "worlds.end_op closes an operation opened after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_021();
+}
+
+test "instances.assign_dimension sees an instance created after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_022();
+}
+
+test "permission_manager.get_player_group sees a group set after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_023();
 }

@@ -35,6 +35,7 @@ const visibility_mod = @import("./entity/traits/visibility.zig");
 const resolveWorkerCount = @import("./tasks/threaded_tasks.zig").resolveWorkerCount;
 const totalServerThreadCount = @import("./tasks/threaded_tasks.zig").totalServerThreadCount;
 const TickProfiler = @import("./core/tick_profiler.zig").TickProfiler;
+pub const block_root = @import("./world/block/root.zig");
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const EcsWorld = @import("entity/ecs.zig").EcsWorld;
 const Events = @import("events/root.zig");
