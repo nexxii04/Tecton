@@ -98,6 +98,7 @@ pub const Tecton = struct {
     raknet: Raknet.Server,
     network: *NetworkHandler,
     network_initialized: bool = false,
+    address_stamp: usize = 0,
     players: PlayerRegistry,
     movement_priority: SendPriority = .immediate,
     movement_distance_bands: bool = true,
@@ -316,8 +317,13 @@ pub const Tecton = struct {
         self.lifecycle_userdata = userdata;
     }
 
+    pub fn fixAddress(self: *Tecton) void {
+        self.address_stamp = @intFromPtr(self);
+    }
+
     pub fn start(self: *Tecton) !void {
         if (self.started) return;
+        self.fixAddress();
         self.network = try NetworkHandler.init(self.io, self.allocator, &self.threaded_tasks, .{
             .ctx = self,
             .dispatch = self.composition.dispatch,

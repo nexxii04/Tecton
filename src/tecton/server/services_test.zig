@@ -26,6 +26,11 @@ pub fn Suite(comptime scope: type) type {
         const PermissionManager = @TypeOf(@as(Tecton, undefined).permission_manager);
         const PlayerLocations = @TypeOf(@as(Tecton, undefined).player_locations);
         const FloatingTextManager = std.meta.Child(std.meta.Child(@TypeOf(@as(Dimension, undefined).floating_texts)));
+        const Events = @TypeOf(@as(Tecton, undefined).events);
+        const TaskQueue = @TypeOf(@as(Tecton, undefined).tasks);
+        const ThreadedTaskQueue = @TypeOf(@as(Tecton, undefined).threaded_tasks);
+        const TickProfiler = @TypeOf(@as(Tecton, undefined).profiler);
+        const Interval = @TypeOf(@as(Host, undefined).mob_broadcast_interval);
 
         fn stubNetwork() NetworkHandler {
             var stub: NetworkHandler = undefined;
@@ -41,15 +46,15 @@ pub fn Suite(comptime scope: type) type {
             return stub;
         }
 
-        fn baseTecton(network: *NetworkHandler) Tecton {
-            var tecton: Tecton = undefined;
+        fn baseTecton(tecton: *Tecton, network: *NetworkHandler) void {
+            tecton.* = undefined;
             tecton.io = testing.io;
             tecton.allocator = allocator;
             tecton.config = .{ .allocator = allocator };
             tecton.network = network;
             tecton.network_initialized = true;
             tecton.mob_broadcast_interval = 2;
-            return tecton;
+            tecton.fixAddress();
         }
 
         fn fakePlayer(runtime_id: i64, connection: *Raknet.Connection) Player {
@@ -91,7 +96,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_000() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.network_initialized = false;
             try std.testing.expectError(error.NetworkNotInitialized, hostChecked(&tecton));
 
@@ -105,7 +111,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_001() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
@@ -119,7 +126,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_002() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
@@ -133,7 +141,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_003() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
@@ -149,7 +158,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_004() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
@@ -163,7 +173,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_005() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.ecs = try EcsWorld.init(allocator, 16);
             defer tecton.ecs.deinit();
 
@@ -176,7 +187,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_006() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.ecs = try EcsWorld.init(allocator, 16);
             defer tecton.ecs.deinit();
 
@@ -195,7 +207,8 @@ pub fn Suite(comptime scope: type) type {
             const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/locations.json", .{&tmp.sub_path});
 
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.player_locations = PlayerLocations.init(testing.io, allocator, path);
             defer tecton.player_locations.deinit();
 
@@ -209,7 +222,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_008() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
@@ -225,7 +239,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_009() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
@@ -240,7 +255,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_010() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
@@ -256,7 +272,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_011() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
 
             const h = host(&tecton);
             tecton.config.max_tps = 30;
@@ -265,7 +282,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_012() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
 
             const h = host(&tecton);
             tecton.current_tps = 12.5;
@@ -274,7 +292,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_013() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
 
             const h = host(&tecton);
             tecton.current_mspt = 4.25;
@@ -283,7 +302,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_014() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
 
             const h = host(&tecton);
             tecton.tick_count = 77;
@@ -292,7 +312,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_015() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             tecton.worlds = WorldRegistry.init(allocator);
@@ -322,7 +343,8 @@ pub fn Suite(comptime scope: type) type {
             try registerAir();
 
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             tecton.worlds = WorldRegistry.init(allocator);
@@ -362,7 +384,8 @@ pub fn Suite(comptime scope: type) type {
 
             var stub = stubNetwork();
             var plain = plainNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
 
@@ -402,7 +425,8 @@ pub fn Suite(comptime scope: type) type {
             var tmp = std.testing.tmpDir(.{});
             defer tmp.cleanup();
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.worlds = WorldRegistry.init(allocator);
             defer tecton.worlds.deinit();
             defer tecton.worlds.deinitOps();
@@ -429,7 +453,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_019() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.worlds = WorldRegistry.init(allocator);
             defer tecton.worlds.deinit();
             defer tecton.worlds.deinitOps();
@@ -445,7 +470,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_020() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.worlds = WorldRegistry.init(allocator);
             defer tecton.worlds.deinit();
             defer tecton.worlds.deinitOps();
@@ -461,7 +487,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_021() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.worlds = WorldRegistry.init(allocator);
             defer tecton.worlds.deinit();
             defer tecton.worlds.deinitOps();
@@ -476,7 +503,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_022() !void {
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.instances = GameInstanceRegistry.init(allocator);
             defer tecton.instances.deinit();
 
@@ -498,7 +526,8 @@ pub fn Suite(comptime scope: type) type {
             const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{&tmp.sub_path});
 
             var stub = stubNetwork();
-            var tecton = baseTecton(&stub);
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
             tecton.permission_manager = PermissionManager.init(testing.io, allocator, path, "member");
             defer tecton.permission_manager.deinit();
 
@@ -506,6 +535,90 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqualStrings("member", h.permission_manager.getPlayerGroup("Alice"));
             try tecton.permission_manager.setPlayerGroup("Alice", "operator");
             try std.testing.expectEqualStrings("operator", h.permission_manager.getPlayerGroup("Alice"));
+        }
+
+        pub fn case_024() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            var moved = tecton;
+            try std.testing.expectError(error.TectonMoved, hostChecked(&moved));
+            const h = host(&tecton);
+            try std.testing.expectEqual(@as(*anyopaque, @ptrCast(&tecton)), h.ctx);
+            try std.testing.expectEqual(@as(?*anyopaque, @ptrCast(&tecton)), h.players.ctx);
+        }
+
+        pub fn case_025() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+
+            const h = host(&tecton);
+            tecton.events = Events.init(allocator);
+            defer tecton.events.deinit();
+            try std.testing.expectEqual(@as(*Events, &tecton.events), h.events);
+            h.events.next_order = 7;
+            try std.testing.expectEqual(@as(u64, 7), tecton.events.next_order);
+        }
+
+        pub fn case_026() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+
+            const h = host(&tecton);
+            tecton.ecs = try EcsWorld.init(allocator, 16);
+            defer tecton.ecs.deinit();
+            var entity = fakeEntity();
+            h.registerEcsEntity(&entity);
+            try std.testing.expect(entity.ecs_id != 0);
+        }
+
+        pub fn case_027() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+
+            const h = host(&tecton);
+            tecton.tasks = TaskQueue.init(allocator);
+            defer tecton.tasks.deinit();
+            try std.testing.expectEqual(@as(*TaskQueue, &tecton.tasks), h.tasks);
+            try std.testing.expectEqual(@as(usize, 0), h.tasks.tasks.items.len);
+        }
+
+        pub fn case_028() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+
+            const h = host(&tecton);
+            tecton.threaded_tasks = ThreadedTaskQueue.init(testing.io, allocator, 1);
+            try std.testing.expectEqual(@as(*ThreadedTaskQueue, &tecton.threaded_tasks), h.threaded_tasks);
+            try std.testing.expectEqual(@as(usize, 0), h.threaded_tasks.shards.len);
+        }
+
+        pub fn case_029() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+
+            const h = host(&tecton);
+            tecton.profiler = .{};
+            try std.testing.expectEqual(@as(*TickProfiler, &tecton.profiler), h.profiler);
+            h.profiler.total_ticks = 5;
+            try std.testing.expectEqual(@as(u64, 5), tecton.profiler.total_ticks);
+        }
+
+        pub fn case_030() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            tecton.mob_broadcast_interval = 5;
+
+            const h = host(&tecton);
+            try std.testing.expectEqual(@as(Interval, 5), h.mob_broadcast_interval);
+            tecton.mob_broadcast_interval = 9;
+            try std.testing.expectEqual(@as(Interval, 5), h.mob_broadcast_interval);
         }
     };
 }

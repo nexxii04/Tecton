@@ -17,14 +17,15 @@ const worlds = @import("./worlds.zig");
 
 pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
 
-pub const HostError = error{NetworkNotInitialized};
+pub const HostError = error{ NetworkNotInitialized, TectonMoved };
 
 pub fn host(tecton: *Tecton) Host {
-    return hostChecked(tecton) catch std.debug.panic("services.host() called before the network handler exists", .{});
+    return hostChecked(tecton) catch |err| std.debug.panic("services.host() invariant violated: {s}", .{@errorName(err)});
 }
 
 pub fn hostChecked(tecton: *Tecton) HostError!Host {
     if (!tecton.network_initialized) return error.NetworkNotInitialized;
+    if (tecton.address_stamp != @intFromPtr(tecton)) return error.TectonMoved;
     return .{
         .ctx = tecton,
         .io = tecton.io,
@@ -294,4 +295,32 @@ test "instances.assign_dimension sees an instance created after the host was bui
 
 test "permission_manager.get_player_group sees a group set after the host was built" {
     try @import("services_test.zig").Suite(test_scope).case_023();
+}
+
+test "hostChecked rejects a Tecton that was copied after construction" {
+    try @import("services_test.zig").Suite(test_scope).case_024();
+}
+
+test "events pointer sees the member initialized after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_025();
+}
+
+test "ecs pointer sees the member initialized after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_026();
+}
+
+test "tasks pointer sees the member initialized after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_027();
+}
+
+test "threaded_tasks pointer sees the member initialized after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_028();
+}
+
+test "profiler pointer sees the member initialized after the host was built" {
+    try @import("services_test.zig").Suite(test_scope).case_029();
+}
+
+test "mob_broadcast_interval is fixed at host construction" {
+    try @import("services_test.zig").Suite(test_scope).case_030();
 }
