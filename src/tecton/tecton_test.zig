@@ -2,7 +2,6 @@ pub fn Suite(comptime scope: type) type {
     return struct {
         const std = scope.std;
         const ServerProperties = scope.ServerProperties;
-        const dispatch = scope.dispatch;
         const Tecton = scope.Tecton;
 
         pub fn case_000() !void {
@@ -92,7 +91,6 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_004() !void {
-            _ = scope.test_dependency_14;
             _ = scope.test_dependency_15;
             _ = scope.test_dependency_2;
             _ = scope.test_dependency_9;

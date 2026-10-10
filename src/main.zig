@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Server = @import("tecton").Server;
+const composition = @import("tecton").composition;
 const pool_allocator = @import("tecton").pool_allocator;
 
 const winmm = if (builtin.os.tag == .windows) struct {
@@ -27,7 +28,7 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        var server = try Server.init(io, allocator);
+        var server = try Server.init(io, allocator, composition);
         defer server.deinit();
 
         try server.start();
@@ -36,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
         // The shared pool recycles frees across threads instead of stranding them on the freeing thread.
         const allocator = pool_allocator.allocator();
 
-        var server = try Server.init(io, allocator);
+        var server = try Server.init(io, allocator, composition);
         defer server.deinit();
 
         try server.start();

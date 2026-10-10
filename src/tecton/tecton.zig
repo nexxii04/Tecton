@@ -20,7 +20,6 @@ const BanManager = @import("./network/ban_manager.zig").BanManager;
 const MovementBroadcast = @import("./network/movement_broadcast.zig");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const SendPriority = @import("./network/root.zig").SendPriority;
-const dispatch = @import("./network/dispatch.zig");
 const PlayerLog = @import("./network/player_log.zig");
 const MoveDelta = @import("./player/move_delta.zig");
 const PermissionManager = @import("./player/permission_manager.zig").PermissionManager;
@@ -47,11 +46,15 @@ const SaveScheduler = @import("server/save.zig").SaveScheduler;
 const tick_mod = @import("server/tick.zig");
 const movement_mod = @import("server/movement.zig");
 const worlds_mod = @import("server/worlds.zig");
-const bootstrap_mod = @import("server/bootstrap.zig");
 
 pub const ServerPaths = options_mod.ServerPaths;
 pub const CommandPermissionChecker = options_mod.CommandPermissionChecker;
 pub const ServerOptions = options_mod.ServerOptions;
+
+pub const Composition = struct {
+    prepare: *const fn (*Tecton) anyerror!void,
+    dispatch: *const fn (*anyopaque, *Raknet.Connection, []const []const u8) void,
+};
 
 pub const Tecton = struct {
     io: std.Io,
@@ -70,6 +73,7 @@ pub const Tecton = struct {
     lifecycle_userdata: ?*anyopaque,
     command_permission_checker: ?CommandPermissionChecker,
     command_permission_userdata: ?*anyopaque,
+    composition: Composition,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -118,21 +122,21 @@ pub const Tecton = struct {
     visibility_batch: std.ArrayList(*Player) = .empty,
     visibility_job: threaded_tasks.ParallelJob = .{},
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator) !Tecton {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, composition: Composition) !Tecton {
         Raknet.Logger.init(allocator);
         const config = try ServerProperties.load(io, allocator, "server.properties");
-        return initWithConfig(io, allocator, config);
+        return initWithConfig(io, allocator, config, composition);
     }
 
-    pub fn initWithConfig(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties) !Tecton {
-        return initWithConfigAndPaths(io, allocator, config, .{});
+    pub fn initWithConfig(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, composition: Composition) !Tecton {
+        return initWithConfigAndPaths(io, allocator, config, .{}, composition);
     }
 
-    pub fn initWithConfigAndPaths(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, paths: ServerPaths) !Tecton {
-        return initWithOptions(io, allocator, config, .{ .paths = paths });
+    pub fn initWithConfigAndPaths(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, paths: ServerPaths, composition: Composition) !Tecton {
+        return initWithOptions(io, allocator, config, .{ .paths = paths }, composition);
     }
 
-    pub fn initWithOptions(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, options: ServerOptions) !Tecton {
+    pub fn initWithOptions(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, options: ServerOptions, composition: Composition) !Tecton {
         Raknet.Logger.init(allocator);
         var owned_config = config;
         errdefer owned_config.deinit();
@@ -199,6 +203,7 @@ pub const Tecton = struct {
             .lifecycle_userdata = options.lifecycle_userdata,
             .command_permission_checker = options.command_permission_checker,
             .command_permission_userdata = options.command_permission_userdata,
+            .composition = composition,
             .movement_priority = movement_priority,
             .movement_distance_bands = owned_config.movement_distance_bands,
             .mob_broadcast_interval = mob_broadcast_interval,
@@ -249,7 +254,7 @@ pub const Tecton = struct {
     }
 
     pub fn prepare(self: *Tecton) !void {
-        return bootstrap_mod.prepare(self);
+        return self.composition.prepare(self);
     }
 
     pub fn registerCommand(self: *Tecton, command: *@import("./command/command.zig").Command) !void {
@@ -308,7 +313,7 @@ pub const Tecton = struct {
         try self.prepare();
         self.network = try NetworkHandler.init(self.io, self.allocator, &self.threaded_tasks, .{
             .ctx = self,
-            .dispatch = dispatch.dispatchFromHost,
+            .dispatch = self.composition.dispatch,
             .disconnected = onNetworkDisconnect,
         });
         self.raknet.setConnectCallback(NetworkHandler.onConnect, self.network);
@@ -759,7 +764,6 @@ const test_scope = struct {
     pub const test_dependency_11 = @import("./items/enchantments/rules.zig");
     pub const test_dependency_12 = @import("./items/enchantments/set.zig");
     pub const test_dependency_13 = @import("./items/enchantments/storage.zig");
-    pub const test_dependency_14 = @import("./network/dispatch.zig");
     pub const test_dependency_15 = @import("./network/handlers/player_hotbar.zig");
     pub const test_dependency_16 = @import("./network/movement_broadcast.zig");
     pub const test_dependency_17 = @import("./player/move_delta.zig");
@@ -768,7 +772,6 @@ const test_scope = struct {
     pub const test_dependency_20 = @import("./world/provider/leveldb_provider.zig");
     pub const std = test_owner.std;
     pub const ServerProperties = test_owner.ServerProperties;
-    pub const dispatch = test_owner.dispatch;
     pub const Tecton = test_owner.Tecton;
 };
 
