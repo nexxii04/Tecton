@@ -54,7 +54,7 @@ const testing = std.testing;
 
 test "valid display names pass" {
     try validateDisplayName("Steve");
-    try validateDisplayName("LoadBot0000");
+    try validateDisplayName("TestBot0000");
     try validateDisplayName("a");
     try validateDisplayName("name with space");
     try validateDisplayName("x" ** max_display_name_length);

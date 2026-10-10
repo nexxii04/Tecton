@@ -18,7 +18,7 @@ pub fn Suite(comptime scope: type) type {
             const victim_uuid = "00000000-0000-4000-8000-000000000123";
             const victim_xuid = "2533274799999999";
 
-            const tokens = try testChain(allocator, victim_xuid, "LoadBot", victim_uuid);
+            const tokens = try testChain(allocator, victim_xuid, "TestBot", victim_uuid);
             defer allocator.free(tokens.chain);
             defer allocator.free(tokens.client);
 
@@ -30,13 +30,13 @@ pub fn Suite(comptime scope: type) type {
 
             try applyOfflineIdentity(allocator, &data);
 
-            const expected = try offline_identity.uuidForDisplayName(allocator, "LoadBot");
+            const expected = try offline_identity.uuidForDisplayName(allocator, "TestBot");
             defer allocator.free(expected);
 
             try testing.expectEqualStrings(expected, data.identity_data.identity);
             try testing.expect(!std.mem.eql(u8, victim_uuid, data.identity_data.identity));
             try testing.expectEqual(@as(usize, 0), data.identity_data.xuid.len);
-            try testing.expectEqualStrings("LoadBot", data.identity_data.display_name);
+            try testing.expectEqualStrings("TestBot", data.identity_data.display_name);
         }
 
         pub fn case_001() !void {
