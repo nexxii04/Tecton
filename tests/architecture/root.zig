@@ -1,3 +1,9 @@
+comptime {
+    _ = @import("tecton/core/pool_allocator.zig");
+    _ = @import("tecton/command/list/tp.zig");
+    _ = @import("tecton/root.zig");
+}
+
 test "internal module roots expose their existing types" {
     _ = @import("tecton/core/root.zig").ServerProperties;
     _ = @import("tecton/auth/root.zig").AuthService;
