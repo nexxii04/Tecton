@@ -49,11 +49,30 @@ const worlds_mod = @import("server/worlds.zig");
 
 pub const ServerPaths = options_mod.ServerPaths;
 pub const CommandPermissionChecker = options_mod.CommandPermissionChecker;
-pub const ServerOptions = options_mod.ServerOptions;
 
 pub const Composition = struct {
     prepare: *const fn (*Tecton) anyerror!void,
     dispatch: *const fn (*anyopaque, *Raknet.Connection, []const []const u8) void,
+};
+
+pub const ServerOptions = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    composition: Composition,
+    properties: ?ServerProperties = null,
+    paths: ServerPaths = .{},
+    enable_console: bool = true,
+    discover_native_plugins: bool = true,
+    auto_load_worlds: bool = true,
+    create_default_world: bool = true,
+    tick_callback: ?*const fn (?*anyopaque) void = null,
+    tick_userdata: ?*anyopaque = null,
+    prepare_callback: ?*const fn (?*anyopaque) void = null,
+    start_callback: ?*const fn (?*anyopaque) void = null,
+    shutdown_callback: ?*const fn (?*anyopaque) void = null,
+    lifecycle_userdata: ?*anyopaque = null,
+    command_permission_checker: ?CommandPermissionChecker = null,
+    command_permission_userdata: ?*anyopaque = null,
 };
 
 pub const Tecton = struct {
@@ -122,23 +141,11 @@ pub const Tecton = struct {
     visibility_batch: std.ArrayList(*Player) = .empty,
     visibility_job: threaded_tasks.ParallelJob = .{},
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator, composition: Composition) !Tecton {
+    pub fn init(options: ServerOptions) !Tecton {
+        const io = options.io;
+        const allocator = options.allocator;
         Raknet.Logger.init(allocator);
-        const config = try ServerProperties.load(io, allocator, "server.properties");
-        return initWithConfig(io, allocator, config, composition);
-    }
-
-    pub fn initWithConfig(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, composition: Composition) !Tecton {
-        return initWithConfigAndPaths(io, allocator, config, .{}, composition);
-    }
-
-    pub fn initWithConfigAndPaths(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, paths: ServerPaths, composition: Composition) !Tecton {
-        return initWithOptions(io, allocator, config, .{ .paths = paths }, composition);
-    }
-
-    pub fn initWithOptions(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, options: ServerOptions, composition: Composition) !Tecton {
-        Raknet.Logger.init(allocator);
-        var owned_config = config;
+        var owned_config = options.properties orelse try ServerProperties.load(io, allocator, "server.properties");
         errdefer owned_config.deinit();
 
         var auth_service: ?AuthService = null;
@@ -203,7 +210,7 @@ pub const Tecton = struct {
             .lifecycle_userdata = options.lifecycle_userdata,
             .command_permission_checker = options.command_permission_checker,
             .command_permission_userdata = options.command_permission_userdata,
-            .composition = composition,
+            .composition = options.composition,
             .movement_priority = movement_priority,
             .movement_distance_bands = owned_config.movement_distance_bands,
             .mob_broadcast_interval = mob_broadcast_interval,

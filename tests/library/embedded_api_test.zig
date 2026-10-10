@@ -8,6 +8,9 @@ fn shutdown(_: ?*anyopaque) void {}
 
 test "external consumers can use the public vanilla API" {
     const options = tecton.ServerOptions{
+        .io = std.testing.io,
+        .allocator = std.testing.allocator,
+        .composition = tecton.composition,
         .paths = .{ .worlds = "test-worlds", .plugins = "test-plugins" },
         .enable_console = false,
         .discover_native_plugins = false,
@@ -26,7 +29,7 @@ test "external consumers can use the public vanilla API" {
     _ = tecton.ServerProperties;
     _ = tecton.CommandPermissionChecker;
 
-    try std.testing.expect(@hasDecl(tecton.Server, "initWithOptions"));
+    try std.testing.expect(@hasDecl(tecton.Server, "init"));
     try std.testing.expect(@hasDecl(tecton.Server, "prepare"));
     try std.testing.expect(@hasDecl(tecton.Server, "shutdown"));
 }

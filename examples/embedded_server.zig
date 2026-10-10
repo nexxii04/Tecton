@@ -3,7 +3,7 @@ const tecton = @import("tecton");
 
 pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.smp_allocator;
-    var server = try tecton.Server.initWithOptions(init.io, allocator, try tecton.ServerProperties.load(init.io, allocator, "server.properties"), .{}, tecton.composition);
+    var server = try tecton.Server.init(tecton.defaultOptions(init.io, allocator));
     defer server.deinit();
 
     try server.prepare();

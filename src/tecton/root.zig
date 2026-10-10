@@ -13,6 +13,7 @@ pub const ServerPaths = @import("./tecton.zig").ServerPaths;
 pub const CommandPermissionChecker = @import("./tecton.zig").CommandPermissionChecker;
 pub const Composition = @import("./tecton.zig").Composition;
 pub const composition = @import("./server/root.zig").composition;
+pub const defaultOptions = @import("./server/root.zig").defaultOptions;
 pub const ServerProperties = @import("./core/config.zig").ServerProperties;
 pub const container = @import("./container/root.zig");
 pub const entity = @import("./entity/root.zig");
