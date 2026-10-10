@@ -15,6 +15,7 @@ const worlds = @import("./worlds.zig");
 pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
 
 pub fn host(tecton: *Tecton) Host {
+    std.debug.assert(tecton.network_initialized);
     return .{
         .ctx = tecton,
         .io = tecton.io,

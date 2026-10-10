@@ -317,15 +317,15 @@ pub const Tecton = struct {
 
     pub fn start(self: *Tecton) !void {
         if (self.started) return;
-        try self.prepare();
         self.network = try NetworkHandler.init(self.io, self.allocator, &self.threaded_tasks, .{
             .ctx = self,
             .dispatch = self.composition.dispatch,
             .disconnected = onNetworkDisconnect,
         });
+        self.network_initialized = true;
         self.raknet.setConnectCallback(NetworkHandler.onConnect, self.network);
         self.raknet.setDisconnectCallback(NetworkHandler.onDisconnect, self.network);
-        self.network_initialized = true;
+        try self.prepare();
         self.tick_thread_id.store(0, .release);
         self.raknet.setTickCallback(tick_mod.onTick, self);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
