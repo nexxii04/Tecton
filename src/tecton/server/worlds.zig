@@ -4,7 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const NBT = @import("nbt");
 const Protocol = @import("protocol");
 
-const Tecton = @import("../tecton.zig").Tecton;
+const Host = @import("../player/player.zig").Host;
 const World = @import("../world/world.zig").World;
 const Generator = @import("../world/generator/root.zig");
 const LevelDBProvider = @import("../world/provider/leveldb_provider.zig").LevelDBProvider;
@@ -83,9 +83,9 @@ pub const WorldRegistry = struct {
     }
 };
 
-pub fn build(tecton: *Tecton, name: []const u8) !*World {
+pub fn build(tecton: Host, worlds_dir: []const u8, name: []const u8) !*World {
     var path_buf: [512]u8 = undefined;
-    const db_path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}/db", .{ tecton.paths.worlds, name });
+    const db_path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}/db", .{ worlds_dir, name });
     std.Io.Dir.cwd().createDirPath(tecton.io, db_path) catch {};
 
     const provider = try LevelDBProvider.init(tecton.io, tecton.allocator, db_path);
@@ -103,24 +103,24 @@ pub fn build(tecton: *Tecton, name: []const u8) !*World {
         world.deinit();
         tecton.allocator.destroy(world);
     }
-    try createDimensions(tecton, world);
+    try createDimensions(tecton, worlds_dir, world);
     return world;
 }
 
-pub fn load(tecton: *Tecton, name: []const u8) !*World {
-    const world = try build(tecton, name);
+pub fn load(tecton: Host, worlds_dir: []const u8, name: []const u8) !*World {
+    const world = try build(tecton, worlds_dir, name);
     errdefer tecton.worlds.destroy(world);
     try tecton.worlds.adopt(world);
     return world;
 }
 
-fn createDimensions(tecton: *Tecton, world: *World) !void {
+fn createDimensions(tecton: Host, worlds_dir: []const u8, world: *World) !void {
     try createDimension(tecton, world, "overworld", .Overworld, true);
     try createDimension(tecton, world, "nether", .Nether, false);
     try createDimension(tecton, world, "end", .End, false);
 
     var level_dat_buf: [512]u8 = undefined;
-    const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "{s}/{s}/level.dat", .{ tecton.paths.worlds, world.identifier }) catch return;
+    const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "{s}/{s}/level.dat", .{ worlds_dir, world.identifier }) catch return;
     if (readLevelDatSpawn(tecton.io, tecton.allocator, level_dat_path)) |spawn| {
         if (world.getDimension("overworld")) |dim| {
             dim.spawn_position = spawn;
@@ -130,7 +130,7 @@ fn createDimensions(tecton: *Tecton, world: *World) !void {
 }
 
 fn createDimension(
-    tecton: *Tecton,
+    tecton: Host,
     world: *World,
     identifier: []const u8,
     dimension_type: Protocol.DimensionType,

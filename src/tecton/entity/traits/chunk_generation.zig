@@ -4,7 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const NBT = @import("nbt");
 const Protocol = @import("protocol");
 
-const Tecton = @import("../../tecton.zig").Tecton;
+const Host = @import("../../player/player.zig").Host;
 const Compression = @import("../../transport/compression/compression.zig").Compression;
 const CompressionOptions = @import("../../transport/compression/options.zig").CompressionOptions;
 const BlockPermutation = @import("../../world/block/block_permutation.zig").BlockPermutation;
@@ -62,7 +62,7 @@ pub const ChunkBatchWork = struct {
     block_data: []ChunkBlockData,
     count: usize,
     runtime_id: i64,
-    tecton: *Tecton,
+    tecton: Host,
     dimension: *Dimension,
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,

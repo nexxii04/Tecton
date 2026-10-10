@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 
-const Tecton = @import("../../tecton.zig").Tecton;
 const Player = @import("../../player/player.zig").Player;
 const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
@@ -70,7 +69,7 @@ fn onTick(state: *State, entity: *Entity) void {
     state.tick_count += 1;
 
     const player = getPlayer(entity) orelse return;
-    const tecton: *Tecton = player.tecton;
+    const tecton = player.tecton;
     const player_count = tecton.getPlayerCount();
     const update_interval: u64 = if (player_count <= 8)
         20
@@ -80,12 +79,12 @@ fn onTick(state: *State, entity: *Entity) void {
         100;
     if (state.tick_count % update_interval != 0) return;
 
-    const tps = tecton.current_tps;
+    const tps = tecton.currentTps();
     const target_tps = tecton.targetTps();
-    const mspt = tecton.current_mspt;
-    if (last_memory_sample_tick != tecton.tick_count) {
+    const mspt = tecton.currentMspt();
+    if (last_memory_sample_tick != tecton.tickCount()) {
         cached_memory_mb = getMemoryMB(tecton.io);
-        last_memory_sample_tick = tecton.tick_count;
+        last_memory_sample_tick = tecton.tickCount();
     }
     const mem = cached_memory_mb;
     const tasks = tecton.tasks.pending();

@@ -99,7 +99,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
 
     const dimension = entity.dimension orelse return;
     const tecton = dimension.world.tecton;
-    markInvulnerable(state, tecton.tick_count);
+    markInvulnerable(state, tecton.tickCount());
 
     broadcastHurtAnimation(tecton.allocator, dimension, entity);
     broadcastDirtyAttributes(tecton.allocator, dimension, entity);

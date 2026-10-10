@@ -8,6 +8,7 @@ const Player = @import("../../player/player.zig").Player;
 const auth = @import("../../auth/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
+const services = @import("../../server/services.zig");
 const PlayerLog = @import("../player_log.zig");
 const offline_identity = @import("../../auth/offline_identity.zig");
 
@@ -195,7 +196,7 @@ pub fn handleLogin(
         network.allocator,
         connection,
         network,
-        tecton,
+        services.host(tecton),
         data,
         &tecton.player_entity_type,
     );

@@ -1,10 +1,8 @@
 const std = @import("std");
 const Raknet = @import("Raknet");
-const Tecton = @import("../tecton.zig").Tecton;
+const Host = @import("../player/player.zig").Host;
 const World = @import("./world.zig").World;
 const Player = @import("../player/player.zig").Player;
-const CommandContext = @import("../command/context.zig").CommandContext;
-const worlds = @import("../server/worlds.zig");
 
 pub const TaskKind = enum { create, load, unload };
 
@@ -14,7 +12,7 @@ const UNLOAD_IDLE_TIMEOUT_TICKS: u32 = 400;
 const TASK_NAME = "world_lifecycle";
 
 const WorldLifecycleTask = struct {
-    tecton: *Tecton,
+    tecton: Host,
     kind: TaskKind,
     name: []u8,
     sender_runtime_id: ?i64,
@@ -27,28 +25,12 @@ const WorldLifecycleTask = struct {
     abandoned: bool = false,
 
     fn reply(self: *WorldLifecycleTask, success: bool, message: []const u8) void {
-        var sender: ?*Player = null;
-        if (self.sender_runtime_id) |runtime_id| {
-            sender = self.tecton.players.byRuntimeId(runtime_id) orelse return;
-            if (sender.?.pending_removal.load(.acquire)) return;
-        }
-        var ctx = CommandContext{
-            .player = sender,
-            .args = "",
-            .network = self.tecton.network,
-            .tecton = self.tecton,
-            .allocator = self.tecton.allocator,
-            .origin_type = self.origin_type,
-            .uuid = self.uuid,
-            .request_id = self.request_id,
-        };
-        defer ctx.deinit();
-        ctx.sendOutput(success, message);
+        self.tecton.replyTo(self.sender_runtime_id, self.origin_type, self.uuid, self.request_id, success, message);
     }
 };
 
 fn allocateState(
-    tecton: *Tecton,
+    tecton: Host,
     kind: TaskKind,
     name: []u8,
     sender: ?*Player,
@@ -78,14 +60,14 @@ fn allocateState(
     return state;
 }
 
-fn freeStateContainer(tecton: *Tecton, state: *WorldLifecycleTask) void {
+fn freeStateContainer(tecton: Host, state: *WorldLifecycleTask) void {
     tecton.allocator.free(state.origin_type);
     tecton.allocator.free(state.request_id);
     tecton.allocator.destroy(state);
 }
 
 fn queueBuild(
-    tecton: *Tecton,
+    tecton: Host,
     kind: TaskKind,
     name: []u8,
     sender: ?*Player,
@@ -104,7 +86,7 @@ fn queueBuild(
 }
 
 pub fn queueCreate(
-    tecton: *Tecton,
+    tecton: Host,
     name: []u8,
     sender: ?*Player,
     origin_type: []const u8,
@@ -115,7 +97,7 @@ pub fn queueCreate(
 }
 
 pub fn queueLoad(
-    tecton: *Tecton,
+    tecton: Host,
     name: []u8,
     sender: ?*Player,
     origin_type: []const u8,
@@ -126,7 +108,7 @@ pub fn queueLoad(
 }
 
 pub fn queueUnload(
-    tecton: *Tecton,
+    tecton: Host,
     world: *World,
     name: []u8,
     sender: ?*Player,
@@ -184,7 +166,7 @@ fn builtVerb(kind: TaskKind) []const u8 {
 fn runBuildTask(state: *WorldLifecycleTask) bool {
     switch (state.stage) {
         .build => {
-            const world = worlds.build(state.tecton, state.name) catch |err| {
+            const world = state.tecton.worlds.build(state.name) catch |err| {
                 var buf: [192]u8 = undefined;
                 const message = std.fmt.bufPrint(
                     &buf,

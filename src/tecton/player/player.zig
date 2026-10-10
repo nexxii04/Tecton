@@ -19,8 +19,13 @@ const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
 const TradeWindowTrait = @import("../entity/traits/trade_window.zig").TradeWindowTrait;
 pub const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
-const Tecton = @import("../tecton.zig").Tecton;
+const contracts = @import("../core/contracts.zig");
+const EcsWorld = @import("../entity/ecs.zig").EcsWorld;
+const events_mod = @import("../events/root.zig");
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
+const World = @import("../world/world.zig").World;
+
+pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
 const MoveDelta = @import("move_delta.zig");
 const Pose = @import("pose.zig").Pose;
 const SharedBroadcast = @import("../transport/shared_broadcast.zig").SharedBroadcast;
@@ -72,7 +77,7 @@ pub const Player = struct {
     entity: Entity,
     connection: *Raknet.Connection,
     network: *NetworkHandler,
-    tecton: *Tecton,
+    tecton: Host,
     login_data: LoginData,
 
     xuid: []const u8,
@@ -109,7 +114,7 @@ pub const Player = struct {
         allocator: std.mem.Allocator,
         connection: *Raknet.Connection,
         network: *NetworkHandler,
-        tecton: *Tecton,
+        tecton: Host,
         loginData: LoginData,
         entity_type: *const EntityType,
     ) !void {

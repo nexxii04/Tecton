@@ -6,7 +6,7 @@ const Protocol = @import("protocol");
 
 const Raknet = @import("Raknet");
 
-const Tecton = @import("../../tecton.zig").Tecton;
+const Host = @import("../../player/player.zig").Host;
 const Player = @import("../../player/player.zig").Player;
 const Chunk = @import("../../world/chunk/chunk.zig").Chunk;
 const DimensionModule = @import("../../world/dimension/dimension.zig");
@@ -14,7 +14,7 @@ const Dimension = DimensionModule.Dimension;
 const generation = @import("./chunk_generation.zig");
 
 const ChunkStreamState = struct {
-    tecton: *Tecton,
+    tecton: Host,
     dimension: *Dimension,
     runtime_id: i64,
     allocator: std.mem.Allocator,

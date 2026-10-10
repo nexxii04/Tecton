@@ -6,6 +6,7 @@ const Tecton = @import("../../tecton.zig").Tecton;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const WorldLifecycle = @import("../../world/world_lifecycle.zig");
+const services = @import("../../server/services.zig");
 const World = @import("../../world/world.zig").World;
 const Command = @import("../command.zig").Command;
 const SubCommand = @import("../command.zig").SubCommand;
@@ -190,7 +191,7 @@ fn handleCreate(raw: *anyopaque) void {
     }
 
     WorldLifecycle.queueCreate(
-        tecton,
+        services.host(tecton),
         owned_name,
         ctx.player,
         ctx.origin_type,
@@ -245,7 +246,7 @@ fn handleLoad(raw: *anyopaque) void {
     }
 
     WorldLifecycle.queueLoad(
-        tecton,
+        services.host(tecton),
         owned_name,
         ctx.player,
         ctx.origin_type,
@@ -316,7 +317,7 @@ fn handleUnload(raw: *anyopaque) void {
     world.unloading = true;
 
     WorldLifecycle.queueUnload(
-        tecton,
+        services.host(tecton),
         world,
         owned_name,
         ctx.player,

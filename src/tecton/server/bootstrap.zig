@@ -5,6 +5,7 @@ const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
 const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
+const services = @import("./services.zig");
 const worlds = @import("worlds.zig");
 const entities = @import("../world/dimension/entities.zig");
 
@@ -117,7 +118,7 @@ pub fn prepare(tecton: *Tecton) !void {
             var dir_it = worlds_dir.iterate();
             while (dir_it.next(tecton.io) catch null) |entry| {
                 if (entry.kind != .directory) continue;
-                _ = worlds.load(tecton, entry.name) catch |err| {
+                _ = worlds.load(services.host(tecton), tecton.paths.worlds, entry.name) catch |err| {
                     Raknet.Logger.ERROR("Failed to load world '{s}': {any}", .{ entry.name, err });
                     continue;
                 };
@@ -129,7 +130,7 @@ pub fn prepare(tecton: *Tecton) !void {
 
         if (tecton.worlds.count() == 0 and tecton.create_default_world) {
             Raknet.Logger.INFO("No worlds found, creating default world", .{});
-            _ = try worlds.load(tecton, "world");
+            _ = try worlds.load(services.host(tecton), tecton.paths.worlds, "world");
         }
     }
 
