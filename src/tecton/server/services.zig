@@ -14,6 +14,7 @@ const Player = @import("../player/player.zig").Player;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const World = @import("../world/world.zig").World;
 const worlds = @import("./worlds.zig");
+const WorldLifecycle = @import("../world/world_lifecycle.zig");
 
 pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
 
@@ -93,7 +94,80 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
         },
         .enchantment = .{ .events = &tecton.events },
         .floating_text = .{ .worlds = query, .ctx = tecton, .refresh_command_enums = refreshFloatingTextCommandEnums },
+        .world_admin = .{
+            .ctx = tecton,
+            .allocator = tecton.allocator,
+            .get_world = getWorld,
+            .has_world = hasWorld,
+            .count_worlds = countWorlds,
+            .op_in_flight = worldOpInFlight,
+            .begin_op = beginWorldOp,
+            .end_op = endOp,
+            .detach_world = detachWorld,
+            .adopt_world = adoptWorld,
+            .collect_world_names = collectWorldNames,
+            .world_dir_exists = worldDirExists,
+            .queue_create = queueWorldCreate,
+            .queue_load = queueWorldLoad,
+            .queue_unload = queueWorldUnload,
+        },
     };
+}
+
+fn getWorld(ctx: *anyopaque, name: []const u8) ?*World {
+    return cast(ctx).worlds.get(name);
+}
+
+fn hasWorld(ctx: *anyopaque, name: []const u8) bool {
+    return cast(ctx).worlds.has(name);
+}
+
+fn countWorlds(ctx: *anyopaque) usize {
+    return cast(ctx).worlds.count();
+}
+
+fn worldOpInFlight(ctx: *anyopaque, name: []const u8) bool {
+    return cast(ctx).worlds.opInFlight(name);
+}
+
+fn beginWorldOp(ctx: *anyopaque, owned_name: []u8) bool {
+    return cast(ctx).worlds.beginOp(owned_name);
+}
+
+fn detachWorld(ctx: *anyopaque, world: *World) void {
+    cast(ctx).worlds.detach(world);
+}
+
+fn collectWorldNames(ctx: *anyopaque, names_allocator: std.mem.Allocator, names: *std.ArrayList([]const u8)) anyerror!void {
+    var it = cast(ctx).worlds.keyIterator();
+    while (it.next()) |key| {
+        try names.append(names_allocator, key.*);
+    }
+}
+
+fn worldDirExists(ctx: *anyopaque, name: []const u8) bool {
+    const tecton = cast(ctx);
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ tecton.paths.worlds, name }) catch return false;
+    if (std.Io.Dir.cwd().openDir(tecton.io, path, .{})) |dir_val| {
+        var dir = dir_val;
+        dir.close(tecton.io);
+        return true;
+    } else |_| {
+        return false;
+    }
+}
+
+fn queueWorldCreate(ctx: *anyopaque, name: []u8, sender: ?*Player, origin_type: []const u8, uuid: [16]u8, request_id: []const u8) anyerror!void {
+    return WorldLifecycle.queueCreate(host(cast(ctx)), name, sender, origin_type, uuid, request_id);
+}
+
+fn queueWorldLoad(ctx: *anyopaque, name: []u8, sender: ?*Player, origin_type: []const u8, uuid: [16]u8, request_id: []const u8) anyerror!void {
+    return WorldLifecycle.queueLoad(host(cast(ctx)), name, sender, origin_type, uuid, request_id);
+}
+
+fn queueWorldUnload(ctx: *anyopaque, world: *World, name: []u8, sender: ?*Player, origin_type: []const u8, uuid: [16]u8, request_id: []const u8) anyerror!void {
+    return WorldLifecycle.queueUnload(host(cast(ctx)), world, name, sender, origin_type, uuid, request_id);
 }
 
 fn commandPermission(ctx: *anyopaque, username: []const u8, xuid: []const u8, permission: []const u8) bool {
@@ -420,4 +494,8 @@ test "command dispatch preserves denial output handler isolation and console per
 
 test "floating text command view resolves refresh at call time and observes later registries" {
     try @import("services_test.zig").Suite(test_scope).case_035();
+}
+
+test "world admin command view resolves registry state at call time" {
+    try @import("services_test.zig").Suite(test_scope).case_036();
 }

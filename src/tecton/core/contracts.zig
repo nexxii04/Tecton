@@ -143,6 +143,80 @@ pub fn FloatingTextHost(comptime World: type) type {
     };
 }
 
+pub fn WorldAdminHost(comptime World: type, comptime Player: type) type {
+    return struct {
+        const Self = @This();
+
+        ctx: *anyopaque,
+        allocator: std.mem.Allocator,
+        get_world: *const fn (*anyopaque, []const u8) ?*World,
+        has_world: *const fn (*anyopaque, []const u8) bool,
+        count_worlds: *const fn (*anyopaque) usize,
+        op_in_flight: *const fn (*anyopaque, []const u8) bool,
+        begin_op: *const fn (*anyopaque, []u8) bool,
+        end_op: *const fn (*anyopaque, []const u8) void,
+        detach_world: *const fn (*anyopaque, *World) void,
+        adopt_world: *const fn (*anyopaque, *World) anyerror!void,
+        collect_world_names: *const fn (*anyopaque, std.mem.Allocator, *std.ArrayList([]const u8)) anyerror!void,
+        world_dir_exists: *const fn (*anyopaque, []const u8) bool,
+        queue_create: *const fn (*anyopaque, []u8, ?*Player, []const u8, [16]u8, []const u8) anyerror!void,
+        queue_load: *const fn (*anyopaque, []u8, ?*Player, []const u8, [16]u8, []const u8) anyerror!void,
+        queue_unload: *const fn (*anyopaque, *World, []u8, ?*Player, []const u8, [16]u8, []const u8) anyerror!void,
+
+        pub fn get(self: Self, name: []const u8) ?*World {
+            return self.get_world(self.ctx, name);
+        }
+
+        pub fn has(self: Self, name: []const u8) bool {
+            return self.has_world(self.ctx, name);
+        }
+
+        pub fn count(self: Self) usize {
+            return self.count_worlds(self.ctx);
+        }
+
+        pub fn opInFlight(self: Self, name: []const u8) bool {
+            return self.op_in_flight(self.ctx, name);
+        }
+
+        pub fn beginOp(self: Self, owned_name: []u8) bool {
+            return self.begin_op(self.ctx, owned_name);
+        }
+
+        pub fn endOp(self: Self, name: []const u8) void {
+            self.end_op(self.ctx, name);
+        }
+
+        pub fn detach(self: Self, world: *World) void {
+            self.detach_world(self.ctx, world);
+        }
+
+        pub fn adopt(self: Self, world: *World) anyerror!void {
+            return self.adopt_world(self.ctx, world);
+        }
+
+        pub fn collectWorldNames(self: Self, names_allocator: std.mem.Allocator, names: *std.ArrayList([]const u8)) anyerror!void {
+            return self.collect_world_names(self.ctx, names_allocator, names);
+        }
+
+        pub fn worldDirExists(self: Self, name: []const u8) bool {
+            return self.world_dir_exists(self.ctx, name);
+        }
+
+        pub fn queueCreate(self: Self, name: []u8, sender: ?*Player, origin_type: []const u8, uuid: [16]u8, request_id: []const u8) anyerror!void {
+            return self.queue_create(self.ctx, name, sender, origin_type, uuid, request_id);
+        }
+
+        pub fn queueLoad(self: Self, name: []u8, sender: ?*Player, origin_type: []const u8, uuid: [16]u8, request_id: []const u8) anyerror!void {
+            return self.queue_load(self.ctx, name, sender, origin_type, uuid, request_id);
+        }
+
+        pub fn queueUnload(self: Self, world: *World, name: []u8, sender: ?*Player, origin_type: []const u8, uuid: [16]u8, request_id: []const u8) anyerror!void {
+            return self.queue_unload(self.ctx, world, name, sender, origin_type, uuid, request_id);
+        }
+    };
+}
+
 pub fn CommandViews(comptime Player: type, comptime World: type, comptime Events: type) type {
     return struct {
         selection: SelectionHost(Player),
@@ -154,6 +228,7 @@ pub fn CommandViews(comptime Player: type, comptime World: type, comptime Events
         world_info: WorldInfoHost(Player, World),
         enchantment: EnchantmentHost(Events),
         floating_text: FloatingTextHost(World),
+        world_admin: WorldAdminHost(World, Player),
     };
 }
 

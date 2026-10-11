@@ -798,5 +798,44 @@ pub fn Suite(comptime scope: type) type {
             try testing.expect(built.worlds.get("later").? == &world);
             try testing.expect(custom.worlds.get("later").? == &world);
         }
+
+        pub fn case_036() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            tecton.paths = .{};
+            tecton.worlds = WorldRegistry.init(allocator);
+            defer tecton.worlds.deinit();
+            defer tecton.worlds.deinitOps();
+            const built = commandViews(&tecton).world_admin;
+
+            var world = try World.init(host(&tecton), allocator, "later", null);
+            defer world.deinit();
+            try tecton.worlds.adopt(&world);
+            defer tecton.worlds.detach(&world);
+            try testing.expect(built.get("later").? == &world);
+            try testing.expect(built.has("later"));
+            try testing.expectEqual(@as(usize, 1), built.count());
+
+            var names: std.ArrayList([]const u8) = .{ .items = &.{}, .capacity = 0 };
+            defer if (names.capacity > 0) names.deinit(allocator);
+            try built.collectWorldNames(allocator, &names);
+            try testing.expectEqual(@as(usize, 1), names.items.len);
+            try testing.expectEqualStrings("later", names.items[0]);
+
+            const owned = try allocator.dupe(u8, "op-probe");
+            try testing.expect(built.beginOp(owned));
+            try testing.expect(built.opInFlight("op-probe"));
+            built.endOp("op-probe");
+            allocator.free(owned);
+            try testing.expect(!built.opInFlight("op-probe"));
+
+            built.detach(&world);
+            try testing.expect(built.get("later") == null);
+            try built.adopt(&world);
+            try testing.expect(built.get("later").? == &world);
+
+            try testing.expect(!built.worldDirExists("definitely-missing-world-dir"));
+        }
     };
 }

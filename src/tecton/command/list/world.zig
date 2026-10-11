@@ -2,19 +2,17 @@ const std = @import("std");
 
 const Raknet = @import("Raknet");
 
-const Tecton = @import("../../tecton.zig").Tecton;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const WorldLifecycle = @import("../../world/world_lifecycle.zig");
-const services = @import("../../server/services.zig");
 const World = @import("../../world/world.zig").World;
 const Command = @import("../command.zig").Command;
 const SubCommand = @import("../command.zig").SubCommand;
 const CommandContext = @import("../context.zig").CommandContext;
+const WorldAdmin = @import("../context.zig").WorldAdmin;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
 
-pub fn register(registry: *CommandRegistry, tecton: *Tecton) !void {
-    const world_enum_idx = try registerWorldEnum(registry, tecton);
+pub fn register(registry: *CommandRegistry, world_admin: WorldAdmin) !void {
+    const world_enum_idx = try registerWorldEnum(registry, world_admin);
     const dim_enum_idx = try registry.registerEnum(.{
         .name = "DimensionName",
         .values = &.{ "overworld", "nether", "end" },
@@ -28,8 +26,6 @@ pub fn register(registry: *CommandRegistry, tecton: *Tecton) !void {
         &.{},
         @ptrCast(&handle),
     );
-
-    cmd.setUserdata(tecton);
 
     try cmd.addOverload(&.{
         .{ .name = "worldName", .param_type = .String, .optional = false, .enum_index = world_enum_idx },
@@ -88,14 +84,11 @@ pub fn register(registry: *CommandRegistry, tecton: *Tecton) !void {
     try registry.registerCommand(cmd);
 }
 
-fn registerWorldEnum(registry: *CommandRegistry, tecton: *Tecton) !u32 {
+fn registerWorldEnum(registry: *CommandRegistry, world_admin: WorldAdmin) !u32 {
     var names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
     defer if (names.capacity > 0) names.deinit(registry.allocator);
 
-    var it = tecton.worlds.keyIterator();
-    while (it.next()) |key| {
-        try names.append(registry.allocator, key.*);
-    }
+    try world_admin.collectWorldNames(registry.allocator, &names);
 
     const values = try registry.allocator.alloc([]const u8, names.items.len);
     @memcpy(values, names.items);
@@ -105,10 +98,6 @@ fn registerWorldEnum(registry: *CommandRegistry, tecton: *Tecton) !u32 {
         .values = values,
         .owned = true,
     });
-}
-
-fn commandServer(ctx: *CommandContext) *Tecton {
-    return @ptrCast(@alignCast(ctx.command_userdata.?));
 }
 
 pub fn isValidWorldName(name: []const u8) bool {
@@ -136,7 +125,7 @@ fn handle(raw: *anyopaque) void {
     const world_name = iter.next() orelse return;
     const dim_name = iter.next() orelse "overworld";
 
-    const world = commandServer(ctx).worlds.get(world_name) orelse {
+    const world = ctx.views.world_admin.get(world_name) orelse {
         ctx.sendOutput(false, "World not found");
         return;
     };
@@ -162,7 +151,7 @@ fn handle(raw: *anyopaque) void {
 
 fn handleCreate(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = commandServer(ctx);
+    const world_admin = ctx.views.world_admin;
     const name = std.mem.trim(u8, ctx.args, " ");
 
     if (name.len == 0) {
@@ -173,39 +162,38 @@ fn handleCreate(raw: *anyopaque) void {
         ctx.sendOutput(false, "Invalid world name: use 1-32 letters, digits, '_' or '-'");
         return;
     }
-    if (tecton.worlds.has(name)) {
+    if (world_admin.has(name)) {
         ctx.sendOutput(false, "World already exists");
         return;
     }
-    if (tecton.worlds.opInFlight(name)) {
+    if (world_admin.opInFlight(name)) {
         ctx.sendOutput(false, "A world operation is already in progress for that name");
         return;
     }
-    if (worldDirectoryExists(tecton, name)) {
+    if (world_admin.worldDirExists(name)) {
         ctx.sendOutput(false, "World already exists on disk; use /world load <name> instead");
         return;
     }
 
-    const owned_name = tecton.allocator.dupe(u8, name) catch {
+    const owned_name = world_admin.allocator.dupe(u8, name) catch {
         ctx.sendOutput(false, "Out of memory");
         return;
     };
-    if (!tecton.worlds.beginOp(owned_name)) {
-        tecton.allocator.free(owned_name);
+    if (!world_admin.beginOp(owned_name)) {
+        world_admin.allocator.free(owned_name);
         ctx.sendOutput(false, "Out of memory");
         return;
     }
 
-    WorldLifecycle.queueCreate(
-        services.host(tecton),
+    world_admin.queueCreate(
         owned_name,
         ctx.player,
         ctx.origin_type,
         ctx.uuid,
         ctx.request_id,
     ) catch {
-        tecton.worlds.endOp(owned_name);
-        tecton.allocator.free(owned_name);
+        world_admin.endOp(owned_name);
+        world_admin.allocator.free(owned_name);
         ctx.sendOutput(false, "Failed to start world creation");
         return;
     };
@@ -217,7 +205,7 @@ fn handleCreate(raw: *anyopaque) void {
 
 fn handleLoad(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = commandServer(ctx);
+    const world_admin = ctx.views.world_admin;
     const name = std.mem.trim(u8, ctx.args, " ");
 
     if (name.len == 0) {
@@ -228,39 +216,38 @@ fn handleLoad(raw: *anyopaque) void {
         ctx.sendOutput(false, "Invalid world name: use 1-32 letters, digits, '_' or '-'");
         return;
     }
-    if (tecton.worlds.has(name)) {
+    if (world_admin.has(name)) {
         ctx.sendOutput(false, "World already loaded");
         return;
     }
-    if (tecton.worlds.opInFlight(name)) {
+    if (world_admin.opInFlight(name)) {
         ctx.sendOutput(false, "A world operation is already in progress for that name");
         return;
     }
-    if (!worldDirectoryExists(tecton, name)) {
+    if (!world_admin.worldDirExists(name)) {
         ctx.sendOutput(false, "World not found on disk");
         return;
     }
 
-    const owned_name = tecton.allocator.dupe(u8, name) catch {
+    const owned_name = world_admin.allocator.dupe(u8, name) catch {
         ctx.sendOutput(false, "Out of memory");
         return;
     };
-    if (!tecton.worlds.beginOp(owned_name)) {
-        tecton.allocator.free(owned_name);
+    if (!world_admin.beginOp(owned_name)) {
+        world_admin.allocator.free(owned_name);
         ctx.sendOutput(false, "Out of memory");
         return;
     }
 
-    WorldLifecycle.queueLoad(
-        services.host(tecton),
+    world_admin.queueLoad(
         owned_name,
         ctx.player,
         ctx.origin_type,
         ctx.uuid,
         ctx.request_id,
     ) catch {
-        tecton.worlds.endOp(owned_name);
-        tecton.allocator.free(owned_name);
+        world_admin.endOp(owned_name);
+        world_admin.allocator.free(owned_name);
         ctx.sendOutput(false, "Failed to start world load");
         return;
     };
@@ -270,21 +257,9 @@ fn handleLoad(raw: *anyopaque) void {
     ctx.sendOutput(true, message);
 }
 
-fn worldDirectoryExists(tecton: *Tecton, name: []const u8) bool {
-    var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ tecton.paths.worlds, name }) catch return false;
-    if (std.Io.Dir.cwd().openDir(tecton.io, path, .{})) |dir_val| {
-        var dir = dir_val;
-        dir.close(tecton.io);
-        return true;
-    } else |_| {
-        return false;
-    }
-}
-
 fn handleUnload(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = commandServer(ctx);
+    const world_admin = ctx.views.world_admin;
     const name = std.mem.trim(u8, ctx.args, " ");
 
     if (name.len == 0) {
@@ -292,38 +267,37 @@ fn handleUnload(raw: *anyopaque) void {
         return;
     }
 
-    const world = tecton.worlds.get(name) orelse {
+    const world = world_admin.get(name) orelse {
         ctx.sendOutput(false, "World not found");
         return;
     };
-    if (tecton.worlds.count() <= 1) {
+    if (world_admin.count() <= 1) {
         ctx.sendOutput(false, "Cannot unload the only world");
         return;
     }
-    if (tecton.worlds.opInFlight(name)) {
+    if (world_admin.opInFlight(name)) {
         ctx.sendOutput(false, "A world operation is already in progress for that name");
         return;
     }
-    if (countPlayersInWorld(tecton, world) > 0) {
+    if (countPlayersInWorld(ctx, world) > 0) {
         ctx.sendOutput(false, "Cannot unload a world with players inside");
         return;
     }
 
-    const owned_name = tecton.allocator.dupe(u8, name) catch {
+    const owned_name = world_admin.allocator.dupe(u8, name) catch {
         ctx.sendOutput(false, "Out of memory");
         return;
     };
-    if (!tecton.worlds.beginOp(owned_name)) {
-        tecton.allocator.free(owned_name);
+    if (!world_admin.beginOp(owned_name)) {
+        world_admin.allocator.free(owned_name);
         ctx.sendOutput(false, "Out of memory");
         return;
     }
 
-    tecton.worlds.detach(world);
+    world_admin.detach(world);
     world.unloading = true;
 
-    WorldLifecycle.queueUnload(
-        services.host(tecton),
+    world_admin.queueUnload(
         world,
         owned_name,
         ctx.player,
@@ -332,11 +306,11 @@ fn handleUnload(raw: *anyopaque) void {
         ctx.request_id,
     ) catch {
         world.unloading = false;
-        tecton.worlds.adopt(world) catch |err| {
+        world_admin.adopt(world) catch |err| {
             Raknet.Logger.ERROR("Failed to restore world '{s}' after unload enqueue failure: {any}", .{ name, err });
         };
-        tecton.worlds.endOp(owned_name);
-        tecton.allocator.free(owned_name);
+        world_admin.endOp(owned_name);
+        world_admin.allocator.free(owned_name);
         ctx.sendOutput(false, "Failed to start world unload");
         return;
     };
@@ -346,9 +320,9 @@ fn handleUnload(raw: *anyopaque) void {
     ctx.sendOutput(true, message);
 }
 
-fn countPlayersInWorld(tecton: *Tecton, world: *World) usize {
+fn countPlayersInWorld(ctx: *CommandContext, world: *World) usize {
     var count: usize = 0;
-    const snapshots = tecton.getPlayerSnapshots();
+    const snapshots = ctx.views.selection.getPlayerSnapshots();
     for (snapshots) |player| {
         if (player.entity.dimension) |dim| {
             if (dim.world == world) {
@@ -373,7 +347,7 @@ fn resolveWorldDimension(world: *World, requested: ?[]const u8) ?*Dimension {
 
 fn handleTp(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = commandServer(ctx);
+    const world_admin = ctx.views.world_admin;
     const usage = "Usage: /world tp <player> <world> [dimension]";
     const trimmed = std.mem.trim(u8, ctx.args, " ");
 
@@ -392,7 +366,7 @@ fn handleTp(raw: *anyopaque) void {
         return;
     }
 
-    const world = tecton.worlds.get(world_token) orelse {
+    const world = world_admin.get(world_token) orelse {
         ctx.sendOutput(false, "World not found");
         return;
     };

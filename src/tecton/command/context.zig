@@ -10,6 +10,7 @@ const World = @import("../world/world.zig").World;
 const Events = @import("../events/root.zig").Events;
 
 pub const CommandViews = contracts.CommandViews(Player, World, Events);
+pub const WorldAdmin = contracts.WorldAdminHost(World, Player);
 
 pub const CommandContext = struct {
     player: ?*Player = null,
