@@ -5,6 +5,143 @@ const TickProfiler = @import("./tick_profiler.zig").TickProfiler;
 const TaskQueue = @import("../tasks/tasks.zig").TaskQueue;
 const ThreadedTaskQueue = @import("../tasks/threaded_tasks.zig").ThreadedTaskQueue;
 
+pub const PermissionQuery = struct {
+    ctx: *anyopaque,
+    has_permission: *const fn (*anyopaque, []const u8, []const u8, []const u8) bool,
+
+    pub fn hasPermission(self: @This(), username: []const u8, xuid: []const u8, permission: []const u8) bool {
+        return self.has_permission(self.ctx, username, xuid, permission);
+    }
+};
+
+pub const PermissionAdmin = struct {
+    ctx: *anyopaque,
+    get_group: *const fn (*anyopaque, []const u8) []const u8,
+    set_group: *const fn (*anyopaque, []const u8, []const u8) anyerror!void,
+    default_group: *const fn (*anyopaque) []const u8,
+
+    pub fn getPlayerGroup(self: @This(), name: []const u8) []const u8 {
+        return self.get_group(self.ctx, name);
+    }
+
+    pub fn setPlayerGroup(self: @This(), name: []const u8, group: []const u8) !void {
+        return self.set_group(self.ctx, name, group);
+    }
+
+    pub fn defaultGroup(self: @This()) []const u8 {
+        return self.default_group(self.ctx);
+    }
+};
+
+pub const BanAdmin = struct {
+    ctx: *anyopaque,
+    is_banned: *const fn (*anyopaque, []const u8) bool,
+    add: *const fn (*anyopaque, []const u8, []const u8, []const u8, []const u8) anyerror!void,
+    remove: *const fn (*anyopaque, []const u8) bool,
+    entry_name: *const fn (*anyopaque, usize) ?[]const u8,
+
+    pub fn isBanned(self: @This(), name: []const u8) bool {
+        return self.is_banned(self.ctx, name);
+    }
+
+    pub fn ban(self: @This(), uuid: []const u8, name: []const u8, source: []const u8, reason: []const u8) !void {
+        return self.add(self.ctx, uuid, name, source, reason);
+    }
+
+    pub fn unban(self: @This(), name: []const u8) bool {
+        return self.remove(self.ctx, name);
+    }
+
+    pub fn entryName(self: @This(), index: usize) ?[]const u8 {
+        return self.entry_name(self.ctx, index);
+    }
+};
+
+pub const ShutdownHost = struct {
+    ctx: *anyopaque,
+    shutdown: *const fn (*anyopaque) anyerror!void,
+};
+
+pub fn SelectionHost(comptime Player: type) type {
+    return struct {
+        ctx: *anyopaque,
+        io: std.Io,
+        get_player_snapshots: *const fn (*anyopaque) []const *Player,
+
+        pub fn getPlayerSnapshots(self: @This()) []const *Player {
+            return self.get_player_snapshots(self.ctx);
+        }
+    };
+}
+
+pub fn AboutHost(comptime Player: type) type {
+    return struct {
+        players: SelectionHost(Player),
+        max_players: *const u32,
+    };
+}
+
+pub fn WorldQuery(comptime World: type) type {
+    return struct {
+        registry: *const std.StringHashMap(*World),
+
+        pub fn get(self: @This(), name: []const u8) ?*World {
+            return self.registry.get(name);
+        }
+
+        pub fn count(self: @This()) usize {
+            return self.registry.count();
+        }
+
+        pub fn keyIterator(self: @This()) std.StringHashMap(*World).KeyIterator {
+            return self.registry.keyIterator();
+        }
+
+        pub fn valueIterator(self: @This()) std.StringHashMap(*World).ValueIterator {
+            return self.registry.valueIterator();
+        }
+    };
+}
+
+pub fn WorldInfoHost(comptime Player: type, comptime World: type) type {
+    return struct {
+        worlds: WorldQuery(World),
+        players: SelectionHost(Player),
+        ctx: *anyopaque,
+        target_tps: *const fn (*anyopaque) f64,
+        current_tps: *const f64,
+        current_mspt: *const f64,
+        current_raknet_mspt: *const f64,
+        current_game_mspt: *const f64,
+        profiler: *const TickProfiler,
+
+        pub fn targetTps(self: @This()) f64 {
+            return self.target_tps(self.ctx);
+        }
+
+        pub fn getPlayerSnapshots(self: @This()) []const *Player {
+            return self.players.getPlayerSnapshots();
+        }
+    };
+}
+
+pub fn EnchantmentHost(comptime Events: type) type {
+    return struct { events: *Events };
+}
+
+pub fn CommandViews(comptime Player: type, comptime World: type, comptime Events: type) type {
+    return struct {
+        selection: SelectionHost(Player),
+        permissions: PermissionQuery,
+        permission_admin: PermissionAdmin,
+        bans: BanAdmin,
+        shutdown: ShutdownHost,
+        about: AboutHost(Player),
+        world_info: WorldInfoHost(Player, World),
+        enchantment: EnchantmentHost(Events),
+    };
+}
+
 pub fn PlayersHost(comptime Player: type) type {
     return struct {
         const Self = @This();

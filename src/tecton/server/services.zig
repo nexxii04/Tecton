@@ -61,6 +61,79 @@ pub fn hostChecked(tecton: *Tecton) HostError!Host {
     };
 }
 
+pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandViews {
+    if (!tecton.network_initialized or tecton.address_stamp != @intFromPtr(tecton)) {
+        std.debug.panic("command views require an initialized Tecton at its fixed address", .{});
+    }
+
+    const selection: contracts.SelectionHost(Player) = .{
+        .ctx = tecton,
+        .io = tecton.io,
+        .get_player_snapshots = getPlayerSnapshots,
+    };
+    const query: contracts.WorldQuery(World) = .{ .registry = &tecton.worlds.by_name };
+
+    return .{
+        .selection = selection,
+        .permissions = .{ .ctx = tecton, .has_permission = commandPermission },
+        .permission_admin = .{ .ctx = tecton, .get_group = getPlayerGroup, .set_group = setPermissionGroup, .default_group = defaultPermissionGroup },
+        .bans = .{ .ctx = tecton, .is_banned = isBanned, .add = addBan, .remove = removeBan, .entry_name = banEntryName },
+        .shutdown = .{ .ctx = tecton, .shutdown = shutdown },
+        .about = .{ .players = selection, .max_players = &tecton.config.max_players },
+        .world_info = .{
+            .worlds = query,
+            .players = selection,
+            .ctx = tecton,
+            .target_tps = targetTps,
+            .current_tps = &tecton.current_tps,
+            .current_mspt = &tecton.current_mspt,
+            .current_raknet_mspt = &tecton.current_raknet_mspt,
+            .current_game_mspt = &tecton.current_game_mspt,
+            .profiler = &tecton.profiler,
+        },
+        .enchantment = .{ .events = &tecton.events },
+    };
+}
+
+fn commandPermission(ctx: *anyopaque, username: []const u8, xuid: []const u8, permission: []const u8) bool {
+    if (permission.len == 0) return true;
+    const tecton = cast(ctx);
+
+    if (tecton.command_permission_checker) |checker| {
+        return checker(tecton.command_permission_userdata, xuid, permission);
+    }
+    return tecton.permission_manager.hasPermission(username, permission);
+}
+
+fn setPermissionGroup(ctx: *anyopaque, name: []const u8, group: []const u8) anyerror!void {
+    return cast(ctx).permission_manager.setPlayerGroup(name, group);
+}
+
+fn defaultPermissionGroup(ctx: *anyopaque) []const u8 {
+    return cast(ctx).permission_manager.default_group;
+}
+
+fn isBanned(ctx: *anyopaque, name: []const u8) bool {
+    return cast(ctx).ban_manager.isBanned(name);
+}
+
+fn addBan(ctx: *anyopaque, uuid: []const u8, name: []const u8, source: []const u8, reason: []const u8) anyerror!void {
+    return cast(ctx).ban_manager.ban(uuid, name, source, reason);
+}
+
+fn removeBan(ctx: *anyopaque, name: []const u8) bool {
+    return cast(ctx).ban_manager.unban(name);
+}
+
+fn banEntryName(ctx: *anyopaque, index: usize) ?[]const u8 {
+    const entries = cast(ctx).ban_manager.entries.items;
+    return if (index < entries.len) entries[index].name else null;
+}
+
+fn shutdown(ctx: *anyopaque) anyerror!void {
+    return cast(ctx).shutdown();
+}
+
 fn cast(ctx: *anyopaque) *Tecton {
     return @ptrCast(@alignCast(ctx));
 }
@@ -144,7 +217,7 @@ fn replyTo(
         .player = sender,
         .args = "",
         .network = tecton.network,
-        .tecton = tecton,
+        .views = commandViews(tecton),
         .allocator = tecton.allocator,
         .origin_type = origin_type,
         .uuid = uuid,
@@ -190,6 +263,9 @@ const test_scope = struct {
     pub const Host = test_owner.Host;
     pub const host = test_owner.host;
     pub const hostChecked = test_owner.hostChecked;
+    pub const commandViews = test_owner.commandViews;
+    pub const CommandContext = test_owner.CommandContext;
+    pub const Command = @import("../command/command.zig").Command;
     pub const Player = test_owner.Player;
     pub const Entity = test_owner.Entity;
     pub const EcsWorld = test_owner.EcsWorld;
@@ -323,4 +399,20 @@ test "profiler pointer sees the member initialized after the host was built" {
 
 test "mob_broadcast_interval is fixed at host construction" {
     try @import("services_test.zig").Suite(test_scope).case_030();
+}
+
+test "command permissions preserve live custom checker priority and manager fallback" {
+    try @import("services_test.zig").Suite(test_scope).case_031();
+}
+
+test "command views observe mutable metrics configuration and paths after construction" {
+    try @import("services_test.zig").Suite(test_scope).case_032();
+}
+
+test "command query views observe registries initialized after construction" {
+    try @import("services_test.zig").Suite(test_scope).case_033();
+}
+
+test "command dispatch preserves denial output handler isolation and console permission bypass" {
+    try @import("services_test.zig").Suite(test_scope).case_034();
 }

@@ -29,6 +29,8 @@ pub fn register(registry: *CommandRegistry, tecton: *Tecton) !void {
         @ptrCast(&handle),
     );
 
+    cmd.setUserdata(tecton);
+
     try cmd.addOverload(&.{
         .{ .name = "worldName", .param_type = .String, .optional = false, .enum_index = world_enum_idx },
     });
@@ -105,6 +107,10 @@ fn registerWorldEnum(registry: *CommandRegistry, tecton: *Tecton) !u32 {
     });
 }
 
+fn commandServer(ctx: *CommandContext) *Tecton {
+    return @ptrCast(@alignCast(ctx.command_userdata.?));
+}
+
 pub fn isValidWorldName(name: []const u8) bool {
     if (name.len == 0 or name.len > 32) return false;
     if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
@@ -130,7 +136,7 @@ fn handle(raw: *anyopaque) void {
     const world_name = iter.next() orelse return;
     const dim_name = iter.next() orelse "overworld";
 
-    const world = ctx.tecton.worlds.get(world_name) orelse {
+    const world = commandServer(ctx).worlds.get(world_name) orelse {
         ctx.sendOutput(false, "World not found");
         return;
     };
@@ -156,7 +162,7 @@ fn handle(raw: *anyopaque) void {
 
 fn handleCreate(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = ctx.tecton;
+    const tecton = commandServer(ctx);
     const name = std.mem.trim(u8, ctx.args, " ");
 
     if (name.len == 0) {
@@ -211,7 +217,7 @@ fn handleCreate(raw: *anyopaque) void {
 
 fn handleLoad(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = ctx.tecton;
+    const tecton = commandServer(ctx);
     const name = std.mem.trim(u8, ctx.args, " ");
 
     if (name.len == 0) {
@@ -278,7 +284,7 @@ fn worldDirectoryExists(tecton: *Tecton, name: []const u8) bool {
 
 fn handleUnload(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = ctx.tecton;
+    const tecton = commandServer(ctx);
     const name = std.mem.trim(u8, ctx.args, " ");
 
     if (name.len == 0) {
@@ -367,7 +373,7 @@ fn resolveWorldDimension(world: *World, requested: ?[]const u8) ?*Dimension {
 
 fn handleTp(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = ctx.tecton;
+    const tecton = commandServer(ctx);
     const usage = "Usage: /world tp <player> <world> [dimension]";
     const trimmed = std.mem.trim(u8, ctx.args, " ");
 

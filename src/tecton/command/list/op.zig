@@ -40,7 +40,7 @@ fn handleOp(raw: *anyopaque) void {
         return;
     }
 
-    const perm_mgr = &ctx.tecton.permission_manager;
+    const perm_mgr = ctx.views.permission_admin;
 
     if (std.mem.eql(u8, perm_mgr.getPlayerGroup(name), "operator")) {
         ctx.sendOutput(false, "Player is already an operator");
@@ -68,14 +68,14 @@ fn handleDeop(raw: *anyopaque) void {
         return;
     }
 
-    const perm_mgr = &ctx.tecton.permission_manager;
+    const perm_mgr = ctx.views.permission_admin;
 
     if (!std.mem.eql(u8, perm_mgr.getPlayerGroup(name), "operator")) {
         ctx.sendOutput(false, "Player is not an operator");
         return;
     }
 
-    perm_mgr.setPlayerGroup(name, perm_mgr.default_group) catch {
+    perm_mgr.setPlayerGroup(name, perm_mgr.defaultGroup()) catch {
         ctx.sendOutput(false, "Failed to revoke operator");
         return;
     };

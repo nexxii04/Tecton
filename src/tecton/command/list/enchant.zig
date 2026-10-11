@@ -161,7 +161,7 @@ fn handle(raw: *anyopaque) void {
             .allow_conflicts = false,
             .source = .command,
             .actor = ctx.player,
-            .events = &ctx.tecton.events,
+            .events = ctx.views.enchantment.events,
         });
 
         switch (outcome) {

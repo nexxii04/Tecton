@@ -6,7 +6,7 @@ const Raknet = @import("Raknet");
 
 const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
 const Player = @import("../player/player.zig").Player;
-const Tecton = @import("../tecton.zig").Tecton;
+pub const CommandViews = @import("context.zig").CommandViews;
 const Command = @import("command.zig").Command;
 const CommandContext = @import("context.zig").CommandContext;
 const CommandHandlerFn = @import("command.zig").CommandHandlerFn;
@@ -113,7 +113,7 @@ pub const CommandRegistry = struct {
     pub fn dispatch(
         self: *CommandRegistry,
         player: ?*Player,
-        tecton: *Tecton,
+        views: CommandViews,
         network: *NetworkHandler,
         command_line: []const u8,
         origin_type: []const u8,
@@ -129,10 +129,7 @@ pub const CommandRegistry = struct {
         };
 
         if (player) |p| {
-            const permitted = if (cmd.permission.len == 0) true else if (tecton.command_permission_checker) |checker|
-                checker(tecton.command_permission_userdata, p.xuid, cmd.permission)
-            else
-                tecton.permission_manager.hasPermission(p.username, cmd.permission);
+            const permitted = views.permissions.hasPermission(p.username, p.xuid, cmd.permission);
             if (!permitted) {
                 return .{ .success = false, .message = "You do not have permission to run this command" };
             }
@@ -142,7 +139,7 @@ pub const CommandRegistry = struct {
             .player = player,
             .args = parsed.args,
             .network = network,
-            .tecton = tecton,
+            .views = views,
             .allocator = self.allocator,
             .command_userdata = cmd.userdata,
             .origin_type = origin_type,
@@ -165,8 +162,8 @@ pub const CommandRegistry = struct {
         return .{ .success = true, .message = "" };
     }
 
-    pub fn dispatchConsole(self: *CommandRegistry, tecton: *Tecton, command_line: []const u8) void {
-        _ = self.dispatch(null, tecton, tecton.network, command_line, "console", .{0} ** 16, "");
+    pub fn dispatchConsole(self: *CommandRegistry, views: CommandViews, network: *NetworkHandler, command_line: []const u8) void {
+        _ = self.dispatch(null, views, network, command_line, "console", .{0} ** 16, "");
     }
 
     pub fn buildAvailableCommandsPacket(self: *CommandRegistry, stream: *BinaryStream) ![]const u8 {

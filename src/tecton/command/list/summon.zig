@@ -75,12 +75,12 @@ fn resolveDimension(ctx: *CommandContext) ?*Dimension {
         if (player.entity.dimension) |dimension| return dimension;
     }
 
-    var world_it = ctx.tecton.worlds.valueIterator();
+    var world_it = ctx.views.world_info.worlds.valueIterator();
     while (world_it.next()) |world| {
         if (world.*.getDimension("overworld")) |dimension| return dimension;
     }
 
-    var fallback_it = ctx.tecton.worlds.valueIterator();
+    var fallback_it = ctx.views.world_info.worlds.valueIterator();
     while (fallback_it.next()) |world| {
         var dimension_it = world.*.dimensions.valueIterator();
         if (dimension_it.next()) |dimension| return dimension.*;

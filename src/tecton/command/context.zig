@@ -5,13 +5,17 @@ const Protocol = @import("protocol");
 
 const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
 const Player = @import("../player/player.zig").Player;
-const Tecton = @import("../tecton.zig").Tecton;
+const contracts = @import("../core/contracts.zig");
+const World = @import("../world/world.zig").World;
+const Events = @import("../events/root.zig").Events;
+
+pub const CommandViews = contracts.CommandViews(Player, World, Events);
 
 pub const CommandContext = struct {
     player: ?*Player = null,
     args: []const u8,
     network: *NetworkHandler,
-    tecton: *Tecton,
+    views: CommandViews,
     allocator: std.mem.Allocator,
     command_userdata: ?*anyopaque = null,
 
@@ -55,7 +59,7 @@ pub const CommandContext = struct {
 
     pub fn resolvePlayer(self: *CommandContext, name: []const u8) ?*Player {
         if (name.len > 0 and name[0] == '@') return self.resolveSelector(name);
-        const snapshots = self.tecton.getPlayerSnapshots();
+        const snapshots = self.views.selection.getPlayerSnapshots();
         for (snapshots) |player| {
             if (std.ascii.eqlIgnoreCase(player.username, name)) return player;
         }
@@ -66,7 +70,7 @@ pub const CommandContext = struct {
         if (name.len >= 2 and name[0] == '@') {
             const kind = name[1];
             if (kind == 'a' or kind == 'e') {
-                const snapshots = self.tecton.getPlayerSnapshots();
+                const snapshots = self.views.selection.getPlayerSnapshots();
                 if (snapshots.len == 0) return null;
                 self.multi_target_buf.clearRetainingCapacity();
                 self.multi_target_buf.appendSlice(self.allocator, snapshots) catch return null;
@@ -91,7 +95,7 @@ pub const CommandContext = struct {
     }
 
     fn nearestPlayer(self: *CommandContext, origin: *Player) ?*Player {
-        const snapshots = self.tecton.getPlayerSnapshots();
+        const snapshots = self.views.selection.getPlayerSnapshots();
         var best: ?*Player = null;
         var best_dist: f32 = std.math.inf(f32);
         for (snapshots) |player| {
@@ -106,14 +110,14 @@ pub const CommandContext = struct {
     }
 
     fn randomPlayer(self: *CommandContext) ?*Player {
-        const snapshots = self.tecton.getPlayerSnapshots();
+        const snapshots = self.views.selection.getPlayerSnapshots();
         if (snapshots.len == 0) return null;
         var spawned_count: usize = 0;
         for (snapshots) |p| {
             if (p.spawned) spawned_count += 1;
         }
         if (spawned_count == 0) return null;
-        const seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Timestamp.now(self.tecton.io, .real).nanoseconds)));
+        const seed: u64 = @truncate(@as(u96, @bitCast(std.Io.Timestamp.now(self.views.selection.io, .real).nanoseconds)));
         const idx = seed % spawned_count;
         var i: usize = 0;
         for (snapshots) |p| {

@@ -57,7 +57,7 @@ fn handleBan(raw: *anyopaque) void {
     const target_name = if (space_idx) |idx| trimmed[0..idx] else trimmed;
     const reason = if (space_idx) |idx| std.mem.trim(u8, trimmed[idx + 1 ..], " ") else "Banned by an operator.";
 
-    var ban_mgr = &ctx.tecton.ban_manager;
+    const ban_mgr = ctx.views.bans;
 
     if (ban_mgr.isBanned(target_name)) {
         ctx.sendOutput(false, "Player is already banned");
@@ -104,7 +104,7 @@ fn handleUnban(raw: *anyopaque) void {
         return;
     }
 
-    var ban_mgr = &ctx.tecton.ban_manager;
+    const ban_mgr = ctx.views.bans;
     if (ban_mgr.unban(trimmed)) {
         var buf: [128]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Unbanned {s}", .{trimmed}) catch return;
@@ -116,9 +116,9 @@ fn handleUnban(raw: *anyopaque) void {
 
 fn handleList(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const ban_mgr = &ctx.tecton.ban_manager;
+    const ban_mgr = ctx.views.bans;
 
-    if (ban_mgr.entries.items.len == 0) {
+    if (ban_mgr.entryName(0) == null) {
         ctx.sendOutput(true, "No banned players");
         return;
     }
@@ -129,7 +129,8 @@ fn handleList(raw: *anyopaque) void {
     @memcpy(buf[pos .. pos + header.len], header);
     pos += header.len;
 
-    for (ban_mgr.entries.items, 0..) |entry, i| {
+    var i: usize = 0;
+    while (ban_mgr.entryName(i)) |name| : (i += 1) {
         if (i > 0) {
             if (pos + 2 < buf.len) {
                 buf[pos] = ',';
@@ -137,9 +138,9 @@ fn handleList(raw: *anyopaque) void {
                 pos += 2;
             }
         }
-        if (pos + entry.name.len < buf.len) {
-            @memcpy(buf[pos .. pos + entry.name.len], entry.name);
-            pos += entry.name.len;
+        if (pos + name.len < buf.len) {
+            @memcpy(buf[pos .. pos + name.len], name);
+            pos += name.len;
         }
     }
     ctx.sendOutput(true, buf[0..pos]);

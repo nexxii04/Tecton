@@ -54,6 +54,7 @@ pub const CommandPermissionChecker = options_mod.CommandPermissionChecker;
 pub const Composition = struct {
     prepare: *const fn (*Tecton) anyerror!void,
     dispatch: *const fn (*anyopaque, *Raknet.Connection, []const []const u8) void,
+    command_views: ?*const fn (*Tecton) @import("./command/registry.zig").CommandViews = null,
 };
 
 pub const ServerOptions = struct {
@@ -264,6 +265,11 @@ pub const Tecton = struct {
 
     pub fn prepare(self: *Tecton) !void {
         return self.composition.prepare(self);
+    }
+
+    pub fn commandViews(self: *Tecton) @import("./command/registry.zig").CommandViews {
+        const build = self.composition.command_views orelse std.debug.panic("composition has no command view builder", .{});
+        return build(self);
     }
 
     pub fn registerCommand(self: *Tecton, command: *@import("./command/command.zig").Command) !void {

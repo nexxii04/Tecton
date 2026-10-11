@@ -36,6 +36,14 @@ pub fn register(registry: *CommandRegistry) !void {
     });
 }
 
+pub fn bind(registry: *CommandRegistry, tecton: *Tecton) void {
+    registry.findCommand("floatingtext").?.setUserdata(tecton);
+}
+
+fn commandServer(ctx: *CommandContext) *Tecton {
+    return @ptrCast(@alignCast(ctx.command_userdata.?));
+}
+
 fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
     ctx.sendOutput(false, "Usage: /floatingtext add <name> <text> | /floatingtext edit <name> <text> | " ++
@@ -82,7 +90,7 @@ fn handleAdd(raw: *anyopaque) void {
         }
         return;
     };
-    ctx.tecton.refreshFloatingTextCommandEnums();
+    commandServer(ctx).refreshFloatingTextCommandEnums();
 
     var msg_buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' created", .{parsed.name}) catch return;
@@ -108,7 +116,7 @@ fn handleEdit(raw: *anyopaque) void {
         return;
     };
 
-    const manager = findManager(ctx.tecton, ctx.player, parsed.name) orelse {
+    const manager = findManager(commandServer(ctx), ctx.player, parsed.name) orelse {
         output.report_not_found(ctx, parsed.name);
         return;
     };
@@ -140,7 +148,7 @@ fn handleList(raw: *anyopaque) void {
         return;
     }
 
-    const tecton = ctx.tecton;
+    const tecton = commandServer(ctx);
     std.Io.Writer.writeAll(&out.writer, "Floating texts:") catch return;
     var world_it = tecton.worlds.valueIterator();
     while (world_it.next()) |world| {
@@ -163,7 +171,7 @@ fn handleInfo(raw: *anyopaque) void {
         return;
     };
 
-    const manager = findManager(ctx.tecton, ctx.player, name) orelse {
+    const manager = findManager(commandServer(ctx), ctx.player, name) orelse {
         output.report_not_found(ctx, name);
         return;
     };
@@ -216,7 +224,7 @@ fn handleRemove(raw: *anyopaque) void {
         return;
     };
 
-    const tecton = ctx.tecton;
+    const tecton = commandServer(ctx);
     const manager = findManager(tecton, ctx.player, name) orelse {
         output.report_not_found(ctx, name);
         return;

@@ -15,7 +15,7 @@ pub fn handleCommandRequest(
 
     const result = tecton.command_registry.dispatch(
         player,
-        tecton,
+        tecton.commandViews(),
         network,
         request.command_line,
         request.origin_type.toString(),

@@ -8,6 +8,8 @@ pub fn Suite(comptime scope: type) type {
         const Host = scope.Host;
         const host = scope.host;
         const hostChecked = scope.hostChecked;
+        const commandViews = scope.commandViews;
+        const Command = scope.Command;
         const Player = scope.Player;
         const Entity = scope.Entity;
         const EcsWorld = scope.EcsWorld;
@@ -619,6 +621,145 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(Interval, 5), h.mob_broadcast_interval);
             tecton.mob_broadcast_interval = 9;
             try std.testing.expectEqual(@as(Interval, 5), h.mob_broadcast_interval);
+        }
+
+        const PermissionProbe = struct {
+            allow: bool,
+            calls: usize = 0,
+            xuid: []const u8 = "",
+            permission: []const u8 = "",
+
+            fn check(raw: ?*anyopaque, xuid: []const u8, permission: []const u8) bool {
+                const self: *@This() = @ptrCast(@alignCast(raw.?));
+                self.calls += 1;
+                self.xuid = xuid;
+                self.permission = permission;
+                return self.allow;
+            }
+        };
+
+        pub fn case_031() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            tecton.command_permission_checker = null;
+            tecton.command_permission_userdata = null;
+            var tmp = testing.tmpDir(.{});
+            defer tmp.cleanup();
+            var path_buf: [512]u8 = undefined;
+            const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{&tmp.sub_path});
+            tecton.permission_manager = PermissionManager.init(testing.io, allocator, path, "member");
+            defer tecton.permission_manager.deinit();
+            const view = commandViews(&tecton).permissions;
+            try testing.expect(view.hasPermission("Limited", "xuid-1", "tecton.command.about"));
+            try testing.expect(!view.hasPermission("Limited", "xuid-1", "tecton.command.op"));
+            try tecton.permission_manager.setPlayerGroup("Operator", "operator");
+            try testing.expect(view.hasPermission("Operator", "xuid-2", "tecton.command.op"));
+            var deny: PermissionProbe = .{ .allow = false };
+            tecton.command_permission_checker = PermissionProbe.check;
+            tecton.command_permission_userdata = &deny;
+            try testing.expect(!view.hasPermission("Operator", "xuid-2", "tecton.command.op"));
+            try testing.expectEqualStrings("xuid-2", deny.xuid);
+            try testing.expectEqualStrings("tecton.command.op", deny.permission);
+            try testing.expectEqual(@as(usize, 1), deny.calls);
+            try testing.expect(view.hasPermission("Operator", "xuid-2", ""));
+            try testing.expectEqual(@as(usize, 1), deny.calls);
+            var allow: PermissionProbe = .{ .allow = true };
+            tecton.command_permission_userdata = &allow;
+            try testing.expect(view.hasPermission("Limited", "xuid-1", "tecton.command.op"));
+            try testing.expectEqual(@as(usize, 1), allow.calls);
+            tecton.command_permission_checker = null;
+            try testing.expect(!view.hasPermission("Limited", "xuid-1", "tecton.command.op"));
+            try tecton.permission_manager.setPlayerGroup("Limited", "operator");
+            try testing.expect(view.hasPermission("Limited", "xuid-1", "tecton.command.op"));
+        }
+
+        pub fn case_032() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            const views = commandViews(&tecton);
+
+            tecton.current_tps = 17.5;
+            tecton.current_mspt = 2.25;
+            tecton.current_raknet_mspt = 0.5;
+            tecton.current_game_mspt = 1.75;
+            tecton.profiler = .{};
+            tecton.profiler.slow_ticks = 3;
+            tecton.config.max_tps = 30;
+            tecton.config.max_players = 90;
+
+            try testing.expectEqual(@as(f64, 17.5), views.world_info.current_tps.*);
+            try testing.expectEqual(@as(f64, 2.25), views.world_info.current_mspt.*);
+            try testing.expectEqual(@as(f64, 0.5), views.world_info.current_raknet_mspt.*);
+            try testing.expectEqual(@as(f64, 1.75), views.world_info.current_game_mspt.*);
+            try testing.expectEqual(@as(u64, 3), views.world_info.profiler.slow_ticks);
+            try testing.expectEqual(@as(f64, 30), views.world_info.targetTps());
+            try testing.expectEqual(@as(u32, 90), views.about.max_players.*);
+            try testing.expect(views.enchantment.events == &tecton.events);
+        }
+
+        pub fn case_033() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            const views = commandViews(&tecton);
+
+            tecton.worlds = WorldRegistry.init(allocator);
+            defer tecton.worlds.deinit();
+            defer tecton.worlds.deinitOps();
+            var world = try World.init(host(&tecton), allocator, "later", null);
+            defer world.deinit();
+            try tecton.worlds.adopt(&world);
+            defer tecton.worlds.detach(&world);
+            try testing.expect(views.world_info.worlds.get("later").? == &world);
+            try testing.expectEqual(@as(usize, 1), views.world_info.worlds.count());
+        }
+
+        fn dispatched(raw: *anyopaque) void {
+            const ctx: *scope.CommandContext = @ptrCast(@alignCast(raw));
+            const calls: *usize = @ptrCast(@alignCast(ctx.command_userdata.?));
+            calls.* += 1;
+        }
+
+        pub fn case_034() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+
+            tecton.command_permission_checker = null;
+            tecton.command_permission_userdata = null;
+            var tmp = testing.tmpDir(.{});
+            defer tmp.cleanup();
+            var path_buf: [512]u8 = undefined;
+            const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{&tmp.sub_path});
+            tecton.permission_manager = PermissionManager.init(testing.io, allocator, path, "member");
+            defer tecton.permission_manager.deinit();
+            var registry = CommandRegistry.init(allocator);
+            defer registry.deinit();
+            var calls: usize = 0;
+            const command = try Command.init(allocator, "restricted", "test", "tecton.command.op", &.{}, dispatched);
+            command.setUserdata(&calls);
+            try registry.registerCommand(command);
+            var player: Player = undefined;
+            player.username = "Limited";
+            player.xuid = "xuid-limited";
+            const views = commandViews(&tecton);
+            const denied = registry.dispatch(&player, views, &stub, "restricted", "player", .{0} ** 16, "req");
+            try testing.expect(!denied.success);
+            try testing.expectEqualStrings("You do not have permission to run this command", denied.message);
+            try testing.expectEqual(@as(usize, 0), calls);
+            var probe: PermissionProbe = .{ .allow = true };
+            tecton.command_permission_checker = PermissionProbe.check;
+            tecton.command_permission_userdata = &probe;
+            const allowed = registry.dispatch(&player, views, &stub, "restricted", "player", .{0} ** 16, "req");
+            try testing.expect(allowed.success);
+            try testing.expectEqual(@as(usize, 1), calls);
+            try testing.expectEqual(@as(usize, 1), probe.calls);
+            probe.allow = false;
+            registry.dispatchConsole(views, &stub, "restricted");
+            try testing.expectEqual(@as(usize, 2), calls);
+            try testing.expectEqual(@as(usize, 1), probe.calls);
         }
     };
 }

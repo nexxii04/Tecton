@@ -81,11 +81,11 @@ fn broadcastLevelEvent(ctx: *CommandContext, event: Protocol.LevelEvent, positio
 fn resolveWeatherDimension(ctx: *CommandContext) ?*Dimension {
     if (ctx.player) |player| return player.entity.dimension;
 
-    const tecton = ctx.tecton;
-    if (tecton.worlds.get("world")) |world| {
+    const worlds = ctx.views.world_info.worlds;
+    if (worlds.get("world")) |world| {
         if (world.getDimension("overworld")) |dimension| return dimension;
     }
-    var worlds_it = tecton.worlds.valueIterator();
+    var worlds_it = worlds.valueIterator();
     const world_entry = worlds_it.next() orelse return null;
     var dims_it = world_entry.*.dimensions.valueIterator();
     const dim_entry = dims_it.next() orelse return null;

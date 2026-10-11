@@ -23,6 +23,6 @@ fn handle(raw: *anyopaque) void {
     } else {
         Raknet.Logger.INFO("Server stop requested by Console", .{});
     }
-    const tecton = ctx.tecton;
-    tecton.shutdown() catch {};
+    const view = ctx.views.shutdown;
+    view.shutdown(view.ctx) catch {};
 }
