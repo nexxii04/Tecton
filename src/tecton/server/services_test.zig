@@ -761,5 +761,42 @@ pub fn Suite(comptime scope: type) type {
             try testing.expectEqual(@as(usize, 2), calls);
             try testing.expectEqual(@as(usize, 1), probe.calls);
         }
+
+        pub fn case_035() !void {
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            tecton.worlds = WorldRegistry.init(allocator);
+            defer tecton.worlds.deinit();
+            defer tecton.worlds.deinitOps();
+            const built = commandViews(&tecton).floating_text;
+
+            const Probe = struct {
+                calls: usize = 0,
+
+                fn refresh(raw: *anyopaque) void {
+                    const self: *@This() = @ptrCast(@alignCast(raw));
+                    self.calls += 1;
+                }
+            };
+            var probe: Probe = .{};
+            const View = @TypeOf(built);
+            const custom: View = .{
+                .worlds = built.worlds,
+                .ctx = &probe,
+                .refresh_command_enums = Probe.refresh,
+            };
+            custom.refreshCommandEnums();
+            try testing.expectEqual(@as(usize, 1), probe.calls);
+            custom.refreshCommandEnums();
+            try testing.expectEqual(@as(usize, 2), probe.calls);
+
+            var world = try World.init(host(&tecton), allocator, "later", null);
+            defer world.deinit();
+            try tecton.worlds.adopt(&world);
+            defer tecton.worlds.detach(&world);
+            try testing.expect(built.worlds.get("later").? == &world);
+            try testing.expect(custom.worlds.get("later").? == &world);
+        }
     };
 }

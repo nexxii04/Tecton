@@ -2,8 +2,6 @@ const std = @import("std");
 
 const Protocol = @import("protocol");
 
-const Tecton = @import("../../tecton.zig").Tecton;
-const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const FloatingTextManager = @import("../../entity/floating_text.zig").FloatingTextManager;
 const registration = @import("floating_text_registration.zig");
@@ -34,14 +32,6 @@ pub fn register(registry: *CommandRegistry) !void {
         .list = &handleList,
         .info = &handleInfo,
     });
-}
-
-pub fn bind(registry: *CommandRegistry, tecton: *Tecton) void {
-    registry.findCommand("floatingtext").?.setUserdata(tecton);
-}
-
-fn commandServer(ctx: *CommandContext) *Tecton {
-    return @ptrCast(@alignCast(ctx.command_userdata.?));
 }
 
 fn handle(raw: *anyopaque) void {
@@ -90,7 +80,7 @@ fn handleAdd(raw: *anyopaque) void {
         }
         return;
     };
-    commandServer(ctx).refreshFloatingTextCommandEnums();
+    ctx.views.floating_text.refreshCommandEnums();
 
     var msg_buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' created", .{parsed.name}) catch return;
@@ -116,7 +106,7 @@ fn handleEdit(raw: *anyopaque) void {
         return;
     };
 
-    const manager = findManager(commandServer(ctx), ctx.player, parsed.name) orelse {
+    const manager = findManager(ctx, parsed.name) orelse {
         output.report_not_found(ctx, parsed.name);
         return;
     };
@@ -148,9 +138,9 @@ fn handleList(raw: *anyopaque) void {
         return;
     }
 
-    const tecton = commandServer(ctx);
+    const worlds = ctx.views.floating_text.worlds;
     std.Io.Writer.writeAll(&out.writer, "Floating texts:") catch return;
-    var world_it = tecton.worlds.valueIterator();
+    var world_it = worlds.valueIterator();
     while (world_it.next()) |world| {
         var dimension_it = world.*.dimensions.valueIterator();
         while (dimension_it.next()) |dimension| {
@@ -171,7 +161,7 @@ fn handleInfo(raw: *anyopaque) void {
         return;
     };
 
-    const manager = findManager(commandServer(ctx), ctx.player, name) orelse {
+    const manager = findManager(ctx, name) orelse {
         output.report_not_found(ctx, name);
         return;
     };
@@ -224,8 +214,7 @@ fn handleRemove(raw: *anyopaque) void {
         return;
     };
 
-    const tecton = commandServer(ctx);
-    const manager = findManager(tecton, ctx.player, name) orelse {
+    const manager = findManager(ctx, name) orelse {
         output.report_not_found(ctx, name);
         return;
     };
@@ -234,15 +223,15 @@ fn handleRemove(raw: *anyopaque) void {
         ctx.sendOutput(false, "Failed to remove floating text");
         return;
     };
-    tecton.refreshFloatingTextCommandEnums();
+    ctx.views.floating_text.refreshCommandEnums();
 
     var msg_buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "Floating text '{s}' removed", .{name}) catch return;
     ctx.sendOutput(true, msg);
 }
 
-fn findManager(tecton: *Tecton, player: ?*Player, name: []const u8) ?*FloatingTextManager {
-    if (player) |p| {
+fn findManager(ctx: *CommandContext, name: []const u8) ?*FloatingTextManager {
+    if (ctx.player) |p| {
         if (p.entity.dimension) |dimension| {
             if (dimension.floating_texts) |manager| {
                 if (manager.find(name) != null) return manager;
@@ -250,7 +239,7 @@ fn findManager(tecton: *Tecton, player: ?*Player, name: []const u8) ?*FloatingTe
         }
     }
 
-    var world_it = tecton.worlds.valueIterator();
+    var world_it = ctx.views.floating_text.worlds.valueIterator();
     while (world_it.next()) |world| {
         var dimension_it = world.*.dimensions.valueIterator();
         while (dimension_it.next()) |dimension| {

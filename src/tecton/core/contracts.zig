@@ -129,6 +129,20 @@ pub fn EnchantmentHost(comptime Events: type) type {
     return struct { events: *Events };
 }
 
+pub fn FloatingTextHost(comptime World: type) type {
+    return struct {
+        const Self = @This();
+
+        worlds: WorldQuery(World),
+        ctx: *anyopaque,
+        refresh_command_enums: *const fn (*anyopaque) void,
+
+        pub fn refreshCommandEnums(self: Self) void {
+            self.refresh_command_enums(self.ctx);
+        }
+    };
+}
+
 pub fn CommandViews(comptime Player: type, comptime World: type, comptime Events: type) type {
     return struct {
         selection: SelectionHost(Player),
@@ -139,6 +153,7 @@ pub fn CommandViews(comptime Player: type, comptime World: type, comptime Events
         about: AboutHost(Player),
         world_info: WorldInfoHost(Player, World),
         enchantment: EnchantmentHost(Events),
+        floating_text: FloatingTextHost(World),
     };
 }
 

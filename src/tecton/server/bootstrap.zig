@@ -171,7 +171,6 @@ pub fn prepare(tecton: *Tecton) !void {
         try cmd.register(&tecton.command_registry);
     }
 
-    @import("../command/list/floating_text.zig").bind(&tecton.command_registry, tecton);
     try @import("../command/list/worlds.zig").register(&tecton.command_registry, tecton);
     try @import("../command/list/world.zig").register(&tecton.command_registry, tecton);
     tecton.prepared = true;

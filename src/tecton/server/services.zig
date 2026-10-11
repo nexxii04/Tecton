@@ -92,6 +92,7 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
             .profiler = &tecton.profiler,
         },
         .enchantment = .{ .events = &tecton.events },
+        .floating_text = .{ .worlds = query, .ctx = tecton, .refresh_command_enums = refreshFloatingTextCommandEnums },
     };
 }
 
@@ -415,4 +416,8 @@ test "command query views observe registries initialized after construction" {
 
 test "command dispatch preserves denial output handler isolation and console permission bypass" {
     try @import("services_test.zig").Suite(test_scope).case_034();
+}
+
+test "floating text command view resolves refresh at call time and observes later registries" {
+    try @import("services_test.zig").Suite(test_scope).case_035();
 }
