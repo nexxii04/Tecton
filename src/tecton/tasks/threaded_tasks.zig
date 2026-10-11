@@ -287,6 +287,14 @@ test "bursts of completions drain without losing work" {
     try @import("threaded_tasks_test.zig").Suite(test_scope).case_010();
 }
 
+test "task queue deinit without start does not access uninitialized rings" {
+    try @import("threaded_tasks_test.zig").Suite(test_scope).case_011();
+}
+
+test "task queue deinit after stop preserves completed task cleanup" {
+    try @import("threaded_tasks_test.zig").Suite(test_scope).case_012();
+}
+
 const helper_owner = @This();
 const helper_scope = struct {
     pub const std = helper_owner.std;

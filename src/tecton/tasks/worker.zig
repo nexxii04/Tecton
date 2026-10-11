@@ -38,11 +38,15 @@ pub fn Methods(comptime scope: type) type {
             if (self.shards.len > 0) self.allocator.free(self.shards);
             self.shards = &.{};
 
-            while (self.completed_input.pop()) |task| {
-                if (task.cleanup) |c_fn| c_fn(task.ctx);
+            if (self.completed_input.slots.len > 0) {
+                while (self.completed_input.pop()) |task| {
+                    if (task.cleanup) |c_fn| c_fn(task.ctx);
+                }
             }
-            while (self.completed_world.pop()) |task| {
-                if (task.cleanup) |c_fn| c_fn(task.ctx);
+            if (self.completed_world.slots.len > 0) {
+                while (self.completed_world.pop()) |task| {
+                    if (task.cleanup) |c_fn| c_fn(task.ctx);
+                }
             }
             self.completed_input.deinit(self.allocator);
             self.completed_world.deinit(self.allocator);
@@ -99,6 +103,7 @@ pub fn Methods(comptime scope: type) type {
         }
 
         pub fn drainCompletedRing(self: *ThreadedTaskQueue, ring: *MpmcRing(ThreadedTask), budget_ns: u64) void {
+            if (ring.slots.len == 0) return;
             const drain_start = std.Io.Timestamp.now(self.io, .awake);
             while (ring.pop()) |task| {
                 if (task.callback) |cb| cb(task.ctx);
