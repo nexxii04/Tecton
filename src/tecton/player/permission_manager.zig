@@ -78,15 +78,25 @@ pub const PermissionManager = struct {
     pub fn setPlayerGroup(self: *PermissionManager, player_name: []const u8, group_name: []const u8) !void {
         if (!self.groups.contains(group_name)) return error.GroupNotFound;
 
-        if (self.player_groups.get(player_name)) |old| {
-            self.allocator.free(old);
-            _ = self.player_groups.remove(player_name);
-        }
-
-        const key = try self.allocator.dupe(u8, player_name);
         const val = try self.allocator.dupe(u8, group_name);
-        try self.player_groups.put(key, val);
-        self.save();
+        errdefer self.allocator.free(val);
+        if (self.player_groups.getPtr(player_name)) |entry| {
+            const old = entry.*;
+            entry.* = val;
+            self.save() catch |err| {
+                entry.* = old;
+                return err;
+            };
+            self.allocator.free(old);
+        } else {
+            const key = try self.allocator.dupe(u8, player_name);
+            errdefer self.allocator.free(key);
+            try self.player_groups.put(key, val);
+            self.save() catch |err| {
+                _ = self.player_groups.remove(key);
+                return err;
+            };
+        }
     }
 
     fn createDefaults(self: *PermissionManager) void {
@@ -96,7 +106,9 @@ pub const PermissionManager = struct {
         self.createGroup("operator", &.{
             "*",
         }) catch {};
-        self.save();
+        self.save() catch |err| {
+            std.debug.print("Failed to save permissions {s}: {s}\n", .{ self.path, @errorName(err) });
+        };
     }
 
     fn createGroup(self: *PermissionManager, name: []const u8, perms: []const []const u8) !void {
@@ -178,50 +190,57 @@ pub const PermissionManager = struct {
         }
     }
 
-    fn save(self: *PermissionManager) void {
-        const file = std.Io.Dir.cwd().openFile(self.io, self.path, .{}) catch return;
-        defer file.close(self.io);
-
-        var write_buf: [4096]u8 = undefined;
-        var writer = file.writer(self.io, &write_buf).interface;
-        writer.writeAll("{\n  \"groups\": {\n") catch return;
+    fn save(self: *PermissionManager) !void {
+        var out: std.Io.Writer.Allocating = .init(self.allocator);
+        defer out.deinit();
+        const writer = &out.writer;
+        try writer.writeAll("{\n  \"groups\": {\n");
         var gi: usize = 0;
         var git = self.groups.iterator();
         while (git.next()) |entry| {
-            var buf: [128]u8 = undefined;
-            const header = std.fmt.bufPrint(&buf, "    \"{s}\": [\n", .{entry.key_ptr.*}) catch continue;
-            writer.writeAll(header) catch continue;
+            try writer.print("    \"{s}\": [\n", .{entry.key_ptr.*});
 
             var pi: usize = 0;
             const perm_count = entry.value_ptr.*.permissions.count();
             var pit = entry.value_ptr.*.permissions.keyIterator();
             while (pit.next()) |perm| {
-                var pbuf: [256]u8 = undefined;
                 const comma: []const u8 = if (pi + 1 < perm_count) "," else "";
-                const line = std.fmt.bufPrint(&pbuf, "      \"{s}\"{s}\n", .{ perm.*, comma }) catch continue;
-                writer.writeAll(line) catch continue;
+                try writer.print("      \"{s}\"{s}\n", .{ perm.*, comma });
                 pi += 1;
             }
 
             gi += 1;
             if (gi < self.groups.count()) {
-                writer.writeAll("    ],\n") catch continue;
+                try writer.writeAll("    ],\n");
             } else {
-                writer.writeAll("    ]\n") catch continue;
+                try writer.writeAll("    ]\n");
             }
         }
 
-        writer.writeAll("  },\n  \"players\": {\n") catch return;
+        try writer.writeAll("  },\n  \"players\": {\n");
         var pli: usize = 0;
         var plit = self.player_groups.iterator();
         while (plit.next()) |entry| {
-            var buf: [256]u8 = undefined;
             pli += 1;
             const comma: []const u8 = if (pli < self.player_groups.count()) "," else "";
-            const line = std.fmt.bufPrint(&buf, "    \"{s}\": \"{s}\"{s}\n", .{ entry.key_ptr.*, entry.value_ptr.*, comma }) catch continue;
-            writer.writeAll(line) catch continue;
+            try writer.print("    \"{s}\": \"{s}\"{s}\n", .{ entry.key_ptr.*, entry.value_ptr.*, comma });
         }
-        writer.writeAll("  }\n}\n") catch return;
+        try writer.writeAll("  }\n}\n");
+
+        const permissions = if (std.Io.Dir.cwd().statFile(self.io, self.path, .{})) |stat| blk: {
+            if (stat.permissions.readOnly()) return error.AccessDenied;
+            break :blk stat.permissions;
+        } else |err| switch (err) {
+            error.FileNotFound => std.Io.File.Permissions.default_file,
+            else => return err,
+        };
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, self.path, .{ .replace = true, .permissions = permissions });
+        defer atomic.deinit(self.io);
+        var file_writer = atomic.file.writer(self.io, &.{});
+        try file_writer.interface.writeAll(out.written());
+        try file_writer.interface.flush();
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
     }
 };
 
@@ -229,8 +248,36 @@ test "permission manager loads existing groups and assignments without rewriting
     try @import("permission_manager_test.zig").test_existing_permissions(PermissionManager);
 }
 
+test "permission manager persists a large permissions document" {
+    try @import("permission_manager_test.zig").test_large_permissions(PermissionManager);
+}
+
+test "permission manager preserves legacy bytes through a save and reload round trip" {
+    try @import("permission_manager_test.zig").test_format_round_trip(PermissionManager);
+}
+
+test "permission manager creates missing permissions and persists assignments" {
+    try @import("permission_manager_test.zig").test_missing_permissions(PermissionManager);
+}
+
+test "permission manager preserves disk and memory after a partial write failure" {
+    try @import("permission_manager_test.zig").test_failed_write(PermissionManager);
+}
+
+test "permission manager rejects read only permissions without changing assignments" {
+    try @import("permission_manager_test.zig").test_read_only(PermissionManager);
+}
+
+test "permission manager preserves the original file when replacement fails" {
+    try @import("permission_manager_test.zig").test_failed_replace(PermissionManager);
+}
+
 test "permission manager defaults restrict players to the member group" {
-    var mgr = PermissionManager.init(std.testing.io, std.testing.allocator, "test-permissions-missing.json", "member");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [512]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path});
+    var mgr = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
     defer mgr.deinit();
 
     try std.testing.expect(mgr.getPlayerGroup("alice").len > 0);

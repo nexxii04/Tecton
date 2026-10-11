@@ -177,6 +177,56 @@ pub fn prepare(tecton: *Tecton) !void {
     if (tecton.prepare_callback) |callback| callback(tecton.lifecycle_userdata);
 }
 
+test "op and deop persist permission changes across a reload" {
+    const Op = @import("../command/list/op.zig");
+    Raknet.Logger.init(std.heap.page_allocator);
+    const PermissionManager = @TypeOf(@as(Tecton, undefined).permission_manager);
+    const CommandRegistry = @TypeOf(@as(Tecton, undefined).command_registry);
+    const CommandViews = @typeInfo(@TypeOf(services.commandViews)).@"fn".return_type.?;
+    const NetworkHandler = std.meta.Child(@TypeOf(@as(Tecton, undefined).network));
+    const fixture = "{\"groups\":{\"member\":[\"tecton.command.about\"],\"operator\":[\"*\"]},\"players\":{\"Alice\":\"member\",\"Bob\":\"operator\"}}";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "permissions.json", .data = fixture });
+    var path_buf: [512]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path});
+    var manager = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
+    defer manager.deinit();
+    var registry = CommandRegistry.init(std.testing.allocator);
+    defer registry.deinit();
+    try Op.register(&registry);
+    const Adapter = struct {
+        fn get(raw: *anyopaque, name: []const u8) []const u8 {
+            const mgr: *PermissionManager = @ptrCast(@alignCast(raw));
+            return mgr.getPlayerGroup(name);
+        }
+        fn set(raw: *anyopaque, name: []const u8, group: []const u8) !void {
+            const mgr: *PermissionManager = @ptrCast(@alignCast(raw));
+            try mgr.setPlayerGroup(name, group);
+        }
+        fn default(raw: *anyopaque) []const u8 {
+            const mgr: *PermissionManager = @ptrCast(@alignCast(raw));
+            return mgr.default_group;
+        }
+    };
+    var views: CommandViews = undefined;
+    views.permission_admin = .{ .ctx = &manager, .get_group = Adapter.get, .set_group = Adapter.set, .default_group = Adapter.default };
+    var network: NetworkHandler = undefined;
+    registry.dispatchConsole(views, &network, "/op Alice");
+    registry.dispatchConsole(views, &network, "/deop Bob");
+    try std.testing.expectEqualStrings("operator", manager.getPlayerGroup("Alice"));
+    try std.testing.expectEqualStrings("member", manager.getPlayerGroup("Bob"));
+    const data = try tmp.dir.readFileAlloc(std.testing.io, "permissions.json", std.testing.allocator, .limited(1024 * 1024));
+    defer std.testing.allocator.free(data);
+    try std.testing.expect(!std.mem.eql(u8, fixture, data));
+    var loaded = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
+    defer loaded.deinit();
+    try std.testing.expectEqualStrings("operator", loaded.getPlayerGroup("Alice"));
+    try std.testing.expectEqualStrings("member", loaded.getPlayerGroup("Bob"));
+    try std.testing.expect(loaded.hasPermission("Alice", "tecton.command.op"));
+    try std.testing.expect(!loaded.hasPermission("Bob", "tecton.command.op"));
+}
+
 fn ecsDrop(context: *anyopaque, _: EcsEntityId, position: Protocol.Vector3f, item: ItemDrop) void {
     const tecton: *Tecton = @ptrCast(@alignCast(context));
     const dimension = tecton.worlds.get("world") orelse return;
