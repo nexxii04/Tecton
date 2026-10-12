@@ -1,66 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const Kind = enum(u8) {
-    subchunks,
-    block_entities,
-    entities,
-};
+const key_types = @import("keys.zig");
+const stats_mod = @import("stats.zig");
 
-pub const Key = struct {
-    kind: Kind,
-    dim: u8 = 0,
-    x: i32 = 0,
-    z: i32 = 0,
-};
-
-pub fn chunkKey(kind: Kind, dim_index: i32, x: i32, z: i32) Key {
-    return .{ .kind = kind, .dim = @intCast(@as(u32, @bitCast(dim_index)) & 0xff), .x = x, .z = z };
-}
-
-pub const Put = struct { key: []u8, value: []u8 };
-
-pub const Record = struct {
-    puts: std.ArrayListUnmanaged(Put) = .empty,
-    deletes: std.ArrayListUnmanaged([]u8) = .empty,
-    bytes: usize = 0,
-
-    pub fn addPut(self: *Record, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {
-        const owned_key = try allocator.dupe(u8, key);
-        errdefer allocator.free(owned_key);
-        const owned_value = try allocator.dupe(u8, value);
-        errdefer allocator.free(owned_value);
-        try self.puts.append(allocator, .{ .key = owned_key, .value = owned_value });
-        self.bytes += owned_key.len + owned_value.len;
-    }
-
-    pub fn addDelete(self: *Record, allocator: std.mem.Allocator, key: []const u8) !void {
-        const owned_key = try allocator.dupe(u8, key);
-        errdefer allocator.free(owned_key);
-        try self.deletes.append(allocator, owned_key);
-        self.bytes += owned_key.len;
-    }
-
-    pub fn isEmpty(self: *const Record) bool {
-        return self.puts.items.len == 0 and self.deletes.items.len == 0;
-    }
-
-    pub fn deinit(self: *Record, allocator: std.mem.Allocator) void {
-        for (self.puts.items) |put| {
-            allocator.free(put.key);
-            allocator.free(put.value);
-        }
-        for (self.deletes.items) |key| allocator.free(key);
-        self.puts.deinit(allocator);
-        self.deletes.deinit(allocator);
-        self.* = .{};
-    }
-};
-
-pub const Sink = struct {
-    ctx: *anyopaque,
-    write: *const fn (ctx: *anyopaque, puts: []const Put, deletes: []const []u8) anyerror!void,
-};
+pub const Kind = key_types.Kind;
+pub const Key = key_types.Key;
+pub const chunkKey = key_types.chunkKey;
+pub const Put = key_types.Put;
+pub const Record = key_types.Record;
+pub const Sink = stats_mod.Sink;
+pub const Stats = stats_mod.Stats;
 
 pub const default_max_pending_bytes: usize = 16 * 1024 * 1024;
 const max_write_attempts: u8 = 3;
@@ -86,25 +36,6 @@ const KeyContext = struct {
     pub fn eql(_: KeyContext, a: Key, b: Key) bool {
         return a.kind == b.kind and a.dim == b.dim and a.x == b.x and a.z == b.z;
     }
-};
-
-pub const Stats = struct {
-    written: u64 = 0,
-    dropped: u64 = 0,
-    retries: u64 = 0,
-    keyed: u64 = 0,
-
-    coalesced: u64 = 0,
-
-    requeued: u64 = 0,
-    ordered: u64 = 0,
-
-    rejected: u64 = 0,
-    pending_now: usize = 0,
-    pending_peak: usize = 0,
-    reads_lock_free: u64 = 0,
-    reads_locked: u64 = 0,
-    reads_waited: u64 = 0,
 };
 
 pub const Writer = struct {
@@ -519,45 +450,53 @@ const test_scope = struct {
 };
 
 test "keyed enqueues coalesce into a single pending slot" {
-    try @import("persistence_test.zig").Suite(test_scope).case_000();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_000();
 }
 
 test "a record still being written counts as pending" {
-    try @import("persistence_test.zig").Suite(test_scope).case_001();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_001();
 }
 
 test "awaitKeys returns only after the pending write lands" {
-    try @import("persistence_test.zig").Suite(test_scope).case_002();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_002();
 }
 
 test "awaitKeys checks every key in its list" {
-    try @import("persistence_test.zig").Suite(test_scope).case_003();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_003();
 }
 
 test "awaitKeys does not wait for a key outside its list" {
-    try @import("persistence_test.zig").Suite(test_scope).case_004();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_004();
 }
 
 test "stats tell a lock-free read from a locked one and from a waiting one" {
-    try @import("persistence_test.zig").Suite(test_scope).case_005();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_005();
 }
 
 test "stats count coalesced, ordered and rejected records" {
-    try @import("persistence_test.zig").Suite(test_scope).case_006();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_006();
 }
 
 test "enqueue reports a full queue instead of growing without bound" {
-    try @import("persistence_test.zig").Suite(test_scope).case_007();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_007();
 }
 
 test "a failed write is retried before being reported" {
-    try @import("persistence_test.zig").Suite(test_scope).case_008();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_008();
 }
 
 test "a write that never succeeds is reported and the slot released" {
-    try @import("persistence_test.zig").Suite(test_scope).case_009();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_009();
 }
 
 test "ordered records keep FIFO order and stop drains them" {
-    try @import("persistence_test.zig").Suite(test_scope).case_010();
+    try @import("persistence_writer_test.zig").Suite(test_scope).case_010();
+}
+
+test "chunk keys carry kind, coordinates and masked dimension" {
+    try @import("persistence_keys_test.zig").Suite(test_scope).case_keys_000();
+}
+
+test "records account bytes and reset on deinit" {
+    try @import("persistence_keys_test.zig").Suite(test_scope).case_keys_001();
 }
