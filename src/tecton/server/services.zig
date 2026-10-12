@@ -17,6 +17,8 @@ const worlds = @import("./worlds.zig");
 const WorldLifecycle = @import("../world/world_lifecycle.zig");
 const players = @import("host_players.zig");
 const perms = @import("host_perms.zig");
+const worldAdapters = @import("host_worlds.zig").Suite(Tecton, World);
+const lifecycle = @import("host_shutdown.zig").Suite(Tecton, Entity, Dimension);
 
 pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
 
@@ -41,15 +43,15 @@ pub fn hostChecked(tecton: *Tecton) HostError!Host {
         .threaded_tasks = &tecton.threaded_tasks,
         .profiler = &tecton.profiler,
         .players = .{ .ctx = tecton, .by_runtime_id = players.byRuntimeId },
-        .instances = .{ .ctx = tecton, .assign_dimension = assignDimension },
+        .instances = .{ .ctx = tecton, .assign_dimension = lifecycle.assignDimension },
         .permission_manager = .{ .ctx = tecton, .get_player_group = perms.getPlayerGroup },
-        .worlds = .{ .ctx = tecton, .build_world = buildWorld, .adopt_world = adoptWorld, .destroy_world = destroyWorld, .end_op = endOp },
+        .worlds = .{ .ctx = tecton, .build_world = buildWorld, .adopt_world = worldAdapters.adoptWorld, .destroy_world = worldAdapters.destroyWorld, .end_op = worldAdapters.endOp },
         .mob_broadcast_interval = tecton.mob_broadcast_interval,
         .get_player_snapshots = players.getPlayerSnapshots,
         .get_player_count = players.getPlayerCount,
         .find_player_by_runtime_id = players.findPlayerByRuntimeId,
-        .register_ecs_entity = registerEcsEntity,
-        .unregister_ecs_entity = unregisterEcsEntity,
+        .register_ecs_entity = lifecycle.registerEcsEntity,
+        .unregister_ecs_entity = lifecycle.unregisterEcsEntity,
         .set_player_location = players.setPlayerLocation,
         .enqueue_player_removal = players.enqueuePlayerRemoval,
         .remove_player = players.removePlayer,
@@ -58,8 +60,8 @@ pub fn hostChecked(tecton: *Tecton) HostError!Host {
         .current_tps = players.currentTps,
         .current_mspt = players.currentMspt,
         .tick_count = players.tickCount,
-        .refresh_world_command_enums = refreshWorldCommandEnums,
-        .refresh_floating_text_command_enums = refreshFloatingTextCommandEnums,
+        .refresh_world_command_enums = lifecycle.refreshWorldCommandEnums,
+        .refresh_floating_text_command_enums = lifecycle.refreshFloatingTextCommandEnums,
         .reply_to = replyTo,
     };
 }
@@ -81,7 +83,7 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
         .permissions = .{ .ctx = tecton, .has_permission = perms.commandPermission },
         .permission_admin = .{ .ctx = tecton, .get_group = perms.getPlayerGroup, .set_group = perms.setPermissionGroup, .default_group = perms.defaultPermissionGroup },
         .bans = .{ .ctx = tecton, .is_banned = perms.isBanned, .add = perms.addBan, .remove = perms.removeBan, .entry_name = perms.banEntryName },
-        .shutdown = .{ .ctx = tecton, .shutdown = shutdown },
+        .shutdown = .{ .ctx = tecton, .shutdown = lifecycle.shutdown },
         .about = .{ .players = selection, .max_players = &tecton.config.max_players },
         .world_info = .{
             .worlds = query,
@@ -95,69 +97,25 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
             .profiler = &tecton.profiler,
         },
         .enchantment = .{ .events = &tecton.events },
-        .floating_text = .{ .worlds = query, .ctx = tecton, .refresh_command_enums = refreshFloatingTextCommandEnums },
+        .floating_text = .{ .worlds = query, .ctx = tecton, .refresh_command_enums = lifecycle.refreshFloatingTextCommandEnums },
         .world_admin = .{
             .ctx = tecton,
             .allocator = tecton.allocator,
-            .get_world = getWorld,
-            .has_world = hasWorld,
-            .count_worlds = countWorlds,
-            .op_in_flight = worldOpInFlight,
-            .begin_op = beginWorldOp,
-            .end_op = endOp,
-            .detach_world = detachWorld,
-            .adopt_world = adoptWorld,
-            .collect_world_names = collectWorldNames,
-            .world_dir_exists = worldDirExists,
+            .get_world = worldAdapters.getWorld,
+            .has_world = worldAdapters.hasWorld,
+            .count_worlds = worldAdapters.countWorlds,
+            .op_in_flight = worldAdapters.worldOpInFlight,
+            .begin_op = worldAdapters.beginWorldOp,
+            .end_op = worldAdapters.endOp,
+            .detach_world = worldAdapters.detachWorld,
+            .adopt_world = worldAdapters.adoptWorld,
+            .collect_world_names = worldAdapters.collectWorldNames,
+            .world_dir_exists = worldAdapters.worldDirExists,
             .queue_create = queueWorldCreate,
             .queue_load = queueWorldLoad,
             .queue_unload = queueWorldUnload,
         },
     };
-}
-
-fn getWorld(ctx: *anyopaque, name: []const u8) ?*World {
-    return cast(ctx).worlds.get(name);
-}
-
-fn hasWorld(ctx: *anyopaque, name: []const u8) bool {
-    return cast(ctx).worlds.has(name);
-}
-
-fn countWorlds(ctx: *anyopaque) usize {
-    return cast(ctx).worlds.count();
-}
-
-fn worldOpInFlight(ctx: *anyopaque, name: []const u8) bool {
-    return cast(ctx).worlds.opInFlight(name);
-}
-
-fn beginWorldOp(ctx: *anyopaque, owned_name: []u8) bool {
-    return cast(ctx).worlds.beginOp(owned_name);
-}
-
-fn detachWorld(ctx: *anyopaque, world: *World) void {
-    cast(ctx).worlds.detach(world);
-}
-
-fn collectWorldNames(ctx: *anyopaque, names_allocator: std.mem.Allocator, names: *std.ArrayList([]const u8)) anyerror!void {
-    var it = cast(ctx).worlds.keyIterator();
-    while (it.next()) |key| {
-        try names.append(names_allocator, key.*);
-    }
-}
-
-fn worldDirExists(ctx: *anyopaque, name: []const u8) bool {
-    const tecton = cast(ctx);
-    var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ tecton.paths.worlds, name }) catch return false;
-    if (std.Io.Dir.cwd().openDir(tecton.io, path, .{})) |dir_val| {
-        var dir = dir_val;
-        dir.close(tecton.io);
-        return true;
-    } else |_| {
-        return false;
-    }
 }
 
 fn queueWorldCreate(ctx: *anyopaque, name: []u8, sender: ?*Player, origin_type: []const u8, uuid: [16]u8, request_id: []const u8) anyerror!void {
@@ -172,28 +130,8 @@ fn queueWorldUnload(ctx: *anyopaque, world: *World, name: []u8, sender: ?*Player
     return WorldLifecycle.queueUnload(host(cast(ctx)), world, name, sender, origin_type, uuid, request_id);
 }
 
-fn shutdown(ctx: *anyopaque) anyerror!void {
-    return cast(ctx).shutdown();
-}
-
 fn cast(ctx: *anyopaque) *Tecton {
     return @ptrCast(@alignCast(ctx));
-}
-
-fn registerEcsEntity(ctx: *anyopaque, entity: *Entity) void {
-    cast(ctx).registerEcsEntity(entity);
-}
-
-fn unregisterEcsEntity(ctx: *anyopaque, entity: *Entity) void {
-    cast(ctx).unregisterEcsEntity(entity);
-}
-
-fn refreshWorldCommandEnums(ctx: *anyopaque) void {
-    cast(ctx).refreshWorldCommandEnums();
-}
-
-fn refreshFloatingTextCommandEnums(ctx: *anyopaque) void {
-    cast(ctx).refreshFloatingTextCommandEnums();
 }
 
 fn replyTo(
@@ -225,25 +163,9 @@ fn replyTo(
     cmd.sendOutput(success, message);
 }
 
-fn assignDimension(ctx: *anyopaque, runtime_id: i64, dimension: *Dimension) anyerror!void {
-    return cast(ctx).instances.assignDimension(runtime_id, dimension);
-}
-
 fn buildWorld(ctx: *anyopaque, name: []const u8) anyerror!*World {
     const tecton = cast(ctx);
     return worlds.build(host(tecton), tecton.paths.worlds, name);
-}
-
-fn adoptWorld(ctx: *anyopaque, world: *World) anyerror!void {
-    return cast(ctx).worlds.adopt(world);
-}
-
-fn destroyWorld(ctx: *anyopaque, world: *World) void {
-    cast(ctx).worlds.destroy(world);
-}
-
-fn endOp(ctx: *anyopaque, name: []const u8) void {
-    cast(ctx).worlds.endOp(name);
 }
 
 const test_owner = @This();
