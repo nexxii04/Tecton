@@ -194,6 +194,29 @@ pub const Tecton = struct {
         const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(owned_config.max_players)) * 8);
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();
+        const raknet = Raknet.Server.init(io, .{
+            .address = owned_config.address,
+            .port = owned_config.port,
+            .tick_rate = @intCast(owned_config.max_tps),
+            .allocator = allocator,
+            .advertisement = .{
+                .game_type = .MCPE,
+                .level_name = owned_config.motd,
+                .protocol = Protocol.PROTOCOL,
+                .version = Protocol.MINECRAFT_VERSION,
+                .player_count = 0,
+                .max_players = @intCast(owned_config.max_players),
+                .guid = 0,
+                .name = owned_config.motd,
+                .gamemode = @tagName(owned_config.gameMode()),
+            },
+            .max_mtu = max_mtu,
+        }) catch |err| {
+            if (err == error.AddressInUse) {
+                Raknet.Logger.ERROR("Address {s}:{d} is already in use, shutting down", .{ owned_config.address, owned_config.port });
+            }
+            return err;
+        };
         return Tecton{
             .io = io,
             .allocator = allocator,
@@ -216,24 +239,7 @@ pub const Tecton = struct {
             .movement_distance_bands = owned_config.movement_distance_bands,
             .mob_broadcast_interval = mob_broadcast_interval,
             .events = Events.Events.init(allocator),
-            .raknet = try Raknet.Server.init(io, .{
-                .address = owned_config.address,
-                .port = owned_config.port,
-                .tick_rate = @intCast(owned_config.max_tps),
-                .allocator = allocator,
-                .advertisement = .{
-                    .game_type = .MCPE,
-                    .level_name = owned_config.motd,
-                    .protocol = Protocol.PROTOCOL,
-                    .version = Protocol.MINECRAFT_VERSION,
-                    .player_count = 0,
-                    .max_players = @intCast(owned_config.max_players),
-                    .guid = 0,
-                    .name = owned_config.motd,
-                    .gamemode = @tagName(owned_config.gameMode()),
-                },
-                .max_mtu = max_mtu,
-            }),
+            .raknet = raknet,
             .players = PlayerRegistry.init(io, allocator),
             .worlds = worlds_mod.WorldRegistry.init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),

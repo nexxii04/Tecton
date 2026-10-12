@@ -28,7 +28,10 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
-        var server = try Server.init(defaultOptions(io, allocator));
+        var server = Server.init(defaultOptions(io, allocator)) catch |err| {
+            if (err == error.AddressInUse) std.process.exit(1);
+            return err;
+        };
         defer server.deinit();
 
         try server.start();
@@ -37,7 +40,10 @@ pub fn main(init: std.process.Init) !void {
         // The shared pool recycles frees across threads instead of stranding them on the freeing thread.
         const allocator = pool_allocator.allocator();
 
-        var server = try Server.init(defaultOptions(io, allocator));
+        var server = Server.init(defaultOptions(io, allocator)) catch |err| {
+            if (err == error.AddressInUse) std.process.exit(1);
+            return err;
+        };
         defer server.deinit();
 
         try server.start();
