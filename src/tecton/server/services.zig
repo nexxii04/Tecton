@@ -15,6 +15,8 @@ const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const World = @import("../world/world.zig").World;
 const worlds = @import("./worlds.zig");
 const WorldLifecycle = @import("../world/world_lifecycle.zig");
+const players = @import("host_players.zig");
+const perms = @import("host_perms.zig");
 
 pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
 
@@ -38,24 +40,24 @@ pub fn hostChecked(tecton: *Tecton) HostError!Host {
         .tasks = &tecton.tasks,
         .threaded_tasks = &tecton.threaded_tasks,
         .profiler = &tecton.profiler,
-        .players = .{ .ctx = tecton, .by_runtime_id = byRuntimeId },
+        .players = .{ .ctx = tecton, .by_runtime_id = players.byRuntimeId },
         .instances = .{ .ctx = tecton, .assign_dimension = assignDimension },
-        .permission_manager = .{ .ctx = tecton, .get_player_group = getPlayerGroup },
+        .permission_manager = .{ .ctx = tecton, .get_player_group = perms.getPlayerGroup },
         .worlds = .{ .ctx = tecton, .build_world = buildWorld, .adopt_world = adoptWorld, .destroy_world = destroyWorld, .end_op = endOp },
         .mob_broadcast_interval = tecton.mob_broadcast_interval,
-        .get_player_snapshots = getPlayerSnapshots,
-        .get_player_count = getPlayerCount,
-        .find_player_by_runtime_id = findPlayerByRuntimeId,
+        .get_player_snapshots = players.getPlayerSnapshots,
+        .get_player_count = players.getPlayerCount,
+        .find_player_by_runtime_id = players.findPlayerByRuntimeId,
         .register_ecs_entity = registerEcsEntity,
         .unregister_ecs_entity = unregisterEcsEntity,
-        .set_player_location = setPlayerLocation,
-        .enqueue_player_removal = enqueuePlayerRemoval,
-        .remove_player = removePlayer,
-        .remove_connection_mapping = removeConnectionMapping,
-        .target_tps = targetTps,
-        .current_tps = currentTps,
-        .current_mspt = currentMspt,
-        .tick_count = tickCount,
+        .set_player_location = players.setPlayerLocation,
+        .enqueue_player_removal = players.enqueuePlayerRemoval,
+        .remove_player = players.removePlayer,
+        .remove_connection_mapping = players.removeConnectionMapping,
+        .target_tps = players.targetTps,
+        .current_tps = players.currentTps,
+        .current_mspt = players.currentMspt,
+        .tick_count = players.tickCount,
         .refresh_world_command_enums = refreshWorldCommandEnums,
         .refresh_floating_text_command_enums = refreshFloatingTextCommandEnums,
         .reply_to = replyTo,
@@ -70,22 +72,22 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
     const selection: contracts.SelectionHost(Player) = .{
         .ctx = tecton,
         .io = tecton.io,
-        .get_player_snapshots = getPlayerSnapshots,
+        .get_player_snapshots = players.getPlayerSnapshots,
     };
     const query: contracts.WorldQuery(World) = .{ .registry = &tecton.worlds.by_name };
 
     return .{
         .selection = selection,
-        .permissions = .{ .ctx = tecton, .has_permission = commandPermission },
-        .permission_admin = .{ .ctx = tecton, .get_group = getPlayerGroup, .set_group = setPermissionGroup, .default_group = defaultPermissionGroup },
-        .bans = .{ .ctx = tecton, .is_banned = isBanned, .add = addBan, .remove = removeBan, .entry_name = banEntryName },
+        .permissions = .{ .ctx = tecton, .has_permission = perms.commandPermission },
+        .permission_admin = .{ .ctx = tecton, .get_group = perms.getPlayerGroup, .set_group = perms.setPermissionGroup, .default_group = perms.defaultPermissionGroup },
+        .bans = .{ .ctx = tecton, .is_banned = perms.isBanned, .add = perms.addBan, .remove = perms.removeBan, .entry_name = perms.banEntryName },
         .shutdown = .{ .ctx = tecton, .shutdown = shutdown },
         .about = .{ .players = selection, .max_players = &tecton.config.max_players },
         .world_info = .{
             .worlds = query,
             .players = selection,
             .ctx = tecton,
-            .target_tps = targetTps,
+            .target_tps = players.targetTps,
             .current_tps = &tecton.current_tps,
             .current_mspt = &tecton.current_mspt,
             .current_raknet_mspt = &tecton.current_raknet_mspt,
@@ -170,41 +172,6 @@ fn queueWorldUnload(ctx: *anyopaque, world: *World, name: []u8, sender: ?*Player
     return WorldLifecycle.queueUnload(host(cast(ctx)), world, name, sender, origin_type, uuid, request_id);
 }
 
-fn commandPermission(ctx: *anyopaque, username: []const u8, xuid: []const u8, permission: []const u8) bool {
-    if (permission.len == 0) return true;
-    const tecton = cast(ctx);
-
-    if (tecton.command_permission_checker) |checker| {
-        return checker(tecton.command_permission_userdata, xuid, permission);
-    }
-    return tecton.permission_manager.hasPermission(username, permission);
-}
-
-fn setPermissionGroup(ctx: *anyopaque, name: []const u8, group: []const u8) anyerror!void {
-    return cast(ctx).permission_manager.setPlayerGroup(name, group);
-}
-
-fn defaultPermissionGroup(ctx: *anyopaque) []const u8 {
-    return cast(ctx).permission_manager.default_group;
-}
-
-fn isBanned(ctx: *anyopaque, name: []const u8) bool {
-    return cast(ctx).ban_manager.isBanned(name);
-}
-
-fn addBan(ctx: *anyopaque, uuid: []const u8, name: []const u8, source: []const u8, reason: []const u8) anyerror!void {
-    return cast(ctx).ban_manager.ban(uuid, name, source, reason);
-}
-
-fn removeBan(ctx: *anyopaque, name: []const u8) bool {
-    return cast(ctx).ban_manager.unban(name);
-}
-
-fn banEntryName(ctx: *anyopaque, index: usize) ?[]const u8 {
-    const entries = cast(ctx).ban_manager.entries.items;
-    return if (index < entries.len) entries[index].name else null;
-}
-
 fn shutdown(ctx: *anyopaque) anyerror!void {
     return cast(ctx).shutdown();
 }
@@ -213,56 +180,12 @@ fn cast(ctx: *anyopaque) *Tecton {
     return @ptrCast(@alignCast(ctx));
 }
 
-fn getPlayerSnapshots(ctx: *anyopaque) []const *Player {
-    return cast(ctx).getPlayerSnapshots();
-}
-
-fn getPlayerCount(ctx: *anyopaque) usize {
-    return cast(ctx).getPlayerCount();
-}
-
-fn findPlayerByRuntimeId(ctx: *anyopaque, runtime_id: i64) ?*Player {
-    return cast(ctx).findPlayerByRuntimeId(runtime_id);
-}
-
 fn registerEcsEntity(ctx: *anyopaque, entity: *Entity) void {
     cast(ctx).registerEcsEntity(entity);
 }
 
 fn unregisterEcsEntity(ctx: *anyopaque, entity: *Entity) void {
     cast(ctx).unregisterEcsEntity(entity);
-}
-
-fn setPlayerLocation(ctx: *anyopaque, uuid: []const u8, world_identifier: []const u8, dimension_identifier: []const u8) void {
-    cast(ctx).setPlayerLocation(uuid, world_identifier, dimension_identifier);
-}
-
-fn enqueuePlayerRemoval(ctx: *anyopaque, player: *Player) void {
-    cast(ctx).enqueuePlayerRemoval(player);
-}
-
-fn removePlayer(ctx: *anyopaque, player: *Player) void {
-    cast(ctx).removePlayer(player);
-}
-
-fn removeConnectionMapping(ctx: *anyopaque, connection: *anyopaque) void {
-    cast(ctx).removeConnectionMapping(@ptrCast(@alignCast(connection)));
-}
-
-fn targetTps(ctx: *anyopaque) f64 {
-    return cast(ctx).targetTps();
-}
-
-fn currentTps(ctx: *anyopaque) f64 {
-    return cast(ctx).current_tps;
-}
-
-fn currentMspt(ctx: *anyopaque) f64 {
-    return cast(ctx).current_mspt;
-}
-
-fn tickCount(ctx: *anyopaque) u64 {
-    return cast(ctx).tick_count;
 }
 
 fn refreshWorldCommandEnums(ctx: *anyopaque) void {
@@ -302,16 +225,8 @@ fn replyTo(
     cmd.sendOutput(success, message);
 }
 
-fn byRuntimeId(ctx: *anyopaque, runtime_id: i64) ?*Player {
-    return cast(ctx).players.byRuntimeId(runtime_id);
-}
-
 fn assignDimension(ctx: *anyopaque, runtime_id: i64, dimension: *Dimension) anyerror!void {
     return cast(ctx).instances.assignDimension(runtime_id, dimension);
-}
-
-fn getPlayerGroup(ctx: *anyopaque, player_name: []const u8) []const u8 {
-    return cast(ctx).permission_manager.getPlayerGroup(player_name);
 }
 
 fn buildWorld(ctx: *anyopaque, name: []const u8) anyerror!*World {
