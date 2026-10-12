@@ -12,6 +12,8 @@ pub fn Suite(comptime scope: type) type {
         const ItemStack = scope.ItemStack;
         const serializeItemStack = scope.serializeItemStack;
         const deserializeEntity = scope.deserializeEntity;
+        const encodeNbt = scope.encodeNbt;
+        const decodeNbt = scope.decodeNbt;
         const world_border = scope.world_border;
         const max_motion = scope.max_motion;
 
@@ -73,6 +75,29 @@ pub fn Suite(comptime scope: type) type {
             try testing.expectEqual(@as(usize, 1), ench.List.value.len);
             try testing.expectEqual(@as(i16, 9), ench.List.value[0].Compound.get("id").?.Short.value);
             try testing.expectEqual(@as(i16, 3), ench.List.value[0].Compound.get("lvl").?.Short.value);
+        }
+
+        pub fn case_002() !void {
+            const allocator = testing.allocator;
+
+            var tag = CompoundTag.init(allocator, null);
+            defer tag.deinit(allocator);
+            try tag.set("Name", .{ .String = .{ .value = try allocator.dupe(u8, "minecraft:diamond_sword"), .name = null } });
+            try tag.set("Count", .{ .Byte = .{ .value = 1, .name = null } });
+
+            const bytes = try encodeNbt(allocator, &tag);
+            defer allocator.free(bytes);
+            try testing.expect(bytes.len > 0);
+
+            var decoded = try decodeNbt(allocator, bytes);
+            defer decoded.deinit(allocator);
+            const name = decoded.get("Name").?.String.value;
+            try testing.expectEqualStrings("minecraft:diamond_sword", name);
+            try testing.expectEqual(@as(i8, 1), decoded.get("Count").?.Byte.value);
+
+            const bytes_again = try encodeNbt(allocator, &decoded);
+            defer allocator.free(bytes_again);
+            try testing.expectEqualSlices(u8, bytes, bytes_again);
         }
     };
 }

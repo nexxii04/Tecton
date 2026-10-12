@@ -26,6 +26,11 @@ const EnchantmentTesting = @import("../../items/enchantments/testing.zig");
 const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const ItemType = @import("../../items/item_type.zig").ItemType;
 const Player = @import("../../player/player.zig").Player;
+const codec = @import("nbt_codec.zig");
+
+pub const encodeNbt = codec.encodeNbt;
+pub const decodeNbt = codec.decodeNbt;
+const copyCompound = codec.copyCompound;
 
 pub fn serializeItemStack(allocator: std.mem.Allocator, item: *ItemStack) !CompoundTag {
     enchantment_nbt.sync(item) catch {
@@ -284,19 +289,6 @@ pub fn deserializePlayer(allocator: std.mem.Allocator, player: *Player, tag: *co
     }
 }
 
-pub fn encodeNbt(allocator: std.mem.Allocator, tag: *const CompoundTag) ![]const u8 {
-    var stream = BinaryStream.init(allocator, null, null);
-    defer stream.deinit();
-    try CompoundTag.write(&stream, tag, ReadWriteOptions.default);
-    return try allocator.dupe(u8, stream.getBuffer());
-}
-
-pub fn decodeNbt(allocator: std.mem.Allocator, data: []const u8) !CompoundTag {
-    var stream = BinaryStream.init(allocator, data, null);
-    defer stream.deinit();
-    return try CompoundTag.read(&stream, allocator, ReadWriteOptions.default);
-}
-
 const world_border: f32 = 30_000_000;
 const max_motion: f32 = 1_000;
 
@@ -312,20 +304,13 @@ fn getFloat(tag: *const Tag) f32 {
     };
 }
 
-fn copyCompound(allocator: std.mem.Allocator, src: *const CompoundTag) !CompoundTag {
-    var stream = BinaryStream.init(allocator, null, null);
-    defer stream.deinit();
-    try CompoundTag.write(&stream, src, ReadWriteOptions.default);
-    var read_stream = BinaryStream.init(allocator, stream.getBuffer(), null);
-    defer read_stream.deinit();
-    return try CompoundTag.read(&read_stream, allocator, ReadWriteOptions.default);
-}
-
 const test_owner = @This();
 const test_scope = struct {
     pub const std = test_owner.std;
     pub const testing = test_owner.testing;
     pub const CompoundTag = test_owner.CompoundTag;
+    pub const encodeNbt = test_owner.encodeNbt;
+    pub const decodeNbt = test_owner.decodeNbt;
     pub const ListTag = test_owner.ListTag;
     pub const Tag = test_owner.Tag;
     pub const FloatTag = test_owner.FloatTag;
@@ -345,4 +330,8 @@ test "a corrupt position and motion from disk are clamped on load" {
 
 test "writing a stack syncs the enchantments the ops never wrote" {
     try @import("serialization_test.zig").Suite(test_scope).case_001();
+}
+
+test "an NBT round trip preserves bytes exactly" {
+    try @import("serialization_test.zig").Suite(test_scope).case_002();
 }
