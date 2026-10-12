@@ -59,9 +59,9 @@ pub const PoolAllocator = struct {
         return index;
     }
 
-    fn mapChunk(self: *PoolAllocator, index: usize) ?[*]u8 {
-        const alignment = std.mem.Alignment.fromByteUnits(@min(slotSize(index), chunk_size));
-        const chunk = self.large.rawAlloc(chunk_size, alignment, 0) orelse return null;
+    fn mapChunk(self: *PoolAllocator, slot: usize) ?[*]u8 {
+        const page_size = std.heap.pageSize();
+        const chunk = self.large.rawAlloc(chunk_size + slot - @min(slot, page_size), .fromByteUnits(page_size), 0) orelse return null;
         _ = self.mapped_bytes.fetchAdd(chunk_size, .monotonic);
         return chunk;
     }
@@ -86,11 +86,12 @@ pub const PoolAllocator = struct {
             class.bump_left -= 1;
             return next;
         }
-        const chunk = self.mapChunk(index) orelse return null;
+        const chunk = self.mapChunk(slot) orelse return null;
         class.chunks += 1;
-        class.bump = chunk + slot;
+        const first: [*]u8 = @ptrFromInt(std.mem.alignForward(usize, @intFromPtr(chunk), slot));
+        class.bump = first + slot;
         class.bump_left = chunk_size / slot - 1;
-        return chunk;
+        return first;
     }
 
     fn freeFn(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
