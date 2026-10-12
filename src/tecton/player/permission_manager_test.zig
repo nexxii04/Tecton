@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const fixture = "{\"groups\":{\"member\":[\"tecton.command.about\"],\"operator\":[\"*\"]},\"players\":{\"Alice\":\"member\",\"Bob\":\"operator\"}}";
 
@@ -93,15 +94,28 @@ pub fn test_read_only(comptime PermissionManager: type) !void {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "permissions.json", .data = fixture });
-    const file = try tmp.dir.openFile(std.testing.io, "permissions.json", .{});
-    defer file.close(std.testing.io);
-    const permissions = (try file.stat(std.testing.io)).permissions;
-    try file.setPermissions(std.testing.io, permissions.setReadOnly(true));
-    defer file.setPermissions(std.testing.io, permissions) catch unreachable;
     var path_buf: [512]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path});
     var manager = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
     defer manager.deinit();
+    if (comptime builtin.os.tag == .windows) {
+        const Deny = struct {
+            fn stat(userdata: ?*anyopaque, dir: std.Io.Dir, sub_path: []const u8, options: std.Io.Dir.StatFileOptions) std.Io.Dir.StatFileError!std.Io.File.Stat {
+                var st = try std.testing.io.vtable.dirStatFile(userdata, dir, sub_path, options);
+                st.permissions = @enumFromInt(@intFromEnum(st.permissions) | 0x1);
+                return st;
+            }
+        };
+        var vtable = std.testing.io.vtable.*;
+        vtable.dirStatFile = Deny.stat;
+        manager.io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
+    } else {
+        const file = try tmp.dir.openFile(std.testing.io, "permissions.json", .{});
+        defer file.close(std.testing.io);
+        const permissions = (try file.stat(std.testing.io)).permissions;
+        try file.setPermissions(std.testing.io, permissions.setReadOnly(true));
+        defer file.setPermissions(std.testing.io, permissions) catch unreachable;
+    }
     try std.testing.expectError(error.AccessDenied, manager.setPlayerGroup("Alice", "operator"));
     try std.testing.expectError(error.AccessDenied, manager.setPlayerGroup("NewPlayer", "operator"));
     try std.testing.expectEqualStrings("member", manager.getPlayerGroup("Alice"));

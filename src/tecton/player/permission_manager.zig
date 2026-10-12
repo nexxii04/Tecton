@@ -1,6 +1,25 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Raknet = @import("Raknet");
 const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
+
+const WinFileAttrs = if (builtin.os.tag == .windows) struct {
+    extern "kernel32" fn GetFileAttributesW(lpFileName: [*:0]const u16) callconv(.winapi) std.os.windows.DWORD;
+} else struct {};
+
+fn isReadOnlyStat(permissions: std.Io.File.Permissions) bool {
+    if (comptime builtin.os.tag == .windows) return permissions.toAttributes().READONLY;
+    return permissions.readOnly();
+}
+
+fn isReadOnlyPath(path: []const u8, allocator: std.mem.Allocator) !bool {
+    if (comptime builtin.os.tag != .windows) return false;
+    const utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
+    defer allocator.free(utf16);
+    const attrs = WinFileAttrs.GetFileAttributesW(utf16.ptr);
+    if (attrs == std.os.windows.INVALID_FILE_ATTRIBUTES) return false;
+    return attrs & 0x1 != 0;
+}
 
 pub const PermissionGroup = struct {
     name: []const u8,
@@ -228,7 +247,9 @@ pub const PermissionManager = struct {
         try writer.writeAll("  }\n}\n");
 
         const permissions = if (std.Io.Dir.cwd().statFile(self.io, self.path, .{})) |stat| blk: {
-            if (stat.permissions.readOnly()) return error.AccessDenied;
+            if (comptime builtin.os.tag == .windows) {
+                if (isReadOnlyStat(stat.permissions) or try isReadOnlyPath(self.path, self.allocator)) return error.AccessDenied;
+            } else if (isReadOnlyStat(stat.permissions)) return error.AccessDenied;
             break :blk stat.permissions;
         } else |err| switch (err) {
             error.FileNotFound => std.Io.File.Permissions.default_file,
