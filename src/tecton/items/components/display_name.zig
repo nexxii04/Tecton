@@ -1,4 +1,3 @@
-const std = @import("std");
 const NBT = @import("nbt");
 const CompoundTag = NBT.CompoundTag;
 const StringTag = NBT.StringTag;

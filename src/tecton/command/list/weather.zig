@@ -7,7 +7,6 @@ const CommandRegistry = @import("../registry.zig").CommandRegistry;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const Weather = @import("../../world/world.zig").Weather;
 const broadcast = @import("../../world/dimension/broadcast.zig");
-const types = @import("../types.zig");
 
 pub fn register(registry: *CommandRegistry) !void {
     const enum_idx = try registry.registerEnum(.{

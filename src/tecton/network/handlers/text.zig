@@ -1,5 +1,3 @@
-const std = @import("std");
-
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const Raknet = @import("Raknet");

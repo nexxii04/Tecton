@@ -1,4 +1,3 @@
-const std = @import("std");
 const Protocol = @import("protocol");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Block = @import("../block.zig").Block;

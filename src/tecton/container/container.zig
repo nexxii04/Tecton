@@ -1,5 +1,4 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const ItemStack = @import("../items/item_stack.zig").ItemStack;

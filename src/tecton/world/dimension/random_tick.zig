@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const Protocol = @import("protocol");
-
 const BlockPermutation = @import("../block/block_permutation.zig").BlockPermutation;
 const BlockState = @import("../block/block_permutation.zig").BlockState;
 

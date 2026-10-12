@@ -2,7 +2,6 @@ const std = @import("std");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
 
 const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
 const Player = @import("../player/player.zig").Player;

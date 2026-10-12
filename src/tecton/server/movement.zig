@@ -1,6 +1,5 @@
 const std = @import("std");
 const Timestamp = std.Io.Timestamp;
-const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
 const MoveDelta = @import("../player/move_delta.zig");

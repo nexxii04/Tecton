@@ -4,7 +4,6 @@ const Protocol = @import("protocol");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const types = @import("../types.zig");
 const PlayerMath = @import("../../player/player.zig");
 
 pub fn register(registry: *CommandRegistry) !void {

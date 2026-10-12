@@ -6,7 +6,6 @@ const Command = @import("../command.zig").Command;
 const SubCommand = @import("../command.zig").SubCommand;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const types = @import("../types.zig");
 
 pub fn register(registry: *CommandRegistry) !void {
     const cmd = try Command.init(

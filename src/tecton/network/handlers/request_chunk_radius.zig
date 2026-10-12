@@ -1,4 +1,3 @@
-const std = @import("std");
 const Raknet = @import("Raknet");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;

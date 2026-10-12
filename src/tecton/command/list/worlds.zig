@@ -2,7 +2,6 @@ const std = @import("std");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const types = @import("../types.zig");
 const Tecton = @import("../../tecton.zig").Tecton;
 
 pub fn register(registry: *CommandRegistry, tecton: *Tecton) !void {
