@@ -9,22 +9,15 @@ pub const CommandViews = @import("context.zig").CommandViews;
 const Command = @import("command.zig").Command;
 const CommandContext = @import("context.zig").CommandContext;
 const CommandHandlerFn = @import("command.zig").CommandHandlerFn;
-const CommandPermission = @import("permission.zig").CommandPermission;
+const result = @import("result.zig");
 const types = @import("types.zig");
 const CommandEnum = types.CommandEnum;
 const SoftEnum = types.SoftEnum;
 const CommandParameter = types.CommandParameter;
 const CommandOverload = types.CommandOverload;
 
-pub const CommandResult = struct {
-    success: bool,
-    message: []const u8,
-};
-
-fn permissionToString(perm: CommandPermission) []const u8 {
-    _ = perm;
-    return "any";
-}
+pub const CommandResult = result.CommandResult;
+const permissionToString = result.permissionToString;
 
 pub const CommandRegistry = struct {
     allocator: std.mem.Allocator,
