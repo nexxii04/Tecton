@@ -189,150 +189,159 @@ const test_scope = struct {
     pub const block_root = test_owner.tecton_mod.block_root;
 };
 
+const players_suite = @import("services_players_test.zig").Suite(test_scope);
+const worlds_suite = @import("services_worlds_test.zig").Suite(test_scope);
+const perms_suite = @import("services_perms_test.zig").Suite(test_scope);
+const host_suite = @import("services_host_test.zig").Suite(test_scope);
+
 test "the host fails in a controlled way when built before the network exists" {
-    try @import("services_test.zig").Suite(test_scope).case_000();
+    try host_suite.case_000();
 }
 
 test "players.by_runtime_id sees a player registered after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_001();
+    try players_suite.case_001();
 }
 
 test "get_player_count sees a player registered after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_002();
+    try players_suite.case_002();
 }
 
 test "get_player_snapshots sees a player registered after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_003();
+    try players_suite.case_003();
 }
 
 test "find_player_by_runtime_id sees a player registered after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_004();
+    try players_suite.case_004();
 }
 
 test "register_ecs_entity registers an entity created after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_005();
+    try host_suite.case_005();
 }
 
 test "unregister_ecs_entity removes an entity created after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_006();
+    try host_suite.case_006();
 }
 
 test "set_player_location stores a location that did not exist at construction" {
-    try @import("services_test.zig").Suite(test_scope).case_007();
+    try players_suite.case_007();
 }
 
 test "enqueue_player_removal queues a player created after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_008();
+    try players_suite.case_008();
 }
 
 test "remove_player removes a player registered after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_009();
+    try players_suite.case_009();
 }
 
 test "remove_connection_mapping unmaps a connection registered after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_010();
+    try players_suite.case_010();
 }
 
 test "target_tps reads the config value current at call time" {
-    try @import("services_test.zig").Suite(test_scope).case_011();
+    try players_suite.case_011();
 }
 
 test "current_tps reads the value current at call time" {
-    try @import("services_test.zig").Suite(test_scope).case_012();
+    try players_suite.case_012();
 }
 
 test "current_mspt reads the value current at call time" {
-    try @import("services_test.zig").Suite(test_scope).case_013();
+    try players_suite.case_013();
 }
 
 test "tick_count reads the value current at call time" {
-    try @import("services_test.zig").Suite(test_scope).case_014();
+    try players_suite.case_014();
 }
 
 test "refresh_world_command_enums sees worlds adopted after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_015();
+    try worlds_suite.case_015();
 }
 
 test "refresh_floating_text_command_enums sees holograms added after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_016();
+    try worlds_suite.case_016();
 }
 
 test "reply_to resolves the sender and the network current at call time" {
-    try @import("services_test.zig").Suite(test_scope).case_017();
+    try host_suite.case_017();
 }
 
 test "worlds.build builds under the paths current at call time" {
-    try @import("services_test.zig").Suite(test_scope).case_018();
+    try worlds_suite.case_018();
 }
 
 test "worlds.adopt registers a world created after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_019();
+    try worlds_suite.case_019();
 }
 
 test "worlds.destroy removes a world adopted after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_020();
+    try worlds_suite.case_020();
 }
 
 test "worlds.end_op closes an operation opened after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_021();
+    try worlds_suite.case_021();
 }
 
 test "instances.assign_dimension sees an instance created after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_022();
+    try host_suite.case_022();
 }
 
 test "permission_manager.get_player_group sees a group set after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_023();
+    try perms_suite.case_023();
 }
 
 test "hostChecked rejects a Tecton that was copied after construction" {
-    try @import("services_test.zig").Suite(test_scope).case_024();
+    try host_suite.case_024();
 }
 
 test "events pointer sees the member initialized after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_025();
+    try host_suite.case_025();
 }
 
 test "ecs pointer sees the member initialized after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_026();
+    try host_suite.case_026();
 }
 
 test "tasks pointer sees the member initialized after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_027();
+    try host_suite.case_027();
 }
 
 test "threaded_tasks pointer sees the member initialized after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_028();
+    try host_suite.case_028();
 }
 
 test "profiler pointer sees the member initialized after the host was built" {
-    try @import("services_test.zig").Suite(test_scope).case_029();
+    try host_suite.case_029();
 }
 
 test "mob_broadcast_interval is fixed at host construction" {
-    try @import("services_test.zig").Suite(test_scope).case_030();
+    try host_suite.case_030();
 }
 
 test "command permissions preserve live custom checker priority and manager fallback" {
-    try @import("services_test.zig").Suite(test_scope).case_031();
+    try perms_suite.case_031();
 }
 
 test "command views observe mutable metrics configuration and paths after construction" {
-    try @import("services_test.zig").Suite(test_scope).case_032();
+    try host_suite.case_032();
 }
 
 test "command query views observe registries initialized after construction" {
-    try @import("services_test.zig").Suite(test_scope).case_033();
+    try worlds_suite.case_033();
 }
 
 test "command dispatch preserves denial output handler isolation and console permission bypass" {
-    try @import("services_test.zig").Suite(test_scope).case_034();
+    try perms_suite.case_034();
 }
 
 test "floating text command view resolves refresh at call time and observes later registries" {
-    try @import("services_test.zig").Suite(test_scope).case_035();
+    try worlds_suite.case_035();
 }
 
 test "world admin command view resolves registry state at call time" {
-    try @import("services_test.zig").Suite(test_scope).case_036();
+    try worlds_suite.case_036();
+}
+
+test {
+    _ = @import("host_rules_test.zig");
 }
