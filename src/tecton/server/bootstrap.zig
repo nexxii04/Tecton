@@ -208,9 +208,10 @@ test "op and deop persist permission changes across a reload" {
             const mgr: *PermissionManager = @ptrCast(@alignCast(raw));
             return mgr.default_group;
         }
+        fn refresh(_: *anyopaque, _: std.mem.Allocator, _: []const u8) void {}
     };
     var views: CommandViews = undefined;
-    views.permission_admin = .{ .ctx = &manager, .get_group = Adapter.get, .set_group = Adapter.set, .default_group = Adapter.default };
+    views.permission_admin = .{ .ctx = &manager, .get_group = Adapter.get, .set_group = Adapter.set, .default_group = Adapter.default, .refresh_abilities = Adapter.refresh };
     var network: NetworkHandler = undefined;
     registry.dispatchConsole(views, &network, "/op Alice");
     registry.dispatchConsole(views, &network, "/deop Bob");
@@ -225,6 +226,64 @@ test "op and deop persist permission changes across a reload" {
     try std.testing.expectEqualStrings("member", loaded.getPlayerGroup("Bob"));
     try std.testing.expect(loaded.hasPermission("Alice", "tecton.command.op"));
     try std.testing.expect(!loaded.hasPermission("Bob", "tecton.command.op"));
+}
+
+test "op and deop refresh the target's abilities exactly once per successful change" {
+    const Op = @import("../command/list/op.zig");
+    Raknet.Logger.init(std.heap.page_allocator);
+    const PermissionManager = @TypeOf(@as(Tecton, undefined).permission_manager);
+    const CommandRegistry = @TypeOf(@as(Tecton, undefined).command_registry);
+    const CommandViews = @typeInfo(@TypeOf(services.commandViews)).@"fn".return_type.?;
+    const NetworkHandler = std.meta.Child(@TypeOf(@as(Tecton, undefined).network));
+    const fixture = "{\"groups\":{\"member\":[\"tecton.command.about\"],\"operator\":[\"*\"]},\"players\":{\"Alice\":\"member\",\"Bob\":\"operator\"}}";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "permissions.json", .data = fixture });
+    var path_buf: [512]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path});
+    var manager = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
+    defer manager.deinit();
+    var registry = CommandRegistry.init(std.testing.allocator);
+    defer registry.deinit();
+    try Op.register(&registry);
+    const Recorder = struct {
+        manager: *PermissionManager,
+        calls: usize = 0,
+        last_name: []const u8 = "",
+        fn get(raw: *anyopaque, name: []const u8) []const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            return self.manager.getPlayerGroup(name);
+        }
+        fn set(raw: *anyopaque, name: []const u8, group: []const u8) !void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            try self.manager.setPlayerGroup(name, group);
+        }
+        fn default(raw: *anyopaque) []const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            return self.manager.default_group;
+        }
+        fn refresh(raw: *anyopaque, _: std.mem.Allocator, username: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.calls += 1;
+            self.last_name = username;
+        }
+    };
+    var recorder = Recorder{ .manager = &manager };
+    var views: CommandViews = undefined;
+    views.permission_admin = .{ .ctx = &recorder, .get_group = Recorder.get, .set_group = Recorder.set, .default_group = Recorder.default, .refresh_abilities = Recorder.refresh };
+    var network: NetworkHandler = undefined;
+    registry.dispatchConsole(views, &network, "/op Alice");
+    try std.testing.expectEqual(@as(usize, 1), recorder.calls);
+    try std.testing.expectEqualStrings("Alice", recorder.last_name);
+    registry.dispatchConsole(views, &network, "/op Alice");
+    try std.testing.expectEqual(@as(usize, 1), recorder.calls);
+    registry.dispatchConsole(views, &network, "/deop Bob");
+    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
+    try std.testing.expectEqualStrings("Bob", recorder.last_name);
+    registry.dispatchConsole(views, &network, "/deop Bob");
+    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
+    registry.dispatchConsole(views, &network, "/op");
+    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
 }
 
 fn ecsDrop(context: *anyopaque, _: EcsEntityId, position: Protocol.Vector3f, item: ItemDrop) void {

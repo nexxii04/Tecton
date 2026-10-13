@@ -19,6 +19,7 @@ pub const PermissionAdmin = struct {
     get_group: *const fn (*anyopaque, []const u8) []const u8,
     set_group: *const fn (*anyopaque, []const u8, []const u8) anyerror!void,
     default_group: *const fn (*anyopaque) []const u8,
+    refresh_abilities: *const fn (*anyopaque, std.mem.Allocator, []const u8) void,
 
     pub fn getPlayerGroup(self: @This(), name: []const u8) []const u8 {
         return self.get_group(self.ctx, name);
@@ -30,6 +31,10 @@ pub const PermissionAdmin = struct {
 
     pub fn defaultGroup(self: @This()) []const u8 {
         return self.default_group(self.ctx);
+    }
+
+    pub fn refreshAbilities(self: @This(), allocator: std.mem.Allocator, name: []const u8) void {
+        return self.refresh_abilities(self.ctx, allocator, name);
     }
 };
 

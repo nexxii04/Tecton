@@ -54,6 +54,7 @@ fn handleOp(raw: *anyopaque) void {
 
     const source_op = if (ctx.player) |p| p.username else "Console";
     Raknet.Logger.INFO("{s} opped {s}", .{ source_op, name });
+    perm_mgr.refreshAbilities(ctx.allocator, name);
 
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Granted operator to {s}", .{name}) catch return;
@@ -82,6 +83,7 @@ fn handleDeop(raw: *anyopaque) void {
 
     const source_deop = if (ctx.player) |p| p.username else "Console";
     Raknet.Logger.INFO("{s} deopped {s}", .{ source_deop, name });
+    perm_mgr.refreshAbilities(ctx.allocator, name);
 
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Revoked operator from {s}", .{name}) catch return;

@@ -81,7 +81,7 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
     return .{
         .selection = selection,
         .permissions = .{ .ctx = tecton, .has_permission = perms.commandPermission },
-        .permission_admin = .{ .ctx = tecton, .get_group = perms.getPlayerGroup, .set_group = perms.setPermissionGroup, .default_group = perms.defaultPermissionGroup },
+        .permission_admin = .{ .ctx = tecton, .get_group = perms.getPlayerGroup, .set_group = perms.setPermissionGroup, .default_group = perms.defaultPermissionGroup, .refresh_abilities = perms.refreshPlayerAbilities },
         .bans = .{ .ctx = tecton, .is_banned = perms.isBanned, .add = perms.addBan, .remove = perms.removeBan, .entry_name = perms.banEntryName },
         .shutdown = .{ .ctx = tecton, .shutdown = lifecycle.shutdown },
         .about = .{ .players = selection, .max_players = &tecton.config.max_players },

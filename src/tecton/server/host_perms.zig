@@ -1,3 +1,6 @@
+const std = @import("std");
+const BinaryStream = @import("BinaryStream").BinaryStream;
+const buildAbilities = @import("../network/handlers/abilities.zig").buildAbilities;
 const Tecton = @import("../tecton.zig").Tecton;
 
 fn cast(ctx: *anyopaque) *Tecton {
@@ -41,4 +44,20 @@ pub fn banEntryName(ctx: *anyopaque, index: usize) ?[]const u8 {
 
 pub fn getPlayerGroup(ctx: *anyopaque, player_name: []const u8) []const u8 {
     return cast(ctx).permission_manager.getPlayerGroup(player_name);
+}
+
+pub fn refreshPlayerAbilities(ctx: *anyopaque, allocator: std.mem.Allocator, player_name: []const u8) void {
+    const tecton = cast(ctx);
+    const is_operator = std.mem.eql(u8, tecton.permission_manager.getPlayerGroup(player_name), "operator");
+    for (tecton.getPlayerSnapshots()) |player| {
+        if (!std.ascii.eqlIgnoreCase(player.username, player_name)) continue;
+        if (player.pending_removal.load(.acquire)) return;
+        var abilities = buildAbilities(allocator, player.entity.runtime_id, player.gamemode, is_operator) catch return;
+        defer abilities.deinit();
+        var stream = BinaryStream.init(allocator, null, null);
+        defer stream.deinit();
+        const serialized = abilities.serialize(&stream) catch return;
+        player.network.sendPacket(player.connection, serialized) catch {};
+        return;
+    }
 }
