@@ -27,10 +27,16 @@ const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const ItemType = @import("../../items/item_type.zig").ItemType;
 const Player = @import("../../player/player.zig").Player;
 const codec = @import("nbt_codec.zig");
+const sanitize_mod = @import("sanitize.zig");
 
 pub const encodeNbt = codec.encodeNbt;
 pub const decodeNbt = codec.decodeNbt;
 const copyCompound = codec.copyCompound;
+
+pub const world_border = sanitize_mod.world_border;
+pub const max_motion = sanitize_mod.max_motion;
+const sane = sanitize_mod.sane;
+const getFloat = sanitize_mod.getFloat;
 
 pub fn serializeItemStack(allocator: std.mem.Allocator, item: *ItemStack) !CompoundTag {
     enchantment_nbt.sync(item) catch {
@@ -289,25 +295,11 @@ pub fn deserializePlayer(allocator: std.mem.Allocator, player: *Player, tag: *co
     }
 }
 
-const world_border: f32 = 30_000_000;
-const max_motion: f32 = 1_000;
-
-fn sane(value: f32, limit: f32) f32 {
-    if (!std.math.isFinite(value)) return 0;
-    return std.math.clamp(value, -limit, limit);
-}
-
-fn getFloat(tag: *const Tag) f32 {
-    return switch (tag.*) {
-        .Float => |f| f.value,
-        else => 0,
-    };
-}
-
 const test_owner = @This();
 const test_scope = struct {
     pub const std = test_owner.std;
     pub const testing = test_owner.testing;
+    pub const Protocol = test_owner.Protocol;
     pub const CompoundTag = test_owner.CompoundTag;
     pub const encodeNbt = test_owner.encodeNbt;
     pub const decodeNbt = test_owner.decodeNbt;
@@ -318,7 +310,13 @@ const test_scope = struct {
     pub const Entity = test_owner.Entity;
     pub const EnchantmentTesting = test_owner.EnchantmentTesting;
     pub const ItemStack = test_owner.ItemStack;
+    pub const ItemType = test_owner.ItemType;
+    pub const Container = test_owner.Container;
     pub const serializeItemStack = test_owner.serializeItemStack;
+    pub const deserializeItemStack = test_owner.deserializeItemStack;
+    pub const serializeContainer = test_owner.serializeContainer;
+    pub const deserializeContainer = test_owner.deserializeContainer;
+    pub const serializeEntity = test_owner.serializeEntity;
     pub const deserializeEntity = test_owner.deserializeEntity;
     pub const world_border = test_owner.world_border;
     pub const max_motion = test_owner.max_motion;
@@ -334,4 +332,16 @@ test "writing a stack syncs the enchantments the ops never wrote" {
 
 test "an NBT round trip preserves bytes exactly" {
     try @import("serialization_test.zig").Suite(test_scope).case_002();
+}
+
+test "an enchanted item survives a serialize round trip byte for byte" {
+    try @import("serialization_test.zig").Suite(test_scope).case_003();
+}
+
+test "an entity survives a serialize round trip byte for byte" {
+    try @import("serialization_test.zig").Suite(test_scope).case_004();
+}
+
+test "a container survives a serialize round trip byte for byte" {
+    try @import("serialization_test.zig").Suite(test_scope).case_005();
 }
