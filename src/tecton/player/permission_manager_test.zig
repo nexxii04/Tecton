@@ -98,6 +98,16 @@ pub fn test_read_only(comptime PermissionManager: type) !void {
     const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path});
     var manager = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
     defer manager.deinit();
+
+    var ro_file: ?std.Io.File = null;
+    var ro_prev: std.Io.File.Permissions = .default_file;
+    defer {
+        if (ro_file) |f| {
+            f.setPermissions(std.testing.io, ro_prev) catch {};
+            f.close(std.testing.io);
+        }
+    }
+
     if (comptime builtin.os.tag == .windows) {
         const Deny = struct {
             fn stat(userdata: ?*anyopaque, dir: std.Io.Dir, sub_path: []const u8, options: std.Io.Dir.StatFileOptions) std.Io.Dir.StatFileError!std.Io.File.Stat {
@@ -111,10 +121,9 @@ pub fn test_read_only(comptime PermissionManager: type) !void {
         manager.io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
     } else {
         const file = try tmp.dir.openFile(std.testing.io, "permissions.json", .{});
-        defer file.close(std.testing.io);
-        const permissions = (try file.stat(std.testing.io)).permissions;
-        try file.setPermissions(std.testing.io, permissions.setReadOnly(true));
-        defer file.setPermissions(std.testing.io, permissions) catch unreachable;
+        ro_file = file;
+        ro_prev = (try file.stat(std.testing.io)).permissions;
+        try file.setPermissions(std.testing.io, ro_prev.setReadOnly(true));
     }
     try std.testing.expectError(error.AccessDenied, manager.setPlayerGroup("Alice", "operator"));
     try std.testing.expectError(error.AccessDenied, manager.setPlayerGroup("NewPlayer", "operator"));
