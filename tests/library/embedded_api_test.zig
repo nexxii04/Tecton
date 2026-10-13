@@ -78,6 +78,114 @@ test "an embedded consumer enchants an item without starting a server" {
     }
 }
 
+test "single chest inventory survives World.save and LevelDB reopen" {
+    try chestRoundTrip(false);
+}
+
+test "double chest inventory survives World.save and LevelDB reopen" {
+    try chestRoundTrip(true);
+}
+
+fn chestRoundTrip(comptime double: bool) !void {
+    const allocator = std.testing.allocator;
+    const block = tecton.world.block;
+    const ItemStack = tecton.items.ItemStack;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var db_buf: [512]u8 = undefined;
+    const db_path = try std.fmt.bufPrintSentinel(&db_buf, ".zig-cache/tmp/{s}/db", .{tmp.sub_path}, 0);
+
+    var options = tecton.defaultOptions(std.testing.io, allocator);
+    options.properties = .{ .allocator = allocator, .address = "127.0.0.1", .port = 0 };
+    options.paths = .{
+        .permissions = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path}),
+        .banned_players = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/bans.json", .{tmp.sub_path}),
+        .player_locations = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/locations.json", .{tmp.sub_path}),
+    };
+    defer allocator.free(options.paths.permissions);
+    defer allocator.free(options.paths.banned_players);
+    defer allocator.free(options.paths.player_locations);
+    options.enable_console = false;
+    options.discover_native_plugins = false;
+    options.auto_load_worlds = false;
+    options.create_default_world = false;
+    var server = try tecton.Server.init(options);
+    defer server.deinit();
+    try server.start();
+
+    const chest = try block.BlockPermutation.resolve(allocator, "minecraft:chest", null);
+    const item_type = tecton.items.ItemType.get("minecraft:diamond_sword").?;
+    var expected = [_]ItemStack{
+        ItemStack.init(allocator, tecton.items.ItemType.get("minecraft:dirt").?, .{ .stack_size = 7 }),
+        ItemStack.init(allocator, tecton.items.ItemType.get("minecraft:cobblestone").?, .{ .stack_size = 10, .metadata = 3 }),
+        ItemStack.init(allocator, item_type, .{}),
+    };
+    defer for (&expected) |*item| item.deinit();
+    try expected[2].addTrait(try tecton.items.traits.DisplayTrait.create(allocator, .{}));
+    try tecton.items.traits.display.setDisplayName(&expected[2], "Stored treasure");
+    try tecton.items.traits.display.setLore(&expected[2], &.{ "First line", "Second line" });
+    try std.testing.expect(tecton.items.enchantments.ops.enchant(&expected[2], 9, 5, .{}) == .applied);
+    const slots = if (double) [_]u32{ 0, 30, 53 } else [_]u32{ 0, 13, 26 };
+    const left = tecton.protocol.BlockPosition{ .x = 0, .y = 64, .z = 0 };
+    const right = tecton.protocol.BlockPosition{ .x = 1, .y = 64, .z = 0 };
+    const containerOf = struct {
+        fn get(b: *block.Block) *tecton.container.Container {
+            const instance = b.getTrait("chest").?;
+            const State = struct {
+                container: ?tecton.container.BlockContainer = null,
+                pair_position: ?tecton.protocol.BlockPosition = null,
+                is_parent: bool = false,
+            };
+            const state: *State = @ptrCast(@alignCast(instance.ctx));
+            return &state.container.?.base;
+        }
+    }.get;
+
+    {
+        const provider = try tecton.world.provider.LevelDBProvider.init(std.testing.io, allocator, db_path);
+        var world = try tecton.world.World.init(undefined, allocator, "test", provider.asProvider());
+        defer world.deinit();
+        const dim = try world.createDimension("overworld", .Overworld, null, false);
+        try dim.setPermutation(left, chest, 0);
+        if (double) {
+            try dim.setPermutation(right, chest, 0);
+            try block.applyTraitsForBlock(allocator, dim, right);
+        }
+        try block.applyTraitsForBlock(allocator, dim, left);
+        const container = containerOf(dim.getBlockPtr(left).?);
+        try std.testing.expectEqual(@as(u32, if (double) 54 else 27), container.getSize());
+        for (&expected, slots) |*item, slot| container.setItem(slot, try item.cloneWithCount(allocator, item.stack_size));
+        world.save();
+    }
+
+    const reopened = try tecton.world.provider.LevelDBProvider.init(std.testing.io, allocator, db_path);
+    var world = try tecton.world.World.init(undefined, allocator, "test", reopened.asProvider());
+    defer world.deinit();
+    const dim = try world.createDimension("overworld", .Overworld, null, false);
+    _ = try dim.getOrCreateChunk(0, 0);
+    try std.testing.expectEqualStrings("minecraft:chest", (try dim.getPermutation(left, 0)).identifier);
+    const restored = containerOf(dim.getBlockPtr(left).?);
+    try std.testing.expectEqual(@as(u32, if (double) 54 else 27), restored.getSize());
+    for (restored.storage, 0..) |slot, index| {
+        var expected_index: ?usize = null;
+        for (slots, 0..) |occupied, i| {
+            if (occupied == index) expected_index = i;
+        }
+        if (expected_index) |i| {
+            const actual = slot orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(expected[i].stack_size, actual.stack_size);
+            try std.testing.expectEqual(expected[i].metadata, actual.metadata);
+            try std.testing.expectEqualStrings(expected[i].item_type.identifier, actual.item_type.identifier);
+            try std.testing.expect(expected[i].isStackCompatible(&actual));
+        } else try std.testing.expect(slot == null);
+    }
+    if (double) {
+        const child = containerOf(dim.getBlockPtr(right).?);
+        try std.testing.expectEqual(@as(u32, 27), child.getSize());
+        for (child.storage) |slot| try std.testing.expect(slot == null);
+    }
+}
+
 test "the public API is organized as module namespaces" {
     _ = tecton.world.World;
     _ = tecton.world.Dimension;
