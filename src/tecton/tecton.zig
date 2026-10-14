@@ -25,6 +25,7 @@ const PlayerLocations = @import("./player/player_locations.zig").PlayerLocations
 const PlayerLocation = @import("./player/player_locations.zig").Location;
 const PlayerSnapshot = @import("./player/player_snapshot.zig").PlayerSnapshot;
 const Player = @import("./player/player.zig").Player;
+const ShutdownSignal = @import("./server/shutdown_signal.zig");
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 const threaded_tasks = @import("./tasks/threaded_tasks.zig");
 const ThreadedTaskQueue = threaded_tasks.ThreadedTaskQueue;
@@ -333,6 +334,8 @@ pub const Tecton = struct {
 
     pub fn start(self: *Tecton) !void {
         if (self.started) return;
+        ShutdownSignal.install();
+
         self.fixAddress();
         self.network = try NetworkHandler.init(self.io, self.allocator, &self.threaded_tasks, .{
             .ctx = self,
@@ -427,6 +430,10 @@ pub const Tecton = struct {
 
     pub fn run(self: *Tecton) !void {
         while (self.raknet.running.load(.acquire)) {
+            if (ShutdownSignal.isShutdownRequested()) {
+                self.stop() catch {};
+                return;
+            }
             try self.io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
         }
     }
