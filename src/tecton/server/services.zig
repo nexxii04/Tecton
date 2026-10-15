@@ -342,6 +342,10 @@ test "world admin command view resolves registry state at call time" {
     try worlds_suite.case_036();
 }
 
+test "a world reload restores a stored entity, a chest with items and a player inventory" {
+    try worlds_suite.case_037();
+}
+
 test {
     _ = @import("host_rules_test.zig");
 }

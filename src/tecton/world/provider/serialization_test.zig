@@ -23,6 +23,10 @@ pub fn Suite(comptime scope: type) type {
         const decodeNbt = scope.decodeNbt;
         const world_border = scope.world_border;
         const max_motion = scope.max_motion;
+        const Player = scope.Player;
+        const InventoryTrait = scope.InventoryTrait;
+        const serializePlayer = scope.serializePlayer;
+        const deserializePlayer = scope.deserializePlayer;
 
         pub fn case_000() !void {
             const allocator = testing.allocator;
@@ -139,7 +143,6 @@ pub fn Suite(comptime scope: type) type {
             _ = try std.fmt.hexToBytes(&golden_buf, golden_hex);
             try testing.expectEqualSlices(u8, &golden_buf, bytes);
 
-
             var decoded = try decodeNbt(allocator, bytes);
             defer decoded.deinit(allocator);
             var item_again = deserializeItemStack(allocator, &decoded) orelse return error.TestUnexpectedResult;
@@ -177,7 +180,6 @@ pub fn Suite(comptime scope: type) type {
             try testing.expectEqual(golden_hex.len / 2, bytes.len);
             _ = try std.fmt.hexToBytes(&golden_buf, golden_hex);
             try testing.expectEqualSlices(u8, &golden_buf, bytes);
-
 
             var decoded = try decodeNbt(allocator, bytes);
             defer decoded.deinit(allocator);
@@ -231,7 +233,6 @@ pub fn Suite(comptime scope: type) type {
             _ = try std.fmt.hexToBytes(&golden_buf, golden_hex);
             try testing.expectEqualSlices(u8, &golden_buf, bytes);
 
-
             var decoded = try decodeNbt(allocator, bytes);
             defer decoded.deinit(allocator);
             var container_again = try Container.init(allocator, .Inventory, 9);
@@ -253,6 +254,67 @@ pub fn Suite(comptime scope: type) type {
             defer wrap_again.deinit(allocator);
             try wrap_again.set("Items", .{ .List = list_again });
             const bytes_again = try encodeNbt(allocator, &wrap_again);
+            defer allocator.free(bytes_again);
+            try testing.expectEqualSlices(u8, bytes, bytes_again);
+        }
+
+        pub fn case_006() !void {
+            const allocator = testing.allocator;
+
+            try ItemType.initRegistry(allocator);
+            defer ItemType.deinitRegistry();
+
+            const blade_type = try EnchantmentTesting.itemType(allocator, "minecraft:test_rt_player_blade", &.{"minecraft:is_sword"}, false);
+            try blade_type.register();
+
+            const player_type = EntityType.init("minecraft:player", 20, &.{}, &.{});
+            var player: Player = undefined;
+            player.entity = Entity.init(allocator, &player_type, null);
+            defer player.entity.deinit();
+            player.entity.position = Protocol.Vector3f.init(1.5, 65.0, 2.5);
+            player.entity.rotation = Protocol.Vector2f.init(45.0, -10.0);
+            player.entity.motion = Protocol.Vector3f.init(0.0, 0.0, 0.0);
+            player.entity.unique_id = 777;
+            try player.entity.addTrait(try InventoryTrait.create(allocator, .{
+                .container = undefined,
+                .selected_slot = 0,
+                .opened = false,
+            }));
+            const inv = player.entity.getTraitState(InventoryTrait) orelse return error.TestUnexpectedResult;
+            inv.selected_slot = 4;
+            inv.container.base.setItem(0, ItemStack.init(allocator, blade_type, .{ .stack_size = 1, .metadata = 0 }));
+
+            var tag = try serializePlayer(allocator, &player);
+            defer tag.deinit(allocator);
+            const bytes = try encodeNbt(allocator, &tag);
+            defer allocator.free(bytes);
+            const golden_hex = "0a0000090800526f746174696f6e050200000000003442000020c103150053656c6563746564496e76656e746f7279536c6f7404000000090300506f7305030000000000c03f0000824200002040030b0044696d656e73696f6e496400000000080a006964656e74696669657210006d696e6563726166743a706c617965720906004d6f74696f6e0503000000000000000000000000000000090900496e76656e746f72790a01000000010400536c6f7400010500436f756e740102060044616d61676500000804004e616d651e006d696e6563726166743a746573745f72745f706c617965725f626c61646500040800556e697175654944090300000000000000";
+            const golden = try allocator.alloc(u8, golden_hex.len / 2);
+            defer allocator.free(golden);
+            _ = try std.fmt.hexToBytes(golden, golden_hex);
+            try testing.expectEqualSlices(u8, golden, bytes);
+
+            var decoded = try decodeNbt(allocator, bytes);
+            defer decoded.deinit(allocator);
+            var loaded_player: Player = undefined;
+            loaded_player.entity = Entity.init(allocator, &player_type, null);
+            defer loaded_player.entity.deinit();
+            try loaded_player.entity.addTrait(try InventoryTrait.create(allocator, .{
+                .container = undefined,
+                .selected_slot = 0,
+                .opened = false,
+            }));
+            deserializePlayer(allocator, &loaded_player, &decoded);
+            try testing.expectEqual(@as(i64, 777), loaded_player.entity.unique_id);
+            try testing.expectEqual(@as(f32, 1.5), loaded_player.entity.position.x);
+            const inv_again = loaded_player.entity.getTraitState(InventoryTrait) orelse return error.TestUnexpectedResult;
+            try testing.expectEqual(@as(u8, 4), inv_again.selected_slot);
+            const blade_again = inv_again.container.base.getItem(0) orelse return error.TestUnexpectedResult;
+            try testing.expectEqualStrings("minecraft:test_rt_player_blade", blade_again.item_type.identifier);
+
+            var tag_again = try serializePlayer(allocator, &loaded_player);
+            defer tag_again.deinit(allocator);
+            const bytes_again = try encodeNbt(allocator, &tag_again);
             defer allocator.free(bytes_again);
             try testing.expectEqualSlices(u8, bytes, bytes_again);
         }

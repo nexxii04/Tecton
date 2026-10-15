@@ -1,4 +1,8 @@
 const Helpers = @import("services_test_helpers.zig").Fixture;
+const worlds_mod = @import("worlds.zig");
+const entity_root = @import("../entity/root.zig");
+const items_root = @import("../items/root.zig");
+const chest_trait = @import("../world/block/traits/chest.zig");
 
 pub fn Suite(comptime scope: type) type {
     return struct {
@@ -15,6 +19,8 @@ pub fn Suite(comptime scope: type) type {
         const Protocol = F.Protocol;
         const block_root = F.block_root;
 
+        const Entity = F.Entity;
+        const Player = F.Player;
         const PlayerRegistry = F.PlayerRegistry;
         const WorldRegistry = F.WorldRegistry;
         const CommandRegistry = F.CommandRegistry;
@@ -262,6 +268,107 @@ pub fn Suite(comptime scope: type) type {
             try testing.expect(built.get("later").? == &world);
 
             try testing.expect(!built.worldDirExists("definitely-missing-world-dir"));
+        }
+
+        pub fn case_037() !void {
+            try block_root.initRegistries(allocator);
+            defer block_root.deinitRegistries();
+            try chest_trait.ChestTrait.register();
+            _ = try block_root.loadBlockPermutations(allocator);
+            entity_root.traits.initEntityTraitRegistry(allocator);
+            defer entity_root.traits.deinitEntityTraitRegistry();
+            try entity_root.traits.HealthTrait.register();
+            try items_root.initRegistry(allocator);
+            defer items_root.deinitRegistry();
+            _ = try items_root.loadItemTypes(allocator);
+            _ = try entity_root.EntityTypeRegistry.initRegistry(allocator);
+            defer entity_root.EntityTypeRegistry.EntityTypeRegistry.deinit();
+
+            var tmp = std.testing.tmpDir(.{});
+            defer tmp.cleanup();
+            var dir_buf: [512]u8 = undefined;
+            const worlds_dir = try std.fmt.bufPrint(&dir_buf, ".zig-cache/tmp/{s}/worlds", .{&tmp.sub_path});
+
+            var stub = stubNetwork();
+            var tecton: Tecton = undefined;
+            baseTecton(&tecton, &stub);
+            tecton.worlds = WorldRegistry.init(allocator);
+            defer tecton.worlds.deinit();
+            defer tecton.worlds.deinitOps();
+            tecton.ecs = try entity_root.ECS.EcsWorld.init(allocator, 16);
+            defer tecton.ecs.deinit();
+            tecton.paths = .{ .worlds = worlds_dir };
+
+            const uuid = "00000000-0000-0000-0000-0000000000ab";
+            const zombie_type = entity_root.EntityTypeRegistry.EntityTypeRegistry.get("minecraft:zombie").?;
+            const dirt_type = items_root.ItemType.get("minecraft:dirt").?;
+            const player_type = entity_root.EntityType.init("minecraft:player", 20, &.{}, &.{});
+            const mob_position = Protocol.Vector3f.init(1.5, 5.0, 2.5);
+            const chest_position = Protocol.BlockPosition{ .x = 1, .y = 5, .z = 1 };
+            var stored_unique_id: i64 = 0;
+
+            {
+                const world = try worlds_mod.build(host(&tecton), worlds_dir, "restart");
+                defer tecton.worlds.destroy(world);
+                const dim = world.getDimension("overworld").?;
+
+                const chest = try block_root.BlockPermutation.resolve(allocator, "minecraft:chest", null);
+                try dim.setPermutation(chest_position, chest, 0);
+                try block_root.applyTraitsForBlock(allocator, dim, chest_position);
+                const chest_state = dim.getBlockPtr(chest_position).?.getTraitState(chest_trait.ChestTrait).?;
+                chest_state.container.?.base.setItem(3, items_root.ItemStack.init(allocator, dirt_type, .{ .stack_size = 9 }));
+
+                const mob = try allocator.create(Entity);
+                mob.* = Entity.init(allocator, zombie_type, dim);
+                mob.position = mob_position;
+                try mob.addTrait(try entity_root.traits.HealthTrait.create(allocator, .{ .current = 7.5, .max = 20.0 }));
+                stored_unique_id = mob.unique_id;
+                try dim.entities.put(mob.runtime_id, mob);
+                dim.entity_index.add(mob);
+
+                var player: Player = undefined;
+                player.uuid = uuid;
+                player.entity = Entity.init(allocator, &player_type, null);
+                defer player.entity.deinit();
+                try player.entity.addTrait(try entity_root.traits.InventoryTrait.create(allocator, .{ .container = undefined, .selected_slot = 0, .opened = false }));
+                const inventory = player.entity.getTraitState(entity_root.traits.InventoryTrait).?;
+                inventory.selected_slot = 5;
+                inventory.container.base.setItem(5, items_root.ItemStack.init(allocator, dirt_type, .{ .stack_size = 12 }));
+                try world.provider.writePlayer(uuid, &player);
+
+                world.save();
+                try testing.expectEqual(@as(usize, 1), dim.entities.count());
+            }
+
+            {
+                const world = try worlds_mod.build(host(&tecton), worlds_dir, "restart");
+                defer tecton.worlds.destroy(world);
+                const dim = world.getDimension("overworld").?;
+
+                try testing.expectEqual(@as(usize, 1), dim.entities.count());
+                var entity_iter = dim.entities.valueIterator();
+                const loaded_mob = entity_iter.next().?.*;
+                try testing.expectEqual(stored_unique_id, loaded_mob.unique_id);
+                try testing.expectEqual(mob_position.x, loaded_mob.position.x);
+                try testing.expectEqual(@as(f32, 7.5), loaded_mob.getTraitState(entity_root.traits.HealthTrait).?.current);
+
+                try testing.expectEqualStrings("minecraft:chest", (try dim.getPermutation(chest_position, 0)).identifier);
+                const chest_state = dim.getBlockPtr(chest_position).?.getTraitState(chest_trait.ChestTrait).?;
+                const stored_item = chest_state.container.?.base.getItem(3).?;
+                try testing.expectEqualStrings("minecraft:dirt", stored_item.item_type.identifier);
+                try testing.expectEqual(@as(u16, 9), stored_item.stack_size);
+
+                var loaded_player: Player = undefined;
+                loaded_player.entity = Entity.init(allocator, &player_type, null);
+                defer loaded_player.entity.deinit();
+                try loaded_player.entity.addTrait(try entity_root.traits.InventoryTrait.create(allocator, .{ .container = undefined, .selected_slot = 0, .opened = false }));
+                try testing.expect(try world.provider.readPlayer(uuid, &loaded_player));
+                const inventory = loaded_player.entity.getTraitState(entity_root.traits.InventoryTrait).?;
+                try testing.expectEqual(@as(u8, 5), inventory.selected_slot);
+                const carried = inventory.container.base.getItem(5).?;
+                try testing.expectEqualStrings("minecraft:dirt", carried.item_type.identifier);
+                try testing.expectEqual(@as(u16, 12), carried.stack_size);
+            }
         }
     };
 }
