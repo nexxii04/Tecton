@@ -5,21 +5,21 @@ const Block = @import("../block.zig").Block;
 const Chunk = @import("../../chunk/chunk.zig").Chunk;
 const Dimension = @import("../../dimension/dimension.zig").Dimension;
 const broadcast = @import("../../dimension/broadcast.zig");
-const ChunkEntityIndex = @import("../../dimension/entity-index.zig").ChunkEntityIndex;
+const ChunkEntityIndex = @import("../../dimension/entity_index.zig").ChunkEntityIndex;
 const CachedPacket = @import("../../dimension/dimension.zig").CachedPacket;
 const chunkHash = @import("../../dimension/dimension.zig").chunkHash;
-const BlockPermutation = @import("../block-permutation.zig").BlockPermutation;
-const BlockState = @import("../block-permutation.zig").BlockState;
-const BlockType = @import("../block-type.zig").BlockType;
+const BlockPermutation = @import("../block_permutation.zig").BlockPermutation;
+const BlockState = @import("../block_permutation.zig").BlockState;
+const BlockType = @import("../block_type.zig").BlockType;
 const Player = @import("../../../player/player.zig").Player;
 const Entity = @import("../../../entity/entity.zig").Entity;
-const BlockContainer = @import("../../../container/block-container.zig").BlockContainer;
+const BlockContainer = @import("../../../container/block_container.zig").BlockContainer;
 const CompoundTag = @import("nbt").CompoundTag;
 const NBT = @import("nbt");
 const trait_mod = @import("./trait.zig");
 const serialization = @import("../../provider/serialization.zig");
-const ItemStack = @import("../../../items/item-stack.zig").ItemStack;
-const ItemType = @import("../../../items/item-type.zig").ItemType;
+const ItemStack = @import("../../../items/item_stack.zig").ItemStack;
+const ItemType = @import("../../../items/item_type.zig").ItemType;
 const Logger = @import("Raknet").Logger;
 
 pub const State = struct {
@@ -465,393 +465,43 @@ pub const ChestTrait = trait_mod.BlockTrait(State, .{
     .on_deserialize = &onDeserialize,
 });
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const Block = test_owner.Block;
+    pub const Chunk = test_owner.Chunk;
+    pub const Dimension = test_owner.Dimension;
+    pub const ChunkEntityIndex = test_owner.ChunkEntityIndex;
+    pub const CachedPacket = test_owner.CachedPacket;
+    pub const chunkHash = test_owner.chunkHash;
+    pub const BlockPermutation = test_owner.BlockPermutation;
+    pub const BlockState = test_owner.BlockState;
+    pub const BlockType = test_owner.BlockType;
+    pub const Entity = test_owner.Entity;
+    pub const CompoundTag = test_owner.CompoundTag;
+    pub const NBT = test_owner.NBT;
+    pub const trait_mod = test_owner.trait_mod;
+    pub const serialization = test_owner.serialization;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const ItemType = test_owner.ItemType;
+    pub const restoreAdjacentPairing = test_owner.restoreAdjacentPairing;
+    pub const tileFixNetworkIds = test_owner.tileFixNetworkIds;
+    pub const ChestTrait = test_owner.ChestTrait;
+};
+
 test "double chest preserves upper-half items when halves load in reverse order" {
-    const allocator = std.testing.allocator;
-
-    try BlockPermutation.initRegistry(allocator);
-    defer BlockPermutation.deinitRegistry();
-    try BlockType.initRegistry(allocator);
-    defer BlockType.deinitRegistry();
-    trait_mod.initTraitRegistry(allocator);
-    defer trait_mod.deinitTraitRegistry();
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-    try ChestTrait.register();
-
-    const air_type = try BlockType.init(allocator, "minecraft:air");
-    try air_type.register();
-    const air_state = BlockState.init(allocator);
-    const air_perm = try BlockPermutation.init(allocator, 0, "minecraft:air", air_state);
-    try air_perm.register();
-    try air_type.addPermutation(air_perm);
-
-    const chest_type = try BlockType.init(allocator, "minecraft:chest");
-    try chest_type.register();
-
-    var chest_state = BlockState.init(allocator);
-    try chest_state.put(
-        try allocator.dupe(u8, "minecraft:cardinal_direction"),
-        .{ .string = try allocator.dupe(u8, "north") },
-    );
-    const chest_perm = try BlockPermutation.init(allocator, 1, "minecraft:chest", chest_state);
-    try chest_perm.register();
-    try chest_type.addPermutation(chest_perm);
-
-    const test_item = try ItemType.init(
-        allocator,
-        try allocator.dupe(u8, "test:item"),
-        1,
-        64,
-        true,
-        try allocator.alloc([]const u8, 0),
-        false,
-        0,
-        NBT.Tag{ .Compound = NBT.CompoundTag.init(allocator, null) },
-    );
-    try test_item.register();
-
-    var dim = Dimension{
-        .world = undefined,
-        .allocator = allocator,
-        .identifier = "test",
-        .dimension_type = .Overworld,
-        .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
-        .entities = std.AutoHashMap(i64, *Entity).init(allocator),
-        .entity_index = ChunkEntityIndex.init(allocator),
-        .blocks = std.AutoHashMap(i64, *Block).init(allocator),
-        .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
-        .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
-        .chunk_generations = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), u64).init(allocator),
-        .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
-        .spawn_position = .{ .x = 0, .y = 0, .z = 0 },
-        .simulation_distance = 4,
-        .generator = null,
-    };
-    defer dim.deinit();
-
-    const chunk = try allocator.create(Chunk);
-    chunk.* = Chunk.init(allocator, 0, 0, .Overworld);
-    try dim.chunks.put(chunkHash(0, 0), chunk);
-
-    const left = Protocol.BlockPosition{ .x = 0, .y = 64, .z = 0 };
-    const right = Protocol.BlockPosition{ .x = 1, .y = 64, .z = 0 };
-    try chunk.setPermutation(left.x, left.y, left.z, chest_perm, 0);
-    try chunk.setPermutation(right.x, right.y, right.z, chest_perm, 0);
-
-    try trait_mod.applyTraitsForBlock(allocator, &dim, right);
-    try trait_mod.applyTraitsForBlock(allocator, &dim, left);
-
-    const saved_left = dim.getBlockPtr(left).?;
-    const saved_left_state = saved_left.getTraitState(ChestTrait).?;
-    try std.testing.expect(saved_left_state.is_parent);
-
-    if (saved_left_state.container) |*container| {
-        container.base.setItem(30, ItemStack.init(allocator, test_item, .{ .stack_size = 7 }));
-    } else {
-        return error.TestUnexpectedResult;
-    }
-
-    var left_tag = CompoundTag.init(allocator, null);
-    defer left_tag.deinit(allocator);
-    var right_tag = CompoundTag.init(allocator, null);
-    defer right_tag.deinit(allocator);
-    saved_left.fireEvent(.Serialize, .{&left_tag});
-    dim.getBlockPtr(right).?.fireEvent(.Serialize, .{&right_tag});
-
-    dim.removeBlock(left);
-    dim.removeBlock(right);
-
-    try trait_mod.applyTraitsForBlock(allocator, &dim, left);
-    try trait_mod.applyTraitsForBlock(allocator, &dim, right);
-
-    const loaded_left = dim.getBlockPtr(left).?;
-    const loaded_right = dim.getBlockPtr(right).?;
-    restoreAdjacentPairing(loaded_right);
-    restoreAdjacentPairing(loaded_left);
-    loaded_right.fireEvent(.Deserialize, .{&right_tag});
-    loaded_left.fireEvent(.Deserialize, .{&left_tag});
-
-    const loaded_left_state = loaded_left.getTraitState(ChestTrait).?;
-    const loaded_right_state = loaded_right.getTraitState(ChestTrait).?;
-    try std.testing.expect(loaded_left_state.is_parent);
-    try std.testing.expect(!loaded_right_state.is_parent);
-    try std.testing.expectEqual(@as(u32, 54), loaded_left_state.container.?.base.getSize());
-    try std.testing.expectEqual(@as(u32, 27), loaded_right_state.container.?.base.getSize());
-    try std.testing.expect(loaded_left_state.container.?.base.getItem(30) != null);
+    try @import("chest_test.zig").Suite(test_scope).case_000();
 }
 
 test "tile fix uses air then real block" {
-    const allocator = std.testing.allocator;
-
-    try BlockPermutation.initRegistry(allocator);
-    defer BlockPermutation.deinitRegistry();
-    try BlockType.initRegistry(allocator);
-    defer BlockType.deinitRegistry();
-    trait_mod.initTraitRegistry(allocator);
-    defer trait_mod.deinitTraitRegistry();
-    try ChestTrait.register();
-
-    const air_type = try BlockType.init(allocator, "minecraft:air");
-    try air_type.register();
-    const air_state = BlockState.init(allocator);
-    const air_perm = try BlockPermutation.init(allocator, 0, "minecraft:air", air_state);
-    try air_perm.register();
-    try air_type.addPermutation(air_perm);
-
-    const chest_type = try BlockType.init(allocator, "minecraft:chest");
-    try chest_type.register();
-
-    var chest_state = BlockState.init(allocator);
-    try chest_state.put(
-        try allocator.dupe(u8, "minecraft:cardinal_direction"),
-        .{ .string = try allocator.dupe(u8, "north") },
-    );
-    const chest_perm = try BlockPermutation.init(allocator, 1, "minecraft:chest", chest_state);
-    try chest_perm.register();
-    try chest_type.addPermutation(chest_perm);
-
-    var dim = Dimension{
-        .world = undefined,
-        .allocator = allocator,
-        .identifier = "test",
-        .dimension_type = .Overworld,
-        .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
-        .entities = std.AutoHashMap(i64, *Entity).init(allocator),
-        .entity_index = ChunkEntityIndex.init(allocator),
-        .blocks = std.AutoHashMap(i64, *Block).init(allocator),
-        .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
-        .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
-        .chunk_generations = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), u64).init(allocator),
-        .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
-        .spawn_position = .{ .x = 0, .y = 0, .z = 0 },
-        .simulation_distance = 4,
-        .generator = null,
-    };
-    defer dim.deinit();
-
-    const chunk = try allocator.create(Chunk);
-    chunk.* = Chunk.init(allocator, 0, 0, .Overworld);
-    try dim.chunks.put(chunkHash(0, 0), chunk);
-
-    const left = Protocol.BlockPosition{ .x = 0, .y = 64, .z = 0 };
-    const right = Protocol.BlockPosition{ .x = 1, .y = 64, .z = 0 };
-    try chunk.setPermutation(left.x, left.y, left.z, chest_perm, 0);
-    try chunk.setPermutation(right.x, right.y, right.z, chest_perm, 0);
-
-    try trait_mod.applyTraitsForBlock(allocator, &dim, right);
-    try trait_mod.applyTraitsForBlock(allocator, &dim, left);
-
-    const parent_block = dim.getBlockPtr(left).?;
-    const parent_state = parent_block.getTraitState(ChestTrait).?;
-    try std.testing.expect(parent_state.is_parent);
-
-    const block_ids = tileFixNetworkIds(parent_block, left) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u32, 0), block_ids[0]);
-    try std.testing.expectEqual(@as(u32, @bitCast(chest_perm.network_id)), block_ids[1]);
+    try @import("chest_test.zig").Suite(test_scope).case_001();
 }
 
 test "double chest serialization writes pairlead as int tag" {
-    const allocator = std.testing.allocator;
-
-    try BlockPermutation.initRegistry(allocator);
-    defer BlockPermutation.deinitRegistry();
-    try BlockType.initRegistry(allocator);
-    defer BlockType.deinitRegistry();
-    trait_mod.initTraitRegistry(allocator);
-    defer trait_mod.deinitTraitRegistry();
-    try ChestTrait.register();
-
-    const air_type = try BlockType.init(allocator, "minecraft:air");
-    try air_type.register();
-    const air_state = BlockState.init(allocator);
-    const air_perm = try BlockPermutation.init(allocator, 0, "minecraft:air", air_state);
-    try air_perm.register();
-    try air_type.addPermutation(air_perm);
-
-    const chest_type = try BlockType.init(allocator, "minecraft:chest");
-    try chest_type.register();
-
-    var chest_state = BlockState.init(allocator);
-    try chest_state.put(
-        try allocator.dupe(u8, "minecraft:cardinal_direction"),
-        .{ .string = try allocator.dupe(u8, "north") },
-    );
-    const chest_perm = try BlockPermutation.init(allocator, 1, "minecraft:chest", chest_state);
-    try chest_perm.register();
-    try chest_type.addPermutation(chest_perm);
-
-    var dim = Dimension{
-        .world = undefined,
-        .allocator = allocator,
-        .identifier = "test",
-        .dimension_type = .Overworld,
-        .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
-        .entities = std.AutoHashMap(i64, *Entity).init(allocator),
-        .entity_index = ChunkEntityIndex.init(allocator),
-        .blocks = std.AutoHashMap(i64, *Block).init(allocator),
-        .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
-        .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
-        .chunk_generations = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), u64).init(allocator),
-        .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
-        .spawn_position = .{ .x = 0, .y = 0, .z = 0 },
-        .simulation_distance = 4,
-        .generator = null,
-    };
-    defer dim.deinit();
-
-    const chunk = try allocator.create(Chunk);
-    chunk.* = Chunk.init(allocator, 0, 0, .Overworld);
-    try dim.chunks.put(chunkHash(0, 0), chunk);
-
-    const left = Protocol.BlockPosition{ .x = 0, .y = 64, .z = 0 };
-    const right = Protocol.BlockPosition{ .x = 1, .y = 64, .z = 0 };
-    try chunk.setPermutation(left.x, left.y, left.z, chest_perm, 0);
-    try chunk.setPermutation(right.x, right.y, right.z, chest_perm, 0);
-
-    try trait_mod.applyTraitsForBlock(allocator, &dim, right);
-    try trait_mod.applyTraitsForBlock(allocator, &dim, left);
-
-    const parent_block = dim.getBlockPtr(left).?;
-    const parent_state = parent_block.getTraitState(ChestTrait).?;
-    try std.testing.expect(parent_state.is_parent);
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-    parent_block.fireEvent(.Serialize, .{&tag});
-
-    const pairlead = tag.get("pairlead") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(pairlead == .Int);
+    try @import("chest_test.zig").Suite(test_scope).case_002();
 }
 
 test "double chest preserves upper-half items across repeated unload cycles" {
-    const allocator = std.testing.allocator;
-
-    try BlockPermutation.initRegistry(allocator);
-    defer BlockPermutation.deinitRegistry();
-    try BlockType.initRegistry(allocator);
-    defer BlockType.deinitRegistry();
-    trait_mod.initTraitRegistry(allocator);
-    defer trait_mod.deinitTraitRegistry();
-    try ItemType.initRegistry(allocator);
-    defer ItemType.deinitRegistry();
-    try ChestTrait.register();
-
-    const air_type = try BlockType.init(allocator, "minecraft:air");
-    try air_type.register();
-    const air_state = BlockState.init(allocator);
-    const air_perm = try BlockPermutation.init(allocator, 0, "minecraft:air", air_state);
-    try air_perm.register();
-    try air_type.addPermutation(air_perm);
-
-    const chest_type = try BlockType.init(allocator, "minecraft:chest");
-    try chest_type.register();
-
-    var chest_state = BlockState.init(allocator);
-    try chest_state.put(
-        try allocator.dupe(u8, "minecraft:cardinal_direction"),
-        .{ .string = try allocator.dupe(u8, "north") },
-    );
-    const chest_perm = try BlockPermutation.init(allocator, 1, "minecraft:chest", chest_state);
-    try chest_perm.register();
-    try chest_type.addPermutation(chest_perm);
-
-    const test_item = try ItemType.init(
-        allocator,
-        try allocator.dupe(u8, "test:item"),
-        1,
-        64,
-        true,
-        try allocator.alloc([]const u8, 0),
-        false,
-        0,
-        NBT.Tag{ .Compound = NBT.CompoundTag.init(allocator, null) },
-    );
-    try test_item.register();
-
-    var dim = Dimension{
-        .world = undefined,
-        .allocator = allocator,
-        .identifier = "test",
-        .dimension_type = .Overworld,
-        .chunks = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), *Chunk).init(allocator),
-        .entities = std.AutoHashMap(i64, *Entity).init(allocator),
-        .entity_index = ChunkEntityIndex.init(allocator),
-        .blocks = std.AutoHashMap(i64, *Block).init(allocator),
-        .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
-        .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
-        .chunk_generations = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), u64).init(allocator),
-        .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
-        .spawn_position = .{ .x = 0, .y = 0, .z = 0 },
-        .simulation_distance = 4,
-        .generator = null,
-    };
-    defer dim.deinit();
-
-    const chunk = try allocator.create(Chunk);
-    chunk.* = Chunk.init(allocator, 0, 0, .Overworld);
-    try dim.chunks.put(chunkHash(0, 0), chunk);
-
-    const left = Protocol.BlockPosition{ .x = 0, .y = 64, .z = 0 };
-    const right = Protocol.BlockPosition{ .x = 1, .y = 64, .z = 0 };
-    try chunk.setPermutation(left.x, left.y, left.z, chest_perm, 0);
-    try chunk.setPermutation(right.x, right.y, right.z, chest_perm, 0);
-
-    try trait_mod.applyTraitsForBlock(allocator, &dim, right);
-    try trait_mod.applyTraitsForBlock(allocator, &dim, left);
-
-    const initial_left = dim.getBlockPtr(left).?;
-    const initial_left_state = initial_left.getTraitState(ChestTrait).?;
-    try std.testing.expect(initial_left_state.is_parent);
-
-    if (initial_left_state.container) |*container| {
-        container.base.setItem(30, ItemStack.init(allocator, test_item, .{ .stack_size = 7 }));
-    } else {
-        return error.TestUnexpectedResult;
-    }
-
-    var cycle: usize = 0;
-    while (cycle < 5) : (cycle += 1) {
-        var left_tag = CompoundTag.init(allocator, null);
-        defer left_tag.deinit(allocator);
-        var right_tag = CompoundTag.init(allocator, null);
-        defer right_tag.deinit(allocator);
-
-        dim.getBlockPtr(left).?.fireEvent(.Serialize, .{&left_tag});
-        dim.getBlockPtr(right).?.fireEvent(.Serialize, .{&right_tag});
-
-        dim.removeBlock(left);
-        dim.removeBlock(right);
-
-        if (cycle % 2 == 0) {
-            try trait_mod.applyTraitsForBlock(allocator, &dim, right);
-            try trait_mod.applyTraitsForBlock(allocator, &dim, left);
-        } else {
-            try trait_mod.applyTraitsForBlock(allocator, &dim, left);
-            try trait_mod.applyTraitsForBlock(allocator, &dim, right);
-        }
-
-        const loaded_left = dim.getBlockPtr(left).?;
-        const loaded_right = dim.getBlockPtr(right).?;
-
-        restoreAdjacentPairing(loaded_right);
-        restoreAdjacentPairing(loaded_left);
-
-        if (cycle % 2 == 0) {
-            loaded_right.fireEvent(.Deserialize, .{&right_tag});
-            loaded_left.fireEvent(.Deserialize, .{&left_tag});
-        } else {
-            loaded_left.fireEvent(.Deserialize, .{&left_tag});
-            loaded_right.fireEvent(.Deserialize, .{&right_tag});
-        }
-
-        const loaded_left_state = loaded_left.getTraitState(ChestTrait).?;
-        const loaded_right_state = loaded_right.getTraitState(ChestTrait).?;
-        try std.testing.expect(loaded_left_state.is_parent);
-        try std.testing.expect(!loaded_right_state.is_parent);
-        try std.testing.expectEqual(@as(u32, 54), loaded_left_state.container.?.base.getSize());
-        try std.testing.expectEqual(@as(u32, 27), loaded_right_state.container.?.base.getSize());
-
-        const item = loaded_left_state.container.?.base.getItem(30) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqual(@as(u16, 7), item.stack_size);
-    }
+    try @import("chest_test.zig").Suite(test_scope).case_003();
 }

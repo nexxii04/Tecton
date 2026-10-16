@@ -11,7 +11,6 @@ const Handles = @import("handles.zig");
 const SendPriority = @import("../network/root.zig").SendPriority;
 const Player = @import("../player/player.zig").Player;
 
-/// Sanity ceiling for plugin payloads; larger ones fragment into hundreds of frames.
 const MAX_PLUGIN_PACKET_BYTES: usize = 1 << 20;
 const event_count = std.meta.fields(Events.Event).len;
 
@@ -625,7 +624,7 @@ pub const PluginRuntime = struct {
     }
 
     fn itemsCount(_: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
-        const ItemType = @import("../items/item-type.zig").ItemType;
+        const ItemType = @import("../items/item_type.zig").ItemType;
         count_output.* = ItemType.getAll().count();
         return abi.result_ok;
     }
@@ -634,7 +633,7 @@ pub const PluginRuntime = struct {
         const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
-        const ItemType = @import("../items/item-type.zig").ItemType;
+        const ItemType = @import("../items/item_type.zig").ItemType;
         var iterator = ItemType.getAll().valueIterator();
         var current: usize = 0;
         while (iterator.next()) |item_ptr| {
@@ -780,7 +779,7 @@ pub const PluginRuntime = struct {
         const tecton = self.tecton orelse return -1;
         const world = self.findWorldByHandle(tecton, world_handle) orelse return -1;
         const dimension_value = world.getDimension(dimension.slice()) orelse return -2;
-        const permutation = @import("../world/block/block-permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return -3;
+        const permutation = @import("../world/block/block_permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return -3;
         dimension_value.setPermutation(.{ .x = x, .y = y, .z = z }, permutation, 0) catch return -3;
         return 0;
     }
@@ -842,74 +841,23 @@ pub const PluginRuntime = struct {
     }
 };
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const abi = test_owner.abi;
+    pub const SendPriority = test_owner.SendPriority;
+    pub const MAX_PLUGIN_PACKET_BYTES = test_owner.MAX_PLUGIN_PACKET_BYTES;
+    pub const PluginRuntime = test_owner.PluginRuntime;
+    pub const private_pluginruntime_getInterface = test_owner.PluginRuntime.getInterface;
+    pub const private_pluginruntime_networkBroadcast = test_owner.PluginRuntime.networkBroadcast;
+    pub const private_pluginruntime_networkSend = test_owner.PluginRuntime.networkSend;
+    pub const private_pluginruntime_sendPriority = test_owner.PluginRuntime.sendPriority;
+};
+
 test "core and scheduler interfaces are independently discoverable" {
-    var runtime = PluginRuntime.init(std.testing.allocator);
-    defer runtime.deinit();
-
-    var core: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_core, 1, 0, &core));
-    try std.testing.expect(core != null);
-    try std.testing.expectEqual(abi.interface_core, core.?.interface_id);
-    try std.testing.expectEqual(@as(u32, @sizeOf(abi.CoreApi)), core.?.struct_size);
-
-    var scheduler: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_scheduler, 1, 0, &scheduler));
-    try std.testing.expect(scheduler != null);
-    try std.testing.expectEqual(abi.interface_scheduler, scheduler.?.interface_id);
-
-    var world: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_world, 1, 0, &world));
-    try std.testing.expect(world != null);
-    try std.testing.expectEqual(abi.interface_world, world.?.interface_id);
-
-    var players: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_players, 1, 0, &players));
-    try std.testing.expect(players != null);
-
-    var entities: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_entities, 1, 0, &entities));
-    try std.testing.expect(entities != null);
-
-    var items: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_items, 1, 0, &items));
-    try std.testing.expect(items != null);
-
-    var blocks: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_blocks, 1, 0, &blocks));
-    try std.testing.expect(blocks != null);
-
-    var inventories: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_inventories, 1, 0, &inventories));
-    try std.testing.expect(inventories != null);
-
-    var network: ?abi.InterfacePtr = null;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&runtime), abi.interface_network, 1, 0, &network));
-    try std.testing.expect(network != null);
-    try std.testing.expectEqual(abi.interface_network, network.?.interface_id);
-    try std.testing.expectEqual(@as(u32, @sizeOf(abi.NetworkApi)), network.?.struct_size);
-    try std.testing.expect(runtime.host.features & abi.feature_network != 0);
+    try @import("runtime_test.zig").Suite(test_scope).case_000();
 }
 
 test "network send validates priority and payload before resolving anything else" {
-    var runtime = PluginRuntime.init(std.testing.allocator);
-    defer runtime.deinit();
-
-    const payload = "packet";
-    const view = abi.StringView{ .data = payload.ptr, .length = payload.len };
-
-    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkSend(@ptrCast(&runtime), 1, view, 7));
-    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkSend(@ptrCast(&runtime), 1, .{}, abi.packet_priority_normal));
-    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkBroadcast(@ptrCast(&runtime), .{}, abi.packet_priority_immediate));
-
-    const oversized = try std.testing.allocator.alloc(u8, MAX_PLUGIN_PACKET_BYTES + 1);
-    defer std.testing.allocator.free(oversized);
-    const big = abi.StringView{ .data = oversized.ptr, .length = oversized.len };
-    try std.testing.expectEqual(abi.result_invalid_argument, PluginRuntime.networkBroadcast(@ptrCast(&runtime), big, abi.packet_priority_normal));
-
-    try std.testing.expectEqual(abi.result_not_found, PluginRuntime.networkSend(@ptrCast(&runtime), 1, view, abi.packet_priority_immediate));
-    try std.testing.expectEqual(abi.result_not_found, PluginRuntime.networkBroadcast(@ptrCast(&runtime), view, abi.packet_priority_normal));
-
-    try std.testing.expectEqual(SendPriority.normal, PluginRuntime.sendPriority(abi.packet_priority_normal).?);
-    try std.testing.expectEqual(SendPriority.immediate, PluginRuntime.sendPriority(abi.packet_priority_immediate).?);
-    try std.testing.expect(PluginRuntime.sendPriority(7) == null);
+    try @import("runtime_test.zig").Suite(test_scope).case_001();
 }

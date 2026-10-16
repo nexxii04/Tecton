@@ -6,28 +6,28 @@ const Packet = protocol.Packet;
 const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
-const NetworkHandler = @import("./network-handler.zig").NetworkHandler;
-const TickProfilerPhase = @import("../tick-profiler.zig").Phase;
+const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
+const TickProfilerPhase = @import("../core/tick_profiler.zig").Phase;
 
 const handleAnimate = @import("./handlers/animate.zig").handleAnimate;
-const handleBlockPickRequest = @import("./handlers/block-pick-request.zig").handleBlockPickRequest;
-const handleClientCacheStatus = @import("./handlers/client-cache-status.zig").handleClientCacheStatus;
-const handleCommandRequest = @import("./handlers/command-request.zig").handleCommandRequest;
-const handleContainerClose = @import("./handlers/container-close.zig").handleContainerClose;
+const handleBlockPickRequest = @import("./handlers/block_pick_request.zig").handleBlockPickRequest;
+const handleClientCacheStatus = @import("./handlers/client_cache_status.zig").handleClientCacheStatus;
+const handleCommandRequest = @import("./handlers/command_request.zig").handleCommandRequest;
+const handleContainerClose = @import("./handlers/container_close.zig").handleContainerClose;
 const handleInteract = @import("./handlers/interact.zig").handleInteract;
-const handleInventoryTransaction = @import("./handlers/inventory-transaction.zig").handleInventoryTransaction;
-const handleItemStackRequest = @import("./handlers/item-stack-request.zig").handleItemStackRequest;
+const handleInventoryTransaction = @import("./handlers/inventory_transaction.zig").handleInventoryTransaction;
+const handleItemStackRequest = @import("./handlers/item_stack_request.zig").handleItemStackRequest;
 const handleLogin = @import("./handlers/login.zig").handleLogin;
-const handleMobEquipment = @import("./handlers/mob-equipment.zig").handleMobEquipment;
-const handlePlayerHotbar = @import("./handlers/player-hotbar.zig").handlePlayerHotbar;
-const handlePacketViolationWarning = @import("./handlers/packet-violation-warning.zig").handlePacketViolationWarning;
-const handlePlayerAction = @import("./handlers/player-action.zig").handlePlayerAction;
-const handlePlayerAuthInput = @import("./handlers/player-auth-input.zig").handlePlayerAuthInput;
-const handleRequestChunkRadius = @import("./handlers/request-chunk-radius.zig").handleRequestChunkRadius;
+const handleMobEquipment = @import("./handlers/mob_equipment.zig").handleMobEquipment;
+const handlePlayerHotbar = @import("./handlers/player_hotbar.zig").handlePlayerHotbar;
+const handlePacketViolationWarning = @import("./handlers/packet_violation_warning.zig").handlePacketViolationWarning;
+const handlePlayerAction = @import("./handlers/player_action.zig").handlePlayerAction;
+const handlePlayerAuthInput = @import("./handlers/player_auth_input.zig").handlePlayerAuthInput;
+const handleRequestChunkRadius = @import("./handlers/request_chunk_radius.zig").handleRequestChunkRadius;
 const handleRespawn = @import("./handlers/respawn.zig").handleRespawn;
-const handleNetworkSettings = @import("./handlers/request-network-settings.zig").handleNetworkSettings;
-const handleResourcePack = @import("./handlers/resource-packs-response.zig").handleResourcePack;
-const handleSetLocalPlayerAsInitialized = @import("./handlers/set-local-player-as-initialized.zig").handleSetLocalPlayerAsInitialized;
+const handleNetworkSettings = @import("./handlers/request_network_settings.zig").handleNetworkSettings;
+const handleResourcePack = @import("./handlers/resource_packs_response.zig").handleResourcePack;
+const handleSetLocalPlayerAsInitialized = @import("./handlers/set_local_player_as_initialized.zig").handleSetLocalPlayerAsInitialized;
 const handleTextPacket = @import("./handlers/text.zig").handleTextPacket;
 
 const Route = struct {
@@ -122,7 +122,6 @@ fn dispatchOne(
     Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id});
 }
 
-// Walking routes pulls every handler into the test build and catches duplicate ids.
 test "the route table has no duplicate ids" {
     for (routes, 0..) |route, i| {
         for (routes[i + 1 ..]) |other| {

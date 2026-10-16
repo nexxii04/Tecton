@@ -1,7 +1,7 @@
 const std = @import("std");
 const SubChunk = @import("./subchunk.zig").SubChunk;
-const BiomeStorage = @import("./storage/biome-storage.zig").BiomeStorage;
-const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const BiomeStorage = @import("./storage/biome_storage.zig").BiomeStorage;
+const BlockPermutation = @import("../block/block_permutation.zig").BlockPermutation;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const DimensionType = @import("protocol").DimensionType;
 
@@ -9,7 +9,7 @@ pub const MAX_SUBCHUNKS: usize = 24;
 pub const OVERWORLD_OFFSET: usize = 4;
 
 const COLUMN_COUNT: usize = 16 * 16;
-/// Heightmap slot that has not been scanned yet.
+
 const HEIGHTMAP_UNCOMPUTED: i32 = std.math.minInt(i32);
 
 pub fn yOffset(dimension: DimensionType) usize {
@@ -26,9 +26,7 @@ pub const Chunk = struct {
     z: i32,
     dimension: DimensionType,
     subchunks: [MAX_SUBCHUNKS]?*SubChunk,
-    /// Highest non-air block of each column, scanned at most once per column and
-    /// cleared by the writes that touch it: sky access is then a single compare
-    /// instead of walking every block up to the build limit.
+
     heightmap: [COLUMN_COUNT]i32,
     dirty: bool,
     cache: ?[]const u8,
@@ -97,18 +95,14 @@ pub const Chunk = struct {
         self.invalidateCache();
     }
 
-    /// Lowest y this chunk can hold, inclusive.
     pub fn minBuildY(self: *const Chunk) i32 {
         return -@as(i32, @intCast(yOffset(self.dimension))) * 16;
     }
 
-    /// One past the highest y this chunk can hold.
     pub fn buildLimit(self: *const Chunk) i32 {
         return (@as(i32, @intCast(MAX_SUBCHUNKS)) - @as(i32, @intCast(yOffset(self.dimension)))) * 16;
     }
 
-    /// Highest non-air block of the column, or `minBuildY() - 1` when the whole
-    /// column is air.
     pub fn topBlockY(self: *Chunk, x: i32, z: i32) i32 {
         const column = columnIndex(x, z);
         if (self.heightmap[column] == HEIGHTMAP_UNCOMPUTED) {
@@ -117,9 +111,6 @@ pub const Chunk = struct {
         return self.heightmap[column];
     }
 
-    /// True when the column is clear from `y + 2` up to the build limit, so rain
-    /// reaches an entity standing at `y`. The block at `y + 1` is inside the
-    /// grace: being level with a block is not shelter.
     pub fn isSkyExposed(self: *Chunk, x: i32, y: i32, z: i32) bool {
         return self.topBlockY(x, z) < y + 2;
     }
@@ -134,8 +125,6 @@ pub const Chunk = struct {
         return floor - 1;
     }
 
-    /// Whole subchunks bypass `setPermutation`, so any chunk that receives them
-    /// (disk loads, generated batches) has to drop its cached heights.
     pub fn invalidateHeightmap(self: *Chunk) void {
         @memset(&self.heightmap, HEIGHTMAP_UNCOMPUTED);
     }
@@ -185,11 +174,9 @@ const TestBlocks = struct {
     stone: *BlockPermutation,
 };
 
-/// The block registries are global, so each test registers its own pair and
-/// tears them down before the next one runs.
 fn registerTestBlocks(allocator: std.mem.Allocator) !TestBlocks {
-    const BlockType = @import("../block/block-type.zig").BlockType;
-    const BlockState = @import("../block/block-permutation.zig").BlockState;
+    const BlockType = @import("../block/block_type.zig").BlockType;
+    const BlockState = @import("../block/block_permutation.zig").BlockState;
 
     try BlockPermutation.initRegistry(allocator);
     errdefer BlockPermutation.deinitRegistry();
@@ -212,7 +199,7 @@ fn registerTestBlocks(allocator: std.mem.Allocator) !TestBlocks {
 }
 
 fn deinitTestBlocks() void {
-    @import("../block/block-type.zig").BlockType.deinitRegistry();
+    @import("../block/block_type.zig").BlockType.deinitRegistry();
     BlockPermutation.deinitRegistry();
 }
 
@@ -231,23 +218,18 @@ test "the heightmap reports the top block of a column" {
     try chunk.setPermutation(1, 64, 1, blocks.stone, 0);
     try testing.expectEqual(@as(i32, 64), chunk.topBlockY(1, 1));
 
-    // The first query fills the slot the sky check reads, and writing another
-    // column leaves it cached.
     try testing.expectEqual(@as(i32, 64), chunk.heightmap[columnIndex(1, 1)]);
     try chunk.setPermutation(2, 70, 1, blocks.stone, 0);
     try testing.expectEqual(@as(i32, 64), chunk.heightmap[columnIndex(1, 1)]);
     try testing.expectEqual(HEIGHTMAP_UNCOMPUTED, chunk.heightmap[columnIndex(2, 1)]);
     try testing.expectEqual(@as(i32, 70), chunk.topBlockY(2, 1));
 
-    // A block below the surface does not move the top...
     try chunk.setPermutation(1, 30, 1, blocks.stone, 0);
     try testing.expectEqual(@as(i32, 64), chunk.topBlockY(1, 1));
 
-    // ...but breaking the top block re-scans the column.
     try chunk.setPermutation(1, 64, 1, blocks.air, 0);
     try testing.expectEqual(@as(i32, 30), chunk.topBlockY(1, 1));
 
-    // The lowest layer of the overworld still counts as a block.
     try chunk.setPermutation(0, -64, 0, blocks.stone, 0);
     try testing.expectEqual(@as(i32, -64), chunk.topBlockY(0, 0));
 }
@@ -260,20 +242,16 @@ test "sky exposure looks past the two block grace" {
     var chunk = Chunk.init(allocator, 0, 0, .Overworld);
     defer chunk.deinit();
 
-    // An empty column has nothing overhead.
     try testing.expect(chunk.isSkyExposed(1, 64, 1));
 
-    // A block level with the feet and one above it are not a roof.
     try chunk.setPermutation(1, 64, 1, blocks.stone, 0);
     try testing.expect(chunk.isSkyExposed(1, 64, 1));
     try chunk.setPermutation(1, 65, 1, blocks.stone, 0);
     try testing.expect(chunk.isSkyExposed(1, 64, 1));
 
-    // From feet + 2 up, any block shelters.
     try chunk.setPermutation(1, 66, 1, blocks.stone, 0);
     try testing.expect(!chunk.isSkyExposed(1, 64, 1));
 
-    // Breaking the roof exposes the column again without a rescan of the world.
     try chunk.setPermutation(1, 66, 1, blocks.air, 0);
     try testing.expect(chunk.isSkyExposed(1, 64, 1));
 }

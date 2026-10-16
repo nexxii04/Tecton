@@ -2,10 +2,10 @@ const std = @import("std");
 
 const Protocol = @import("protocol");
 
-const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const BlockPermutation = @import("../block/block_permutation.zig").BlockPermutation;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
-const TerrainGenerator = @import("./terrain-generator.zig").TerrainGenerator;
-const GeneratorProperties = @import("./terrain-generator.zig").GeneratorProperties;
+const TerrainGenerator = @import("./terrain_generator.zig").TerrainGenerator;
+const GeneratorProperties = @import("./terrain_generator.zig").GeneratorProperties;
 
 pub const SuperflatGenerator = struct {
     allocator: std.mem.Allocator,

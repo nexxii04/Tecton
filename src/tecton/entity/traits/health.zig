@@ -5,7 +5,7 @@ const NBT = @import("nbt");
 const CompoundTag = NBT.CompoundTag;
 const FloatTag = NBT.FloatTag;
 const Entity = @import("../entity.zig").Entity;
-const EntityType = @import("../entity-type.zig").EntityType;
+const EntityType = @import("../entity_type.zig").EntityType;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const broadcast = @import("../../world/dimension/broadcast.zig");
@@ -42,14 +42,11 @@ pub fn isDead(current: f32) bool {
     return current <= 0;
 }
 
-/// A health of 0 from disk would log the player in dead before it can respawn.
 pub fn clampLoadedHealth(current: f32, max: f32) f32 {
     if (current > 0) return @min(current, max);
     return max;
 }
 
-/// Mirrors a state read from disk onto the `Health` attribute, so a rebuilt mob
-/// does not report full health.
 pub fn syncAttributes(state: *const State, entity: *Entity) void {
     entity.attributes.setMax(.Health, state.max);
     entity.attributes.setCurrent(.Health, state.current);
@@ -60,7 +57,6 @@ fn onSerialize(state: *State, tag: *CompoundTag) void {
     setFloat(tag, "MaxHealth", state.max);
 }
 
-/// `CompoundTag.set` leaks when the key already exists, so a repeat write is skipped.
 fn setFloat(tag: *CompoundTag, key: []const u8, value: f32) void {
     if (tag.get(key) != null) return;
     tag.set(key, .{ .Float = FloatTag.init(value, null) }) catch {};
@@ -103,7 +99,7 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
 
     const dimension = entity.dimension orelse return;
     const tecton = dimension.world.tecton;
-    markInvulnerable(state, tecton.tick_count);
+    markInvulnerable(state, tecton.tickCount());
 
     broadcastHurtAnimation(tecton.allocator, dimension, entity);
     broadcastDirtyAttributes(tecton.allocator, dimension, entity);
@@ -134,7 +130,6 @@ fn onDamage(state: *State, entity: *Entity, amount: f32) void {
     dimension.pending_removals.append(dimension.allocator, entity.runtime_id) catch {};
 }
 
-/// A failed hurt-animation packet must not skip the death branch in `onDamage`.
 fn broadcastHurtAnimation(allocator: std.mem.Allocator, dimension: *Dimension, entity: *Entity) void {
     var stream = BinaryStream.init(allocator, null, null);
     defer stream.deinit();
@@ -149,7 +144,6 @@ fn broadcastHurtAnimation(allocator: std.mem.Allocator, dimension: *Dimension, e
     broadcast.broadcastToEntityViewers(dimension, entity, serialized);
 }
 
-/// A failed attribute packet or an empty dirty set must not skip the death branch in `onDamage`.
 fn broadcastDirtyAttributes(allocator: std.mem.Allocator, dimension: *Dimension, entity: *Entity) void {
     var attrs = entity.attributes.collectDirty(allocator) catch return;
     defer attrs.deinit(allocator);
@@ -169,182 +163,6 @@ fn broadcastDirtyAttributes(allocator: std.mem.Allocator, dimension: *Dimension,
 }
 
 const testing = std.testing;
-
-test "damage clamps at zero and never goes negative" {
-    try testing.expectEqual(@as(f32, 15.0), applyDamage(20.0, 5.0));
-    try testing.expectEqual(@as(f32, 0.0), applyDamage(3.0, 5.0));
-    try testing.expectEqual(@as(f32, 0.0), applyDamage(0.0, 5.0));
-    try testing.expectEqual(@as(f32, 20.0), applyDamage(20.0, 0.0));
-    try testing.expect(!isDead(applyDamage(20.0, 19.9)));
-    try testing.expect(isDead(applyDamage(20.0, 20.0)));
-}
-
-test "a health read back from disk below one comes back as full" {
-    try testing.expectEqual(@as(f32, 20.0), clampLoadedHealth(20.0, 20.0));
-    try testing.expectEqual(@as(f32, 7.5), clampLoadedHealth(7.5, 20.0));
-    try testing.expectEqual(@as(f32, 20.0), clampLoadedHealth(0.0, 20.0));
-    try testing.expectEqual(@as(f32, 20.0), clampLoadedHealth(-4.0, 20.0));
-    try testing.expectEqual(@as(f32, 20.0), clampLoadedHealth(40.0, 20.0));
-}
-
-test "health survives an nbt round trip" {
-    const allocator = testing.allocator;
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-
-    var hurt = State{ .current = 7.5, .max = 20.0 };
-    onSerialize(&hurt, &tag);
-
-    var restored = State{ .current = 20.0, .max = 20.0 };
-    onDeserialize(&restored, &tag);
-    try testing.expectEqual(@as(f32, 7.5), restored.current);
-    try testing.expectEqual(@as(f32, 20.0), restored.max);
-
-    var boosted_tag = CompoundTag.init(allocator, null);
-    defer boosted_tag.deinit(allocator);
-
-    var boosted = State{ .current = 24.0, .max = 30.0 };
-    onSerialize(&boosted, &boosted_tag);
-
-    var boosted_restored = State{ .current = 20.0, .max = 20.0 };
-    onDeserialize(&boosted_restored, &boosted_tag);
-    try testing.expectEqual(@as(f32, 24.0), boosted_restored.current);
-    try testing.expectEqual(@as(f32, 30.0), boosted_restored.max);
-}
-
-// A second write must not call `CompoundTag.set`, which leaks an existing key.
-test "serializing health twice does not leak the compound key" {
-    const allocator = testing.allocator;
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-
-    var state = State{ .current = 7.5, .max = 20.0 };
-    onSerialize(&state, &tag);
-    onSerialize(&state, &tag);
-
-    try testing.expectEqual(@as(usize, 2), tag.count());
-    try testing.expectEqual(@as(f32, 7.5), tag.get("Health").?.Float.value);
-}
-
-// Legacy records carry no health keys: they must load at full, not at zero.
-test "a record without health comes back at full" {
-    const allocator = testing.allocator;
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-
-    var restored = State{ .current = 20.0, .max = 20.0 };
-    onDeserialize(&restored, &tag);
-    try testing.expectEqual(@as(f32, 20.0), restored.current);
-    try testing.expectEqual(@as(f32, 20.0), restored.max);
-}
-
-// A stored zero is a dead mob, not one to quietly heal to full.
-test "a stored zero stays zero instead of healing to full" {
-    const allocator = testing.allocator;
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-    try tag.set("Health", .{ .Float = FloatTag.init(0.0, null) });
-    try tag.set("MaxHealth", .{ .Float = FloatTag.init(20.0, null) });
-
-    var restored = State{ .current = 20.0, .max = 20.0 };
-    onDeserialize(&restored, &tag);
-    try testing.expectEqual(@as(f32, 0.0), restored.current);
-    try testing.expect(isDead(restored.current));
-}
-
-test "only the player leaves a body behind when it dies" {
-    const allocator = testing.allocator;
-
-    const mob_type = EntityType.init("minecraft:zombie", 1, &.{}, &.{});
-    const player_type = EntityType.init("minecraft:player", 1, &.{}, &.{});
-
-    var mob = Entity.init(allocator, &mob_type, null);
-    defer mob.deinit();
-    var player = Entity.init(allocator, &player_type, null);
-    defer player.deinit();
-
-    try testing.expect(!isPlayer(&mob));
-    try testing.expect(isPlayer(&player));
-}
-
-test "attaching the trait registers the health attribute and damage reaches the state" {
-    const allocator = testing.allocator;
-
-    const entity_type = EntityType.init("minecraft:zombie", 1, &.{}, &.{});
-    var entity = Entity.init(allocator, &entity_type, null);
-    defer entity.deinit();
-
-    const trait = try HealthTrait.create(allocator, .{ .current = MAX_HEALTH, .max = MAX_HEALTH });
-    try entity.addTrait(trait);
-
-    const state = entity.getTraitState(HealthTrait).?;
-    try testing.expectEqual(MAX_HEALTH, state.current);
-    try testing.expect(!state.dead);
-    try testing.expectEqual(MAX_HEALTH, entity.attributes.get(.Health).?.current);
-
-    entity.fireEvent(.Damage, .{ &entity, 6.0 });
-    try testing.expectEqual(@as(f32, 14.0), state.current);
-    try testing.expectEqual(@as(f32, 14.0), entity.attributes.get(.Health).?.current);
-
-    entity.fireEvent(.Damage, .{ &entity, 20.0 });
-    try testing.expectEqual(@as(f32, 0.0), state.current);
-    try testing.expect(isDead(state.current));
-
-    entity.fireEvent(.Damage, .{ &entity, 5.0 });
-    try testing.expectEqual(@as(f32, 0.0), state.current);
-
-    try testing.expect(!revive(state, &entity));
-}
-
-test "the damage window opens on a landed hit and lasts ten ticks" {
-    var state = State{ .current = MAX_HEALTH, .max = MAX_HEALTH };
-    try testing.expect(!isInvulnerable(&state, 100));
-
-    markInvulnerable(&state, 100);
-    try testing.expect(isInvulnerable(&state, 100));
-    try testing.expect(isInvulnerable(&state, 109));
-    try testing.expect(!isInvulnerable(&state, 110));
-    try testing.expectEqual(@as(u64, 110), state.invulnerable_until);
-
-    // The next landed hit reopens the window from its own tick.
-    markInvulnerable(&state, 110);
-    try testing.expect(isInvulnerable(&state, 119));
-    try testing.expect(!isInvulnerable(&state, 120));
-}
-
-test "a dead player ignores damage until it is revived" {
-    const allocator = testing.allocator;
-
-    const entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{});
-    var entity = Entity.init(allocator, &entity_type, null);
-    defer entity.deinit();
-
-    const trait = try HealthTrait.create(allocator, .{ .current = MAX_HEALTH, .max = MAX_HEALTH });
-    try entity.addTrait(trait);
-
-    const state = entity.getTraitState(HealthTrait).?;
-
-    entity.fireEvent(.Damage, .{ &entity, 20.0 });
-    try testing.expectEqual(@as(f32, 0.0), state.current);
-
-    state.dead = true;
-    entity.fireEvent(.Damage, .{ &entity, 4.0 });
-    try testing.expectEqual(@as(f32, 0.0), state.current);
-
-    markInvulnerable(state, 500);
-    try testing.expect(revive(state, &entity));
-    try testing.expectEqual(MAX_HEALTH, state.current);
-    try testing.expectEqual(MAX_HEALTH, entity.attributes.get(.Health).?.current);
-    try testing.expect(!isInvulnerable(state, 500));
-    try testing.expect(!revive(state, &entity));
-
-    entity.fireEvent(.Damage, .{ &entity, 3.0 });
-    try testing.expectEqual(@as(f32, 17.0), state.current);
-}
 
 pub const DAMAGEABLE_ENTITIES: []const []const u8 = &.{
     "minecraft:zombie",
@@ -407,3 +225,64 @@ pub const HealthTrait = EntityTrait(State, .{
     .on_serialize = onSerialize,
     .on_deserialize = onDeserialize,
 });
+
+const test_owner = @This();
+const test_scope = struct {
+    pub const CompoundTag = test_owner.CompoundTag;
+    pub const FloatTag = test_owner.FloatTag;
+    pub const Entity = test_owner.Entity;
+    pub const EntityType = test_owner.EntityType;
+    pub const MAX_HEALTH = test_owner.MAX_HEALTH;
+    pub const State = test_owner.State;
+    pub const isInvulnerable = test_owner.isInvulnerable;
+    pub const markInvulnerable = test_owner.markInvulnerable;
+    pub const applyDamage = test_owner.applyDamage;
+    pub const isDead = test_owner.isDead;
+    pub const clampLoadedHealth = test_owner.clampLoadedHealth;
+    pub const onSerialize = test_owner.onSerialize;
+    pub const onDeserialize = test_owner.onDeserialize;
+    pub const isPlayer = test_owner.isPlayer;
+    pub const revive = test_owner.revive;
+    pub const testing = test_owner.testing;
+    pub const HealthTrait = test_owner.HealthTrait;
+};
+
+test "damage clamps at zero and never goes negative" {
+    try @import("health_test.zig").Suite(test_scope).case_000();
+}
+
+test "a health read back from disk below one comes back as full" {
+    try @import("health_test.zig").Suite(test_scope).case_001();
+}
+
+test "health survives an nbt round trip" {
+    try @import("health_test.zig").Suite(test_scope).case_002();
+}
+
+test "serializing health twice does not leak the compound key" {
+    try @import("health_test.zig").Suite(test_scope).case_003();
+}
+
+test "a record without health comes back at full" {
+    try @import("health_test.zig").Suite(test_scope).case_004();
+}
+
+test "a stored zero stays zero instead of healing to full" {
+    try @import("health_test.zig").Suite(test_scope).case_005();
+}
+
+test "only the player leaves a body behind when it dies" {
+    try @import("health_test.zig").Suite(test_scope).case_006();
+}
+
+test "attaching the trait registers the health attribute and damage reaches the state" {
+    try @import("health_test.zig").Suite(test_scope).case_007();
+}
+
+test "the damage window opens on a landed hit and lasts ten ticks" {
+    try @import("health_test.zig").Suite(test_scope).case_008();
+}
+
+test "a dead player ignores damage until it is revived" {
+    try @import("health_test.zig").Suite(test_scope).case_009();
+}

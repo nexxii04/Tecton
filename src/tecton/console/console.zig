@@ -66,7 +66,7 @@ pub const Console = struct {
         var processed = false;
         while (self.pop(&local_buf)) |line| {
             processed = true;
-            registry.dispatchConsole(self.tecton, line);
+            registry.dispatchConsole(self.tecton.commandViews(), self.tecton.network, line);
         }
         if (processed) self.showPrompt();
     }

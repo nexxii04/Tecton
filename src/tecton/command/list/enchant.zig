@@ -6,50 +6,32 @@ const CommandRegistry = @import("../registry.zig").CommandRegistry;
 const types = @import("../types.zig");
 const Player = @import("../../player/player.zig").Player;
 
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const Enchantment = @import("../../items/enchantments/enchantment.zig").Enchantment;
 const EnchantmentRegistry = @import("../../items/enchantments/registry.zig");
 const EnchantmentRules = @import("../../items/enchantments/rules.zig");
 const Ops = @import("../../items/enchantments/ops.zig");
-const Display = @import("../../items/traits/display.zig");
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
+const messages = @import("enchant_messages.zig");
 
 pub const PERMISSION: []const u8 = "tecton.command.enchant";
 pub const DESCRIPTION: []const u8 = "Adds an enchantment to a player's selected item.";
-pub const USAGE: []const u8 = "/enchant <player: target> <enchantment: Enchant> [level: int]";
+pub const USAGE = messages.USAGE;
 
-pub const MESSAGE_SUCCESS: []const u8 = "Enchanting succeeded for {s}";
-pub const MESSAGE_NO_ITEM: []const u8 = "The target doesn't hold an item: {s}";
-pub const MESSAGE_CANT_ENCHANT: []const u8 = "The selected enchantment can't be added to the target item: {s}";
-pub const MESSAGE_CANT_COMBINE: []const u8 = "{s} can't be combined with {s}";
-pub const MESSAGE_INVALID_LEVEL: []const u8 = "{s} does not support level {d}";
-pub const MESSAGE_NOT_FOUND: []const u8 = "There is no such enchantment with ID {d}";
-pub const MESSAGE_NO_TARGETS: []const u8 = "No targets matched selector";
+pub const MESSAGE_SUCCESS = messages.MESSAGE_SUCCESS;
+pub const MESSAGE_NO_ITEM = messages.MESSAGE_NO_ITEM;
+pub const MESSAGE_CANT_ENCHANT = messages.MESSAGE_CANT_ENCHANT;
+pub const MESSAGE_CANT_COMBINE = messages.MESSAGE_CANT_COMBINE;
+pub const MESSAGE_INVALID_LEVEL = messages.MESSAGE_INVALID_LEVEL;
+pub const MESSAGE_NOT_FOUND = messages.MESSAGE_NOT_FOUND;
+pub const MESSAGE_NO_TARGETS = messages.MESSAGE_NO_TARGETS;
 
-
-fn successMessage(buffer: []u8, username: []const u8) []const u8 {
-    return std.fmt.bufPrint(buffer, MESSAGE_SUCCESS, .{username}) catch USAGE;
-}
-
-fn noItemMessage(buffer: []u8, username: []const u8) []const u8 {
-    return std.fmt.bufPrint(buffer, MESSAGE_NO_ITEM, .{username}) catch USAGE;
-}
-
-fn cantEnchantMessage(buffer: []u8, item: *const ItemStack) []const u8 {
-    return std.fmt.bufPrint(buffer, MESSAGE_CANT_ENCHANT, .{itemLabel(item)}) catch USAGE;
-}
-
-fn cantCombineMessage(buffer: []u8, first: *const Enchantment, second: *const Enchantment) []const u8 {
-    return std.fmt.bufPrint(buffer, MESSAGE_CANT_COMBINE, .{ first.name, second.name }) catch USAGE;
-}
-
-fn invalidLevelMessage(buffer: []u8, definition: *const Enchantment, level: i64) []const u8 {
-    return std.fmt.bufPrint(buffer, MESSAGE_INVALID_LEVEL, .{ definition.name, level }) catch USAGE;
-}
-
-fn notFoundMessage(buffer: []u8, id: i64) []const u8 {
-    return std.fmt.bufPrint(buffer, MESSAGE_NOT_FOUND, .{id}) catch USAGE;
-}
+pub const successMessage = messages.successMessage;
+pub const noItemMessage = messages.noItemMessage;
+pub const cantEnchantMessage = messages.cantEnchantMessage;
+pub const cantCombineMessage = messages.cantCombineMessage;
+pub const invalidLevelMessage = messages.invalidLevelMessage;
+pub const notFoundMessage = messages.notFoundMessage;
 
 pub fn register(registry: *CommandRegistry) !void {
     const enchant_enum = try registerEnchantEnum(registry);
@@ -162,7 +144,7 @@ fn handle(raw: *anyopaque) void {
             .allow_conflicts = false,
             .source = .command,
             .actor = ctx.player,
-            .events = &ctx.tecton.events,
+            .events = ctx.views.enchantment.events,
         });
 
         switch (outcome) {
@@ -203,7 +185,6 @@ fn parseLevel(argument: ?[]const u8) ?i64 {
     return std.fmt.parseInt(i64, text, 10) catch null;
 }
 
-// Level 0 removes the enchantment; other out-of-range levels fail validation.
 fn levelInRange(definition: *const Enchantment, level: i64) bool {
     return level >= 0 and level <= @as(i64, definition.max_level);
 }
@@ -220,10 +201,6 @@ fn resolve(registry: *const EnchantmentRegistry.Registry, argument: []const u8, 
 fn sendSuccess(ctx: *CommandContext, target: *Player) void {
     var buffer: [256]u8 = undefined;
     ctx.sendOutput(true, successMessage(&buffer, target.username));
-}
-
-fn itemLabel(item: *const ItemStack) []const u8 {
-    return Display.getDisplayName(item) orelse Display.getComponentName(item) orelse item.item_type.identifier;
 }
 
 fn sendCantEnchant(ctx: *CommandContext, item: *const ItemStack) void {
@@ -260,83 +237,44 @@ fn sendReject(
     }
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const EnchantmentRegistry = test_owner.EnchantmentRegistry;
+    pub const DESCRIPTION = test_owner.DESCRIPTION;
+    pub const USAGE = test_owner.USAGE;
+    pub const MESSAGE_SUCCESS = test_owner.MESSAGE_SUCCESS;
+    pub const MESSAGE_NO_ITEM = test_owner.MESSAGE_NO_ITEM;
+    pub const MESSAGE_CANT_ENCHANT = test_owner.MESSAGE_CANT_ENCHANT;
+    pub const MESSAGE_CANT_COMBINE = test_owner.MESSAGE_CANT_COMBINE;
+    pub const MESSAGE_INVALID_LEVEL = test_owner.MESSAGE_INVALID_LEVEL;
+    pub const MESSAGE_NOT_FOUND = test_owner.MESSAGE_NOT_FOUND;
+    pub const successMessage = test_owner.successMessage;
+    pub const noItemMessage = test_owner.noItemMessage;
+    pub const cantEnchantMessage = test_owner.cantEnchantMessage;
+    pub const cantCombineMessage = test_owner.cantCombineMessage;
+    pub const invalidLevelMessage = test_owner.invalidLevelMessage;
+    pub const notFoundMessage = test_owner.notFoundMessage;
+    pub const testing = test_owner.testing;
+    pub const enchant_testing = test_owner.enchant_testing;
+    pub const parseLevel = test_owner.parseLevel;
+    pub const levelInRange = test_owner.levelInRange;
+    pub const resolve = test_owner.resolve;
+};
+
 test "the enchantment argument accepts a numeric id or a name" {
-    const allocator = std.testing.allocator;
-    var registry = EnchantmentRegistry.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    var numeric_id: ?i64 = null;
-    try std.testing.expectEqual(@as(u16, 9), resolve(&registry, "9", &numeric_id).?.id);
-    try std.testing.expectEqual(@as(?i64, 9), numeric_id);
-
-    numeric_id = null;
-    try std.testing.expectEqual(@as(u16, 9), resolve(&registry, "sharpness", &numeric_id).?.id);
-    try std.testing.expect(numeric_id == null);
-    try std.testing.expectEqual(@as(u16, 9), resolve(&registry, "minecraft:SHARPNESS", &numeric_id).?.id);
-    try std.testing.expect(resolve(&registry, "not_an_enchantment", &numeric_id) == null);
-
-    numeric_id = null;
-    try std.testing.expect(resolve(&registry, "999", &numeric_id) == null);
-    try std.testing.expectEqual(@as(?i64, 999), numeric_id);
-    try std.testing.expect(resolve(&registry, "-3", &numeric_id) == null);
-    try std.testing.expect(resolve(&registry, "4000000000", &numeric_id) == null);
-    try std.testing.expect(resolve(&registry, "0", &numeric_id).?.id == 0);
+    try @import("enchant_test.zig").Suite(test_scope).case_000();
 }
 
 test "every message names the argument the design decided" {
-    const allocator = std.testing.allocator;
-    var registry = EnchantmentRegistry.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    const sharpness = registry.resolve("sharpness").?;
-    const smite = registry.resolve("smite").?;
-
-    const item_type = try enchant_testing.itemType(allocator, "minecraft:test_message_sword", &.{"minecraft:is_sword"}, false);
-    defer item_type.deinit();
-    var item = ItemStack.init(allocator, item_type, .{});
-    defer item.deinit();
-
-    var buffer: [320]u8 = undefined;
-
-    try testing.expectEqualStrings("Enchanting succeeded for Steve", successMessage(&buffer, "Steve"));
-    try testing.expectEqualStrings("The target doesn't hold an item: Steve", noItemMessage(&buffer, "Steve"));
-    try testing.expectEqualStrings("The selected enchantment can't be added to the target item: minecraft:test_message_sword", cantEnchantMessage(&buffer, &item));
-    try testing.expectEqualStrings("Smite can't be combined with Sharpness", cantCombineMessage(&buffer, smite, sharpness));
-    try testing.expectEqualStrings("Sharpness does not support level 10", invalidLevelMessage(&buffer, sharpness, 10));
-    try testing.expectEqualStrings("There is no such enchantment with ID 999", notFoundMessage(&buffer, 999));
+    try @import("enchant_test.zig").Suite(test_scope).case_001();
 }
 
 test "the level argument defaults to one, accepts the removal level and rejects the rest" {
-    const allocator = std.testing.allocator;
-    var registry = EnchantmentRegistry.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    const sharpness = registry.resolve("sharpness").?;
-
-    try std.testing.expectEqual(@as(?i64, 1), parseLevel(null));
-    try std.testing.expectEqual(@as(?i64, 3), parseLevel("3"));
-    try std.testing.expect(parseLevel("three") == null);
-    try std.testing.expect(parseLevel("") == null);
-    try std.testing.expect(parseLevel("1.5") == null);
-
-    try std.testing.expect(levelInRange(sharpness, 1));
-    try std.testing.expect(levelInRange(sharpness, 5));
-    try std.testing.expect(!levelInRange(sharpness, 6));
-    try std.testing.expect(levelInRange(sharpness, 0));
-    try std.testing.expect(!levelInRange(sharpness, -1));
-    try std.testing.expect(!levelInRange(sharpness, 2147483647));
+    try @import("enchant_test.zig").Suite(test_scope).case_002();
 }
 
 test "the command exposes the vanilla syntax, description and messages" {
-    try std.testing.expectEqualStrings("Adds an enchantment to a player's selected item.", DESCRIPTION);
-    try std.testing.expectEqualStrings("/enchant <player: target> <enchantment: Enchant> [level: int]", USAGE);
-    try std.testing.expectEqualStrings("Enchanting succeeded for {s}", MESSAGE_SUCCESS);
-    try std.testing.expectEqualStrings("The target doesn't hold an item: {s}", MESSAGE_NO_ITEM);
-    try std.testing.expectEqualStrings("The selected enchantment can't be added to the target item: {s}", MESSAGE_CANT_ENCHANT);
-    try std.testing.expectEqualStrings("{s} can't be combined with {s}", MESSAGE_CANT_COMBINE);
-    try std.testing.expectEqualStrings("{s} does not support level {d}", MESSAGE_INVALID_LEVEL);
-    try std.testing.expectEqualStrings("There is no such enchantment with ID {d}", MESSAGE_NOT_FOUND);
+    try @import("enchant_test.zig").Suite(test_scope).case_003();
 }

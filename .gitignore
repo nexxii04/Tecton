@@ -31,14 +31,6 @@ plugins/*.dll
 plugins/*.dylib
 plugins/*.h
 
-# Local native plugin implementations
-src/tecton/plugins/
-!src/tecton/plugins/
-src/tecton/plugins/*
-!src/tecton/plugins/root.zig
-!src/tecton/plugins/abi.zig
-!src/tecton/plugins/dynamic_loader.zig
-!src/tecton/plugins/runtime.zig
 
 # Local Pi runtime state
 .atl/

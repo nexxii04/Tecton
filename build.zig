@@ -131,8 +131,12 @@ pub fn build(b: *std.Build) void {
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
+    const chest_sources = b.addWriteFiles();
+    _ = chest_sources.addCopyDirectory(b.path("src/tecton"), "tecton", .{ .include_extensions = &.{ ".zig", ".json" } });
+    const chest_root = chest_sources.addCopyFile(b.path("tests/chest/root.zig"), "root.zig");
+    _ = chest_sources.addCopyFile(b.path("tests/architecture/root.zig"), "architecture_root.zig");
     const chest_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/tecton/chest-test-root.zig"),
+        .root_source_file = chest_root,
         .target = target,
         .optimize = optimize,
         .link_libcpp = true,
@@ -168,19 +172,11 @@ pub fn build(b: *std.Build) void {
     run_plugin_tests.step.dependOn(&native_example.step);
     run_plugin_tests.step.dependOn(b.getInstallStep());
 
-    const loadbot_imports = [_]std.Build.Module.Import{
-        .{ .name = "Raknet", .module = raknet_mod },
-        .{ .name = "protocol", .module = protocol_mod },
-        .{ .name = "BinaryStream", .module = binarystream_mod },
-    };
-    const run_loadbot_tests = addLoadbot(b, target, optimize, zlib_dep, &loadbot_imports);
-
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_chest_tests.step);
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_plugin_tests.step);
-    test_step.dependOn(&run_loadbot_tests.step);
     const chest_test_step = b.step("test-chest", "Run chest regression tests");
     chest_test_step.dependOn(&run_chest_tests.step);
 }
@@ -229,42 +225,4 @@ fn addPluginExample(
     native_example.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/minimal_plugin.c"), .flags = &.{"-std=c11"} });
     b.installArtifact(native_example);
     return native_example;
-}
-
-fn addLoadbot(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    zlib_dep: *std.Build.Dependency,
-    imports: []const std.Build.Module.Import,
-) *std.Build.Step.Run {
-    const loadbot_mod = b.createModule(.{
-        .root_source_file = b.path("tools/loadbot/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = imports,
-    });
-    loadbot_mod.linkLibrary(zlib_dep.artifact("z"));
-    const loadbot_exe = b.addExecutable(.{ .name = "TectonLoadBot", .root_module = loadbot_mod });
-    b.installArtifact(loadbot_exe);
-
-    const loadbot_step = b.step("loadbot", "Build the load bot harness");
-    loadbot_step.dependOn(b.getInstallStep());
-    loadbot_step.dependOn(&loadbot_exe.step);
-
-    const loadbot_run_cmd = b.addRunArtifact(loadbot_exe);
-    loadbot_run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| loadbot_run_cmd.addArgs(args);
-    const loadbot_run_step = b.step("loadtest", "Run the load bot harness against a running server");
-    loadbot_run_step.dependOn(&loadbot_run_cmd.step);
-
-    const loadbot_test_mod = b.createModule(.{
-        .root_source_file = b.path("tools/loadbot/tests.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = imports,
-    });
-    loadbot_test_mod.linkLibrary(zlib_dep.artifact("z"));
-    const loadbot_tests = b.addTest(.{ .root_module = loadbot_test_mod });
-    return b.addRunArtifact(loadbot_tests);
 }

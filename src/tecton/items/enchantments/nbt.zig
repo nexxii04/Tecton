@@ -5,7 +5,7 @@ const ListTag = NBT.ListTag;
 const ShortTag = NBT.ShortTag;
 const Tag = NBT.Tag;
 
-const ItemStack = @import("../item-stack.zig").ItemStack;
+const ItemStack = @import("../item_stack.zig").ItemStack;
 const display = @import("../traits/display.zig");
 const storage = @import("storage.zig");
 const registry_mod = @import("registry.zig");

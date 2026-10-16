@@ -1,11 +1,9 @@
 const std = @import("std");
-const Protocol = @import("protocol");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const types = @import("../types.zig");
-const ItemType = @import("../../items/item-type.zig").ItemType;
-const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemType = @import("../../items/item_type.zig").ItemType;
+const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
 
 pub fn register(registry: *CommandRegistry) !void {

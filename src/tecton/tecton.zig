@@ -6,52 +6,75 @@ const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
-const ServerProperties = @import("./config.zig").ServerProperties;
-const shouldEmitStartupLogs = @import("./config.zig").shouldEmitStartupLogs;
+const ServerProperties = @import("./core/config.zig").ServerProperties;
+const shouldEmitStartupLogs = @import("./core/config.zig").shouldEmitStartupLogs;
 const Console = @import("./console/console.zig").Console;
-const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
-const EntityType = @import("./entity/entity-type.zig").EntityType;
+const EntityTypeRegistry = @import("./entity/entity_type_registry.zig");
+const EntityType = @import("./entity/entity_type.zig").EntityType;
 const Entity = @import("./entity/entity.zig").Entity;
 const EntityTraits = @import("./entity/traits/root.zig");
-const CreativeContentLoader = @import("./items/creative-content-loader.zig");
-const ItemPalette = @import("./items/item-palette.zig");
-const AuthService = @import("./network/auth/root.zig").AuthService;
-const BanManager = @import("./network/ban-manager.zig").BanManager;
-const MovementBroadcast = @import("./network/movement-broadcast.zig");
+const CreativeContentLoader = @import("./items/creative_content_loader.zig");
+const ItemPalette = @import("./items/item_palette.zig");
+const AuthService = @import("./auth/root.zig").AuthService;
+const BanManager = @import("./network/ban_manager.zig").BanManager;
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const SendPriority = @import("./network/root.zig").SendPriority;
-const dispatch = @import("./network/dispatch.zig");
-const PlayerLog = @import("./network/player-log.zig");
-const MoveDelta = @import("./player/move-delta.zig");
-const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
-const PlayerLocations = @import("./player/player-locations.zig").PlayerLocations;
-const PlayerLocation = @import("./player/player-locations.zig").Location;
-const PlayerSnapshot = @import("./player/player-snapshot.zig").PlayerSnapshot;
+const PlayerLog = @import("./network/player_log.zig");
+const PermissionManager = @import("./player/permission_manager.zig").PermissionManager;
+const PlayerLocations = @import("./player/player_locations.zig").PlayerLocations;
+const PlayerLocation = @import("./player/player_locations.zig").Location;
+const PlayerSnapshot = @import("./player/player_snapshot.zig").PlayerSnapshot;
 const Player = @import("./player/player.zig").Player;
+const ShutdownSignal = @import("./server/shutdown_signal.zig");
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
-const threaded_tasks = @import("./tasks/threaded-tasks.zig");
+const threaded_tasks = @import("./tasks/threaded_tasks.zig");
 const ThreadedTaskQueue = threaded_tasks.ThreadedTaskQueue;
-const WorkerCountResolution = @import("./tasks/threaded-tasks.zig").WorkerCountResolution;
+const WorkerCountResolution = @import("./tasks/threaded_tasks.zig").WorkerCountResolution;
 const visibility_mod = @import("./entity/traits/visibility.zig");
-const resolveWorkerCount = @import("./tasks/threaded-tasks.zig").resolveWorkerCount;
-const totalServerThreadCount = @import("./tasks/threaded-tasks.zig").totalServerThreadCount;
-const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
+const resolveWorkerCount = @import("./tasks/threaded_tasks.zig").resolveWorkerCount;
+const totalServerThreadCount = @import("./tasks/threaded_tasks.zig").totalServerThreadCount;
+const TickProfiler = @import("./core/tick_profiler.zig").TickProfiler;
+pub const block_root = @import("./world/block/root.zig");
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const EcsWorld = @import("entity/ecs.zig").EcsWorld;
 const Events = @import("events/root.zig");
 const PluginRuntime = @import("plugins/runtime.zig").PluginRuntime;
-const GameInstanceRegistry = @import("world/game-instance.zig").GameInstanceRegistry;
+const GameInstanceRegistry = @import("world/game_instance.zig").GameInstanceRegistry;
 const PlayerRegistry = @import("server/players.zig").PlayerRegistry;
 const options_mod = @import("server/options.zig");
 const SaveScheduler = @import("server/save.zig").SaveScheduler;
 const tick_mod = @import("server/tick.zig");
 const movement_mod = @import("server/movement.zig");
 const worlds_mod = @import("server/worlds.zig");
-const bootstrap_mod = @import("server/bootstrap.zig");
 
 pub const ServerPaths = options_mod.ServerPaths;
 pub const CommandPermissionChecker = options_mod.CommandPermissionChecker;
-pub const ServerOptions = options_mod.ServerOptions;
+
+pub const Composition = struct {
+    prepare: *const fn (*Tecton) anyerror!void,
+    dispatch: *const fn (*anyopaque, *Raknet.Connection, []const []const u8) void,
+    command_views: ?*const fn (*Tecton) @import("./command/registry.zig").CommandViews = null,
+};
+
+pub const ServerOptions = struct {
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    composition: Composition,
+    properties: ?ServerProperties = null,
+    paths: ServerPaths = .{},
+    enable_console: bool = true,
+    discover_native_plugins: bool = true,
+    auto_load_worlds: bool = true,
+    create_default_world: bool = true,
+    tick_callback: ?*const fn (?*anyopaque) void = null,
+    tick_userdata: ?*anyopaque = null,
+    prepare_callback: ?*const fn (?*anyopaque) void = null,
+    start_callback: ?*const fn (?*anyopaque) void = null,
+    shutdown_callback: ?*const fn (?*anyopaque) void = null,
+    lifecycle_userdata: ?*anyopaque = null,
+    command_permission_checker: ?CommandPermissionChecker = null,
+    command_permission_userdata: ?*anyopaque = null,
+};
 
 pub const Tecton = struct {
     io: std.Io,
@@ -70,10 +93,12 @@ pub const Tecton = struct {
     lifecycle_userdata: ?*anyopaque,
     command_permission_checker: ?CommandPermissionChecker,
     command_permission_userdata: ?*anyopaque,
+    composition: Composition,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
     network_initialized: bool = false,
+    address_stamp: usize = 0,
     players: PlayerRegistry,
     movement_priority: SendPriority = .immediate,
     movement_distance_bands: bool = true,
@@ -114,27 +139,15 @@ pub const Tecton = struct {
     plugin_runtime: PluginRuntime,
     instances: GameInstanceRegistry,
     ecs: EcsWorld,
-    /// Players whose visibility pass is due this tick, plus the reusable blocking job that runs it.
+
     visibility_batch: std.ArrayList(*Player) = .empty,
     visibility_job: threaded_tasks.ParallelJob = .{},
 
-    pub fn init(io: std.Io, allocator: std.mem.Allocator) !Tecton {
+    pub fn init(options: ServerOptions) !Tecton {
+        const io = options.io;
+        const allocator = options.allocator;
         Raknet.Logger.init(allocator);
-        const config = try ServerProperties.load(io, allocator, "server.properties");
-        return initWithConfig(io, allocator, config);
-    }
-
-    pub fn initWithConfig(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties) !Tecton {
-        return initWithConfigAndPaths(io, allocator, config, .{});
-    }
-
-    pub fn initWithConfigAndPaths(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, paths: ServerPaths) !Tecton {
-        return initWithOptions(io, allocator, config, .{ .paths = paths });
-    }
-
-    pub fn initWithOptions(io: std.Io, allocator: std.mem.Allocator, config: ServerProperties, options: ServerOptions) !Tecton {
-        Raknet.Logger.init(allocator);
-        var owned_config = config;
+        var owned_config = options.properties orelse try ServerProperties.load(io, allocator, "server.properties");
         errdefer owned_config.deinit();
 
         var auth_service: ?AuthService = null;
@@ -182,6 +195,29 @@ pub const Tecton = struct {
         const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(owned_config.max_players)) * 8);
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();
+        const raknet = Raknet.Server.init(io, .{
+            .address = owned_config.address,
+            .port = owned_config.port,
+            .tick_rate = @intCast(owned_config.max_tps),
+            .allocator = allocator,
+            .advertisement = .{
+                .game_type = .MCPE,
+                .level_name = owned_config.motd,
+                .protocol = Protocol.PROTOCOL,
+                .version = Protocol.MINECRAFT_VERSION,
+                .player_count = 0,
+                .max_players = @intCast(owned_config.max_players),
+                .guid = 0,
+                .name = owned_config.motd,
+                .gamemode = @tagName(owned_config.gameMode()),
+            },
+            .max_mtu = max_mtu,
+        }) catch |err| {
+            if (err == error.AddressInUse) {
+                Raknet.Logger.ERROR("Address {s}:{d} is already in use, shutting down", .{ owned_config.address, owned_config.port });
+            }
+            return err;
+        };
         return Tecton{
             .io = io,
             .allocator = allocator,
@@ -199,28 +235,12 @@ pub const Tecton = struct {
             .lifecycle_userdata = options.lifecycle_userdata,
             .command_permission_checker = options.command_permission_checker,
             .command_permission_userdata = options.command_permission_userdata,
+            .composition = options.composition,
             .movement_priority = movement_priority,
             .movement_distance_bands = owned_config.movement_distance_bands,
             .mob_broadcast_interval = mob_broadcast_interval,
             .events = Events.Events.init(allocator),
-            .raknet = try Raknet.Server.init(io, .{
-                .address = owned_config.address,
-                .port = owned_config.port,
-                .tick_rate = @intCast(owned_config.max_tps),
-                .allocator = allocator,
-                .advertisement = .{
-                    .game_type = .MCPE,
-                    .level_name = owned_config.motd,
-                    .protocol = Protocol.PROTOCOL,
-                    .version = Protocol.MINECRAFT_VERSION,
-                    .player_count = 0,
-                    .max_players = @intCast(owned_config.max_players),
-                    .guid = 0,
-                    .name = owned_config.motd,
-                    .gamemode = @tagName(owned_config.gameMode()),
-                },
-                .max_mtu = max_mtu,
-            }),
+            .raknet = raknet,
             .players = PlayerRegistry.init(io, allocator),
             .worlds = worlds_mod.WorldRegistry.init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
@@ -249,7 +269,12 @@ pub const Tecton = struct {
     }
 
     pub fn prepare(self: *Tecton) !void {
-        return bootstrap_mod.prepare(self);
+        return self.composition.prepare(self);
+    }
+
+    pub fn commandViews(self: *Tecton) @import("./command/registry.zig").CommandViews {
+        const build = self.composition.command_views orelse std.debug.panic("composition has no command view builder", .{});
+        return build(self);
     }
 
     pub fn registerCommand(self: *Tecton, command: *@import("./command/command.zig").Command) !void {
@@ -303,17 +328,24 @@ pub const Tecton = struct {
         self.lifecycle_userdata = userdata;
     }
 
+    pub fn fixAddress(self: *Tecton) void {
+        self.address_stamp = @intFromPtr(self);
+    }
+
     pub fn start(self: *Tecton) !void {
         if (self.started) return;
-        try self.prepare();
+        ShutdownSignal.install();
+
+        self.fixAddress();
         self.network = try NetworkHandler.init(self.io, self.allocator, &self.threaded_tasks, .{
             .ctx = self,
-            .dispatch = dispatch.dispatchFromHost,
+            .dispatch = self.composition.dispatch,
             .disconnected = onNetworkDisconnect,
         });
+        self.network_initialized = true;
         self.raknet.setConnectCallback(NetworkHandler.onConnect, self.network);
         self.raknet.setDisconnectCallback(NetworkHandler.onDisconnect, self.network);
-        self.network_initialized = true;
+        try self.prepare();
         self.tick_thread_id.store(0, .release);
         self.raknet.setTickCallback(tick_mod.onTick, self);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
@@ -374,7 +406,7 @@ pub const Tecton = struct {
         } else {
             Raknet.Logger.INFO("Inbound ring disabled; using the legacy packet queue", .{});
         }
-        // The pump is the input ring's single consumer and the input shards' single producer, so it only runs with dedicated input workers.
+
         if (self.threaded_tasks.layoutResolution().layout == .split) {
             try self.network.startInputPump();
             Raknet.Logger.INFO("Input pump: dedicated thread draining the input queue", .{});
@@ -398,6 +430,10 @@ pub const Tecton = struct {
 
     pub fn run(self: *Tecton) !void {
         while (self.raknet.running.load(.acquire)) {
+            if (ShutdownSignal.isShutdownRequested()) {
+                self.stop() catch {};
+                return;
+            }
             try self.io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
         }
     }
@@ -484,7 +520,6 @@ pub const Tecton = struct {
         movement_mod.flush(self);
     }
 
-    /// A disjoint viewer per worker is race-free: the pass mutates only the viewer's maps and reads other players read-only.
     pub fn runVisibilityPass(self: *Tecton) void {
         const snapshots = self.getPlayerSnapshots();
         self.visibility_batch.clearRetainingCapacity();
@@ -686,7 +721,6 @@ pub const Tecton = struct {
         }
     }
 
-    /// The RakNet tick thread touches Tecton state, so cancel and join it before the teardown below races it.
     fn stopRaknetTickThread(self: *Tecton) void {
         self.raknet.running.store(false, .release);
         if (self.raknet.tick_thread) |*tick_thread| {
@@ -697,9 +731,9 @@ pub const Tecton = struct {
 
     pub fn deinit(self: *Tecton) void {
         self.stopRaknetTickThread();
-        // The input pump feeds the worker pool, so it must be joined before the pool stops accepting tasks.
+
         if (self.network_initialized) self.network.stopInputPump();
-        // Workers may still be finishing tasks, but every counter is an atomic RMW, so the report reads whole values without pausing them.
+
         self.profiler.writeReport(self.io, "dump/tick-profile.txt");
 
         self.threaded_tasks.stop();
@@ -745,112 +779,49 @@ pub const Tecton = struct {
     }
 };
 
-test "the RakNet MTU cap is the clamped config value, never a literal" {
-    const source = @embedFile("tecton.zig");
-    const cutoff = std.mem.indexOf(u8, source, "test \"the RakNet MTU cap") orelse return error.TestUnexpectedResult;
-    const init_code = source[0..cutoff];
-    try std.testing.expect(std.mem.indexOf(u8, init_code, "ServerProperties.clampMaxMtu(owned_config.max_mtu)") != null);
+const test_owner = @This();
+const test_scope = struct {
+    pub const test_dependency_0 = @import("./command/list/enchant.zig");
+    pub const test_dependency_1 = @import("./command/list/floating_text.zig");
+    pub const test_dependency_2 = @import("./command/list/summon.zig");
+    pub const test_dependency_3 = @import("./command/list/world.zig");
+    pub const test_dependency_4 = @import("./entity/traits/chunk_loading.zig");
+    pub const test_dependency_5 = @import("./entity/traits/fire.zig");
+    pub const test_dependency_6 = @import("./items/enchantments/compat.zig");
+    pub const test_dependency_7 = @import("./items/enchantments/effects.zig");
+    pub const test_dependency_8 = @import("./items/enchantments/nbt.zig");
+    pub const test_dependency_9 = @import("./items/enchantments/ops.zig");
+    pub const test_dependency_10 = @import("./items/enchantments/registry.zig");
+    pub const test_dependency_11 = @import("./items/enchantments/rules.zig");
+    pub const test_dependency_12 = @import("./items/enchantments/set.zig");
+    pub const test_dependency_13 = @import("./items/enchantments/storage.zig");
+    pub const test_dependency_15 = @import("./network/handlers/player_hotbar.zig");
+    pub const test_dependency_16 = @import("./network/movement_broadcast.zig");
+    pub const test_dependency_17 = @import("./player/move_delta.zig");
+    pub const test_dependency_18 = @import("./player/player_snapshot.zig");
+    pub const test_dependency_19 = @import("./world/provider/chunk_entities.zig");
+    pub const test_dependency_20 = @import("./world/provider/leveldb_provider.zig");
+    pub const std = test_owner.std;
+    pub const ServerProperties = test_owner.ServerProperties;
+    pub const Tecton = test_owner.Tecton;
+};
 
-    var found: usize = 0;
-    var rest: []const u8 = init_code;
-    while (std.mem.indexOf(u8, rest, ".max_mtu = ")) |at| {
-        const value_start = at + ".max_mtu = ".len;
-        const end = std.mem.indexOfScalarPos(u8, rest, value_start, ',') orelse return error.TestUnexpectedResult;
-        if (!std.mem.eql(u8, rest[value_start..end], "max_mtu")) {
-            std.debug.print("tecton.zig: the RakNet MTU cap is not the clamped config value\n", .{});
-            return error.TestUnexpectedResult;
-        }
-        found += 1;
-        rest = rest[end..];
-    }
-    try std.testing.expectEqual(@as(usize, 1), found);
+test "the RakNet MTU cap is the clamped config value, never a literal" {
+    try @import("tecton_test.zig").Suite(test_scope).case_000();
 }
 
 test "the movement flush sends with the configured priority, never a literal" {
-    const source = @embedFile("server/movement.zig");
-    try std.testing.expect(std.mem.indexOf(u8, source, "sendPacketsUncompressedWith(viewer.connection, batch.items, tecton.movement_priority)") != null);
+    try @import("tecton_test.zig").Suite(test_scope).case_001();
 }
 
 test "onTick broadcasts movement and no path skips the flush" {
-    const source = @embedFile("server/tick.zig");
-    const flush_call = "tecton.flushMovementBroadcasts()";
-
-    const on_tick_start = std.mem.indexOf(u8, source, "pub fn onTick(context: ?*anyopaque) void {") orelse
-        return error.TestUnexpectedResult;
-    const body = source[on_tick_start..];
-
-    const allocator = std.testing.allocator;
-    var code: std.ArrayList(u8) = .empty;
-    defer code.deinit(allocator);
-    var lines = std.mem.splitScalar(u8, body, '\n');
-    while (lines.next()) |line| {
-        const stripped = if (std.mem.indexOf(u8, line, "//")) |at| line[0..at] else line;
-        try code.appendSlice(allocator, stripped);
-        try code.append(allocator, '\n');
-    }
-
-    const flush_at = std.mem.indexOf(u8, code.items, flush_call) orelse {
-        std.debug.print("tecton.zig: onTick no longer calls {s}: movement is not broadcast\n", .{flush_call});
-        return error.TestUnexpectedResult;
-    };
-
-    if (std.mem.indexOf(u8, code.items[0..flush_at], "return")) |at| {
-        const line_no = std.mem.count(u8, code.items[0..at], "\n") + 2;
-        std.debug.print(
-            "server/tick.zig:{d}: onTick returns before the movement flush\n",
-            .{on_tick_start_line(source, on_tick_start) + line_no},
-        );
-        return error.TestUnexpectedResult;
-    }
+    try @import("tecton_test.zig").Suite(test_scope).case_002();
 }
 
 test "the player snapshot goes quiet before the players are freed" {
-    const registry_source = @embedFile("server/players.zig");
-    if (std.mem.indexOf(u8, registry_source, "if (!self.publishing) return &.{};") == null) {
-        std.debug.print("server/players.zig: the published snapshot outlives the players it points at\n", .{});
-        return error.TestUnexpectedResult;
-    }
-    if (std.mem.indexOf(u8, registry_source, "self.publishing = false;") == null) {
-        std.debug.print("server/players.zig: nothing silences the snapshot before teardown\n", .{});
-        return error.TestUnexpectedResult;
-    }
-
-    const source = @embedFile("tecton.zig");
-    const deinit_start = std.mem.indexOf(u8, source, "pub fn deinit(self: *Tecton) void {") orelse
-        return error.TestUnexpectedResult;
-    const guard = std.mem.indexOfPos(u8, source, deinit_start, "self.players.silence();") orelse {
-        std.debug.print("tecton.zig: deinit frees the players while block traits can still broadcast\n", .{});
-        return error.TestUnexpectedResult;
-    };
-    const players_freed = std.mem.indexOfPos(u8, source, guard, "self.players.destroyPlayers();") orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expect(guard < players_freed);
-}
-
-fn on_tick_start_line(source: []const u8, at: usize) usize {
-    return std.mem.count(u8, source[0..at], "\n") + 1;
+    try @import("tecton_test.zig").Suite(test_scope).case_003();
 }
 
 test {
-    _ = @import("./network/dispatch.zig");
-    _ = @import("./network/handlers/player-hotbar.zig");
-    _ = @import("./command/list/summon.zig");
-    _ = @import("./items/enchantments/ops.zig");
-    _ = @import("./items/enchantments/compat.zig");
-    _ = @import("./items/enchantments/effects.zig");
-    _ = @import("./items/enchantments/nbt.zig");
-    _ = @import("./items/enchantments/rules.zig");
-    _ = @import("./items/enchantments/registry.zig");
-    _ = @import("./items/enchantments/storage.zig");
-    _ = @import("./items/enchantments/set.zig");
-    _ = @import("./command/list/enchant.zig");
-    _ = @import("./command/list/world.zig");
-    _ = @import("./command/list/floating-text.zig");
-    _ = @import("./world/provider/leveldb-provider.zig");
-    _ = @import("./world/provider/chunk-entities.zig");
-    _ = @import("./entity/traits/chunk-loading.zig");
-    _ = @import("./entity/traits/fire.zig");
-    _ = @import("./player/player-snapshot.zig");
-    _ = @import("./player/move-delta.zig");
-    _ = @import("./network/movement-broadcast.zig");
+    try @import("tecton_test.zig").Suite(test_scope).case_004();
 }

@@ -4,7 +4,6 @@ const Protocol = @import("protocol");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const types = @import("../types.zig");
 const buildAbilities = @import("../../network/handlers/abilities.zig").buildAbilities;
 
 pub fn register(registry: *CommandRegistry) !void {

@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 const Protocol = @import("protocol");
 
-const version = @import("../../version.zig").version;
+const version = @import("../../core/version.zig").version;
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
@@ -22,8 +22,8 @@ pub fn register(registry: *CommandRegistry) !void {
 
 fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = ctx.tecton;
-    const snapshots = tecton.getPlayerSnapshots();
+    const view = ctx.views.about;
+    const snapshots = view.players.getPlayerSnapshots();
 
     var buf: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
@@ -38,7 +38,7 @@ fn handle(raw: *anyopaque) void {
             "§7Zig: §f" ++ builtin.zig_version_string ++ " §7Build: §f" ++ @tagName(builtin.mode) ++
             " §7Platform: §f" ++ @tagName(builtin.os.tag) ++ " (" ++ @tagName(builtin.cpu.arch) ++ ")§r\n" ++
             "§7Players: §f{d}§7/§f{d}",
-        .{ Protocol.PROTOCOL, snapshots.len, tecton.config.max_players },
+        .{ Protocol.PROTOCOL, snapshots.len, view.max_players.* },
     ) catch return;
 
     ctx.sendOutput(true, writer.buffered());

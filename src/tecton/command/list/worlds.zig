@@ -2,7 +2,6 @@ const std = @import("std");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
-const types = @import("../types.zig");
 const Tecton = @import("../../tecton.zig").Tecton;
 
 pub fn register(registry: *CommandRegistry, tecton: *Tecton) !void {
@@ -45,7 +44,7 @@ fn registerWorldEnum(registry: *CommandRegistry, tecton: *Tecton) !u32 {
 
 fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
-    const tecton = ctx.tecton;
+    const tecton = ctx.views.world_info;
     const trimmed = std.mem.trim(u8, ctx.args, " ");
 
     var buf: [4096]u8 = undefined;
@@ -76,18 +75,18 @@ fn handle(raw: *anyopaque) void {
     };
 
     const target_tps = tecton.targetTps();
-    const current_mspt = tecton.current_mspt;
-    const raknet_mspt = tecton.current_raknet_mspt;
-    const game_mspt = tecton.current_game_mspt;
+    const current_mspt = tecton.current_mspt.*;
+    const raknet_mspt = tecton.current_raknet_mspt.*;
+    const game_mspt = tecton.current_game_mspt.*;
     const slow_pct = tecton.profiler.slowTickPct();
-    const tps_ratio = if (target_tps > 0.0) tecton.current_tps / target_tps else 1.0;
+    const tps_ratio = if (target_tps > 0.0) tecton.current_tps.* / target_tps else 1.0;
     const tps_color: []const u8 = if (tps_ratio >= 0.975) "§a" else if (tps_ratio >= 0.75) "§e" else "§c";
     const slow_color: []const u8 = if (tecton.profiler.slow_ticks == 0) "§a" else if (slow_pct < 5.0) "§e" else "§c";
 
     std.Io.Writer.print(&writer, "§6World: §f{s}\n§7TPS: {s}{d:.1}§7/§f{d:.1} §7MSPT: §f{d:.2}ms §7RakNet: §f{d:.2}ms §7Game: §f{d:.2}ms §7SlowTicks: {s}{d} §7({d:.1}%)", .{
         world.identifier,
         tps_color,
-        tecton.current_tps,
+        tecton.current_tps.*,
         target_tps,
         current_mspt,
         raknet_mspt,

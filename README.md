@@ -130,6 +130,41 @@ zig build -Doptimize=ReleaseFast
 
 ---
 
+## 🧩 Embedding Tecton
+
+Tecton is also a library. A host process builds a `ServerOptions` struct and passes it to the single
+`Server.init` constructor: nothing is passed as a loose parameter, and `composition` is a mandatory
+field. `defaultOptions` builds the default options with the vanilla composition already wired:
+
+```zig
+const std = @import("std");
+const tecton = @import("tecton");
+
+pub fn main(init: std.process.Init) !void {
+    var server = try tecton.Server.init(tecton.defaultOptions(init.io, std.heap.smp_allocator));
+    defer server.deinit();
+
+    try server.prepare();
+    try server.start();
+    defer server.shutdown() catch {};
+    try server.run();
+}
+```
+
+To run with your own composition (or any other option), replace the field before constructing:
+
+```zig
+var opts = tecton.defaultOptions(init.io, allocator);
+opts.composition = .{ .prepare = myPrepare, .dispatch = myDispatch };
+var server = try tecton.Server.init(opts);
+```
+
+Only `io`, `allocator`, and `composition` are mandatory; every other field has a default.
+`properties: ?ServerProperties = null` loads `server.properties` (created with defaults when
+missing), or you can pass your own loaded `ServerProperties`.
+
+---
+
 ## 🔌 Native Plugin Engine (C ABI)
 
 Tecton exposes a **versioned C ABI** through `include/tecton_plugin.h`. Any language that can produce a shared library with C-compatible exports can build a plugin.

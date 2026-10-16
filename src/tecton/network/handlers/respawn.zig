@@ -1,9 +1,8 @@
-const std = @import("std");
 const Raknet = @import("Raknet");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 
-const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const Player = @import("../../player/player.zig").Player;
 const Fire = @import("../../entity/traits/fire.zig");
@@ -46,8 +45,6 @@ pub fn respawnPlayer(network: *NetworkHandler, player: *Player) void {
     visibility.forgetPlayerForViewers(player);
 }
 
-/// The death screen needs two of these, the first while the server searches for
-/// a spawn; written here because the pinned protocol lacks the struct.
 fn sendRespawnStates(network: *NetworkHandler, player: *Player, position: Protocol.Vector3f) void {
     const states = [_]State{ .SearchingForSpawn, .ReadyToSpawn };
     for (states) |state| {

@@ -1,10 +1,10 @@
 pub const ECS = @import("./ecs.zig");
 pub const EntityId = ECS.EntityId;
-pub const EntityTypeRegistry = @import("./entity-type-registry.zig");
-pub const EntityType = @import("./entity-type.zig").EntityType;
+pub const EntityTypeRegistry = @import("./entity_type_registry.zig");
+pub const EntityType = @import("./entity_type.zig").EntityType;
 pub const Entity = @import("./entity.zig").Entity;
-pub const FloatingText = @import("./floating-text.zig").FloatingText;
-pub const FloatingTextManager = @import("./floating-text.zig").FloatingTextManager;
+pub const FloatingText = @import("./floating_text.zig").FloatingText;
+pub const FloatingTextManager = @import("./floating_text.zig").FloatingTextManager;
 pub const metadata = @import("./metadata/root.zig");
 pub const EntityActorFlags = metadata.EntityActorFlags;
 pub const Attributes = metadata.Attributes;

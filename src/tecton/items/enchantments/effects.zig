@@ -1,8 +1,8 @@
 const std = @import("std");
 const Protocol = @import("protocol");
 
-const ItemStack = @import("../item-stack.zig").ItemStack;
-const ItemType = @import("../item-type.zig").ItemType;
+const ItemStack = @import("../item_stack.zig").ItemStack;
+const ItemType = @import("../item_type.zig").ItemType;
 const Container = @import("../../container/container.zig").Container;
 const ops = @import("ops.zig");
 const compat = @import("compat.zig");
@@ -175,171 +175,6 @@ pub fn thornsReflection(armor: *const Container, random: std.Random) f32 {
 const testing = std.testing;
 const test_helpers = @import("testing.zig");
 
-test "the base attack damage follows the tier and blade tags" {
-    const allocator = testing.allocator;
-
-    const swords = [_]struct { tag: []const u8, damage: f32 }{
-        .{ .tag = "minecraft:wooden_tier", .damage = 4 },
-        .{ .tag = "minecraft:copper_tier", .damage = 4 },
-        .{ .tag = "minecraft:golden_tier", .damage = 4 },
-        .{ .tag = "minecraft:stone_tier", .damage = 5 },
-        .{ .tag = "minecraft:iron_tier", .damage = 6 },
-        .{ .tag = "minecraft:diamond_tier", .damage = 7 },
-        .{ .tag = "minecraft:netherite_tier", .damage = 8 },
-    };
-
-    for (swords) |entry| {
-        const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_sword", &.{ "minecraft:is_sword", entry.tag }, false);
-        defer kind.deinit();
-        try testing.expectEqual(entry.damage, baseAttackDamage(kind));
-    }
-
-    const axes = [_]struct { tag: []const u8, damage: f32 }{
-        .{ .tag = "minecraft:wooden_tier", .damage = 3 },
-        .{ .tag = "minecraft:stone_tier", .damage = 4 },
-        .{ .tag = "minecraft:iron_tier", .damage = 5 },
-        .{ .tag = "minecraft:diamond_tier", .damage = 6 },
-        .{ .tag = "minecraft:netherite_tier", .damage = 7 },
-    };
-
-    for (axes) |entry| {
-        const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_axe", &.{ "minecraft:is_axe", entry.tag }, false);
-        defer kind.deinit();
-        try testing.expectEqual(entry.damage, baseAttackDamage(kind));
-    }
-
-    const trident = try test_helpers.itemType(allocator, "minecraft:test_effects_trident", &.{"minecraft:is_trident"}, false);
-    defer trident.deinit();
-    try testing.expectEqual(TRIDENT_DAMAGE, baseAttackDamage(trident));
-
-    const stick = try test_helpers.itemType(allocator, "minecraft:test_effects_stick", &.{}, false);
-    defer stick.deinit();
-    try testing.expectEqual(FIST_DAMAGE, baseAttackDamage(stick));
-
-    const untiered_sword = try test_helpers.itemType(allocator, "minecraft:test_effects_toy_sword", &.{"minecraft:is_sword"}, false);
-    defer untiered_sword.deinit();
-    try testing.expectEqual(FIST_DAMAGE, baseAttackDamage(untiered_sword));
-}
-
-test "the victim family decides which damage bonus applies" {
-    try testing.expectEqual(Family.undead, familyOf("minecraft:zombie"));
-    try testing.expectEqual(Family.undead, familyOf("minecraft:wither_skeleton"));
-    try testing.expectEqual(Family.undead, familyOf("minecraft:phantom"));
-    try testing.expectEqual(Family.undead, familyOf("minecraft:drowned"));
-    try testing.expectEqual(Family.undead, familyOf("minecraft:parched"));
-    try testing.expectEqual(Family.undead, familyOf("minecraft:camel_husk"));
-    try testing.expectEqual(Family.arthropod, familyOf("minecraft:spider"));
-    try testing.expectEqual(Family.arthropod, familyOf("minecraft:cave_spider"));
-    try testing.expectEqual(Family.arthropod, familyOf("minecraft:bee"));
-    try testing.expectEqual(Family.none, familyOf("minecraft:cow"));
-    try testing.expectEqual(Family.none, familyOf("minecraft:guardian"));
-    try testing.expectEqual(Family.none, familyOf("minecraft:player"));
-    try testing.expectEqual(Family.none, familyOf("minecraft:not_a_real_mob"));
-    try testing.expectEqual(Family.none, familyOf("minecraft:Zombie"));
-}
-
-test "sharpness smite and bane add their bedrock bonuses" {
-    const allocator = testing.allocator;
-
-    const bare = try test_helpers.itemType(allocator, "minecraft:test_effects_plain_sword", &.{ "minecraft:is_sword", "minecraft:diamond_tier" }, false);
-    defer bare.deinit();
-
-    var weapon = ItemStack.init(allocator, bare, .{});
-    defer weapon.deinit();
-
-    try testing.expectEqual(@as(f32, 7), attackDamage(&weapon, "minecraft:zombie"));
-
-    _ = weapon.enchantments.set(compat.SHARPNESS, 5);
-    try testing.expectEqual(@as(f32, 13.25), attackDamage(&weapon, "minecraft:zombie"));
-    try testing.expectEqual(@as(f32, 13.25), attackDamage(&weapon, "minecraft:cow"));
-    try testing.expectEqual(@as(f32, 1), attackDamage(null, "minecraft:cow"));
-}
-
-test "sharpness five matches the damage the client prints" {
-    const allocator = testing.allocator;
-
-    const wooden = try test_helpers.itemType(allocator, "minecraft:test_effects_wooden_sword", &.{ "minecraft:is_sword", "minecraft:wooden_tier" }, false);
-    defer wooden.deinit();
-    const netherite = try test_helpers.itemType(allocator, "minecraft:test_effects_netherite_sword", &.{ "minecraft:is_sword", "minecraft:netherite_tier" }, false);
-    defer netherite.deinit();
-
-    var wood_weapon = ItemStack.init(allocator, wooden, .{});
-    defer wood_weapon.deinit();
-    _ = wood_weapon.enchantments.set(compat.SHARPNESS, 5);
-    try testing.expectEqual(@as(f32, 10.25), attackDamage(&wood_weapon, "minecraft:cow"));
-
-    var netherite_weapon = ItemStack.init(allocator, netherite, .{});
-    defer netherite_weapon.deinit();
-    _ = netherite_weapon.enchantments.set(compat.SHARPNESS, 5);
-    try testing.expectEqual(@as(f32, 14.25), attackDamage(&netherite_weapon, "minecraft:cow"));
-}
-
-test "smite only pays against the undead and bane only against arthropods" {
-    const allocator = testing.allocator;
-
-    const bare = try test_helpers.itemType(allocator, "minecraft:test_effects_enchanted_sword", &.{ "minecraft:is_sword", "minecraft:iron_tier" }, false);
-    defer bare.deinit();
-
-    var smite = ItemStack.init(allocator, bare, .{});
-    defer smite.deinit();
-    _ = smite.enchantments.set(compat.SMITE, 5);
-    try testing.expectEqual(@as(f32, 18.5), attackDamage(&smite, "minecraft:zombie"));
-    try testing.expectEqual(@as(f32, 6), attackDamage(&smite, "minecraft:spider"));
-
-    var bane = ItemStack.init(allocator, bare, .{});
-    defer bane.deinit();
-    _ = bane.enchantments.set(compat.BANE_OF_ARTHROPODS, 5);
-    try testing.expectEqual(@as(f32, 18.5), attackDamage(&bane, "minecraft:spider"));
-    try testing.expectEqual(@as(f32, 6), attackDamage(&bane, "minecraft:zombie"));
-}
-
-test "knockback scales the impulse the attack path already used" {
-    const allocator = testing.allocator;
-
-    try testing.expectEqual(BASE_KNOCKBACK, knockbackImpulse(null));
-
-    const bare = try test_helpers.itemType(allocator, "minecraft:test_effects_kb_sword", &.{ "minecraft:is_sword", "minecraft:wooden_tier" }, false);
-    defer bare.deinit();
-
-    var weapon = ItemStack.init(allocator, bare, .{});
-    defer weapon.deinit();
-    try testing.expectEqual(BASE_KNOCKBACK, knockbackImpulse(&weapon));
-
-    _ = weapon.enchantments.set(compat.KNOCKBACK, 2);
-    try testing.expectApproxEqAbs(@as(f32, 0.6), knockbackImpulse(&weapon), 0.000001);
-
-    const impact = meleeImpact(null, "minecraft:cow");
-    try testing.expectEqual(FIST_DAMAGE, impact.damage);
-    try testing.expectEqual(BASE_KNOCKBACK, impact.knockback);
-}
-
-test "every family row names a real entity type" {
-    const allocator = testing.allocator;
-
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, Protocol.Data.entity_types_json, .{});
-    defer parsed.deinit();
-
-    const known = switch (parsed.value) {
-        .array => |arr| arr.items,
-        else => return error.InvalidJsonFormat,
-    };
-
-    for (FAMILY_MAP.keys()) |identifier| {
-        var found = false;
-        for (known) |entry| {
-            if (entry != .object) continue;
-            const declared = entry.object.get("identifier") orelse continue;
-            if (declared != .string) continue;
-            if (std.mem.eql(u8, declared.string, identifier)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) std.debug.print("unknown entity in the family table: {s}\n", .{identifier});
-        try testing.expect(found);
-    }
-}
-
 const FixedEntropy = struct {
     byte: u8,
 
@@ -363,164 +198,100 @@ fn thornsArmor(allocator: std.mem.Allocator, kind: *ItemType, levels: [compat.AR
     return armor;
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const entropy_interface = test_owner.FixedEntropy.interface;
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const Container = test_owner.Container;
+    pub const compat = test_owner.compat;
+    pub const Family = test_owner.Family;
+    pub const FIST_DAMAGE = test_owner.FIST_DAMAGE;
+    pub const TRIDENT_DAMAGE = test_owner.TRIDENT_DAMAGE;
+    pub const BASE_KNOCKBACK = test_owner.BASE_KNOCKBACK;
+    pub const PROTECTION_MAX_LEVELS = test_owner.PROTECTION_MAX_LEVELS;
+    pub const FIRE_PROTECTION_MAX_LEVELS = test_owner.FIRE_PROTECTION_MAX_LEVELS;
+    pub const THORNS_MIN_DAMAGE = test_owner.THORNS_MIN_DAMAGE;
+    pub const THORNS_MAX_DAMAGE = test_owner.THORNS_MAX_DAMAGE;
+    pub const FAMILY_MAP = test_owner.FAMILY_MAP;
+    pub const familyOf = test_owner.familyOf;
+    pub const baseAttackDamage = test_owner.baseAttackDamage;
+    pub const attackDamage = test_owner.attackDamage;
+    pub const knockbackImpulse = test_owner.knockbackImpulse;
+    pub const meleeImpact = test_owner.meleeImpact;
+    pub const blocksArmorRemoval = test_owner.blocksArmorRemoval;
+    pub const mitigatedDamage = test_owner.mitigatedDamage;
+    pub const mitigatedFireDamage = test_owner.mitigatedFireDamage;
+    pub const fireBurnDuration = test_owner.fireBurnDuration;
+    pub const fireAspectDurationTicks = test_owner.fireAspectDurationTicks;
+    pub const thornsReflection = test_owner.thornsReflection;
+    pub const testing = test_owner.testing;
+    pub const test_helpers = test_owner.test_helpers;
+    pub const FixedEntropy = test_owner.FixedEntropy;
+    pub const thornsArmor = test_owner.thornsArmor;
+};
+
+test "the base attack damage follows the tier and blade tags" {
+    try @import("effects_test.zig").Suite(test_scope).case_000();
+}
+
+test "the victim family decides which damage bonus applies" {
+    try @import("effects_test.zig").Suite(test_scope).case_001();
+}
+
+test "sharpness smite and bane add their bedrock bonuses" {
+    try @import("effects_test.zig").Suite(test_scope).case_002();
+}
+
+test "sharpness five matches the damage the client prints" {
+    try @import("effects_test.zig").Suite(test_scope).case_003();
+}
+
+test "smite only pays against the undead and bane only against arthropods" {
+    try @import("effects_test.zig").Suite(test_scope).case_004();
+}
+
+test "knockback scales the impulse the attack path already used" {
+    try @import("effects_test.zig").Suite(test_scope).case_005();
+}
+
+test "every family row names a real entity type" {
+    try @import("effects_test.zig").Suite(test_scope).case_006();
+}
+
 test "protection shaves four percent a level up to twenty levels" {
-    var armor: compat.ArmorAggregate = .empty;
-
-    try testing.expectEqual(@as(f32, 20.0), mitigatedDamage(&armor, 20.0));
-
-    armor.protection = 4;
-    try testing.expectApproxEqAbs(@as(f32, 16.8), mitigatedDamage(&armor, 20.0), 0.0001);
-
-    armor.protection = 16;
-    try testing.expectApproxEqAbs(@as(f32, 7.2), mitigatedDamage(&armor, 20.0), 0.0001);
-
-    armor.protection = PROTECTION_MAX_LEVELS;
-    try testing.expectApproxEqAbs(@as(f32, 4.0), mitigatedDamage(&armor, 20.0), 0.0001);
-
-    armor.protection = 40;
-    try testing.expectApproxEqAbs(@as(f32, 4.0), mitigatedDamage(&armor, 20.0), 0.0001);
+    try @import("effects_test.zig").Suite(test_scope).case_007();
 }
 
 test "the typed protections do not shave a melee hit" {
-    var armor: compat.ArmorAggregate = .empty;
-    armor.fire_protection = 4;
-    armor.blast_protection = 4;
-    armor.projectile_protection = 4;
-    armor.feather_falling = 4;
-
-    try testing.expectEqual(@as(f32, 20.0), mitigatedDamage(&armor, 20.0));
-
-    armor.protection = 2;
-    try testing.expectApproxEqAbs(@as(f32, 18.4), mitigatedDamage(&armor, 20.0), 0.0001);
+    try @import("effects_test.zig").Suite(test_scope).case_008();
 }
 
 test "thorns never fires without a piece that carries it" {
-    const allocator = testing.allocator;
-
-    const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_plain_boots", &.{"minecraft:is_armor"}, false);
-    defer kind.deinit();
-
-    var armor = try Container.init(allocator, .Inventory, compat.ARMOR_SLOTS);
-    defer armor.deinit();
-    armor.setItem(0, ItemStack.init(allocator, kind, .{}));
-
-    var always: FixedEntropy = .{ .byte = 0 };
-    try testing.expectEqual(@as(f32, 0.0), thornsReflection(&armor, always.interface()));
+    try @import("effects_test.zig").Suite(test_scope).case_009();
 }
 
 test "four pieces of thorns roll four separate dice" {
-    const allocator = testing.allocator;
-
-    const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_thorns_piece", &.{"minecraft:is_armor"}, false);
-    defer kind.deinit();
-
-    var entropy: FixedEntropy = .{ .byte = 0xff };
-
-    var four: Container = try thornsArmor(allocator, kind, .{ 3, 3, 3, 3 });
-    defer four.deinit();
-    try testing.expectEqual(@as(f32, 0.0), thornsReflection(&four, entropy.interface()));
-
-    var one: Container = try thornsArmor(allocator, kind, .{ 0, 0, 7, 0 });
-    defer one.deinit();
-    try testing.expectApproxEqAbs(THORNS_MAX_DAMAGE, thornsReflection(&one, entropy.interface()), 0.0001);
+    try @import("effects_test.zig").Suite(test_scope).case_010();
 }
 
 test "thorns level three fires about forty-five times in a hundred" {
-    const allocator = testing.allocator;
-
-    const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_thorns_helm", &.{"minecraft:is_armor"}, false);
-    defer kind.deinit();
-
-    var armor: Container = try thornsArmor(allocator, kind, .{ 0, 0, 3, 0 });
-    defer armor.deinit();
-
-    var rng = std.Random.DefaultPrng.init(0x5eed7a11);
-    const random = rng.random();
-
-    const trials: u32 = 20_000;
-    var hits: u32 = 0;
-    var total: f64 = 0;
-    var index: u32 = 0;
-    while (index < trials) : (index += 1) {
-        const damage = thornsReflection(&armor, random);
-        if (damage > 0) {
-            try testing.expect(damage >= THORNS_MIN_DAMAGE and damage <= THORNS_MAX_DAMAGE);
-            hits += 1;
-            total += damage;
-        }
-    }
-
-    const rate = @as(f64, @floatFromInt(hits)) / @as(f64, trials);
-    try testing.expect(rate > 0.44 and rate < 0.46);
-
-    const average = total / @as(f64, @floatFromInt(hits));
-    try testing.expect(average > 2.85 and average < 3.15);
+    try @import("effects_test.zig").Suite(test_scope).case_011();
 }
 
 test "curse of binding blocks armor removal and nothing else" {
-    const allocator = testing.allocator;
-
-    const boots = try test_helpers.itemType(allocator, "minecraft:test_effects_cursed_boots", &.{"minecraft:is_armor"}, false);
-    defer boots.deinit();
-
-    var plain = ItemStack.init(allocator, boots, .{});
-    defer plain.deinit();
-    try testing.expect(!blocksArmorRemoval(&plain));
-
-    _ = plain.enchantments.set(compat.CURSE_OF_VANISHING, 1);
-    try testing.expect(!blocksArmorRemoval(&plain));
-
-    _ = plain.enchantments.set(compat.CURSE_OF_BINDING, 1);
-    try testing.expect(blocksArmorRemoval(&plain));
+    try @import("effects_test.zig").Suite(test_scope).case_012();
 }
 
 test "fire protection shaves the burn duration by fifteen percent a level" {
-    try testing.expectEqual(@as(i32, 150), fireBurnDuration(150, 0));
-    try testing.expectEqual(@as(i32, 128), fireBurnDuration(150, 1));
-    try testing.expectEqual(@as(i32, 105), fireBurnDuration(150, 2));
-    try testing.expectEqual(@as(i32, 60), fireBurnDuration(150, FIRE_PROTECTION_MAX_LEVELS));
-    try testing.expectEqual(@as(i32, 60), fireBurnDuration(150, 200));
-    try testing.expectEqual(@as(i32, 0), fireBurnDuration(0, 2));
-    try testing.expectEqual(@as(i32, 0), fireBurnDuration(-40, 2));
+    try @import("effects_test.zig").Suite(test_scope).case_013();
 }
 
 test "fire protection shaves the fire damage by eight percent a level" {
-    var armor: compat.ArmorAggregate = .empty;
-
-    try testing.expectEqual(@as(f32, 1.0), mitigatedFireDamage(&armor, 1.0));
-
-    armor.fire_protection = 2;
-    try testing.expectApproxEqAbs(@as(f32, 0.84), mitigatedFireDamage(&armor, 1.0), 0.0001);
-
-    armor.fire_protection = FIRE_PROTECTION_MAX_LEVELS;
-    try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
-
-    armor.fire_protection = 200;
-    try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
-
-    armor.protection = 4;
-    try testing.expectApproxEqAbs(@as(f32, 0.68), mitigatedFireDamage(&armor, 1.0), 0.0001);
+    try @import("effects_test.zig").Suite(test_scope).case_014();
 }
 
 test "fire aspect burns for four seconds per level" {
-    const allocator = testing.allocator;
-
-    try testing.expectEqual(@as(i32, 0), fireAspectDurationTicks(null));
-
-    const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_fire_sword", &.{ "minecraft:is_sword", "minecraft:wooden_tier" }, false);
-    defer kind.deinit();
-
-    var plain = ItemStack.init(allocator, kind, .{});
-    defer plain.deinit();
-    try testing.expectEqual(@as(i32, 0), fireAspectDurationTicks(&plain));
-
-    var one = ItemStack.init(allocator, kind, .{});
-    defer one.deinit();
-    _ = one.enchantments.set(compat.FIRE_ASPECT, 1);
-    try testing.expectEqual(@as(i32, 80), fireAspectDurationTicks(&one));
-
-    var two = ItemStack.init(allocator, kind, .{});
-    defer two.deinit();
-    _ = two.enchantments.set(compat.FIRE_ASPECT, 2);
-    try testing.expectEqual(@as(i32, 160), fireAspectDurationTicks(&two));
+    try @import("effects_test.zig").Suite(test_scope).case_015();
 }

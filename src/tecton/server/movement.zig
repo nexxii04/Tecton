@@ -1,14 +1,11 @@
 const std = @import("std");
 const Timestamp = std.Io.Timestamp;
-const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
-const MoveDelta = @import("../player/move-delta.zig");
+const MoveDelta = @import("../player/move_delta.zig");
 const Player = @import("../player/player.zig").Player;
-const MovementBroadcast = @import("../network/movement-broadcast.zig");
+const MovementBroadcast = @import("../network/movement_broadcast.zig");
 
-/// Serializes each delta once per tick, buckets it by region, and sends each
-/// viewer only what it tracks. Cadence follows the nearest viewer.
 pub fn flush(tecton: *Tecton) void {
     const started = Timestamp.now(tecton.io, .awake);
     defer {
@@ -54,7 +51,6 @@ pub fn flush(tecton: *Tecton) void {
             emitter.broadcast_band = band;
         }
 
-        // No viewers: keep the delta pending; the next one is a full state.
         if (bands and emitter.broadcast_band == null) {
             skipped += 1;
             continue;
@@ -150,7 +146,6 @@ pub fn flush(tecton: *Tecton) void {
     tecton.profiler.count(.movement_batches, batches);
 }
 
-/// Rebuilds viewer positions for the band scan; false when the scratch couldn't grow.
 fn fillViewerPoints(tecton: *Tecton, snapshots: []const *Player) bool {
     const viewers = &tecton.players.movement_viewers;
     viewers.clearRetainingCapacity();

@@ -4,11 +4,12 @@ const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
-const shouldEmitStartupLogs = @import("../config.zig").shouldEmitStartupLogs;
+const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
+const services = @import("./services.zig");
 const worlds = @import("worlds.zig");
 const entities = @import("../world/dimension/entities.zig");
 
-const EntityTypeRegistry = @import("../entity/entity-type-registry.zig");
+const EntityTypeRegistry = @import("../entity/entity_type_registry.zig");
 const EntityTraits = @import("../entity/traits/root.zig");
 const FireTrait = EntityTraits.FireTrait;
 const GravityTrait = EntityTraits.GravityTrait;
@@ -16,18 +17,18 @@ const HealthTrait = EntityTraits.HealthTrait;
 const VillagerTradeTrait = EntityTraits.VillagerTradeTrait;
 const EcsEntityId = @import("../entity/ecs.zig").EntityId;
 const ItemDrop = @import("../entity/ecs.zig").ItemDrop;
-const CreativeContentLoader = @import("../items/creative-content-loader.zig");
-const ItemPalette = @import("../items/item-palette.zig");
-const ItemType = @import("../items/item-type.zig").ItemType;
+const CreativeContentLoader = @import("../items/creative_content_loader.zig");
+const ItemPalette = @import("../items/item_palette.zig");
+const ItemType = @import("../items/item_type.zig").ItemType;
 const EnchantmentRegistry = @import("../items/enchantments/registry.zig");
-const BlockPermutation = @import("../world/block/block-permutation.zig").BlockPermutation;
+const BlockPermutation = @import("../world/block/block_permutation.zig").BlockPermutation;
 const initRegistries = @import("../world/block/root.zig").initRegistries;
 const loadBlockPermutations = @import("../world/block/root.zig").loadBlockPermutations;
 const BarrelTrait = @import("../world/block/traits/barrel.zig").BarrelTrait;
 const ChestTrait = @import("../world/block/traits/chest.zig").ChestTrait;
-const OpenBitTrait = @import("../world/block/traits/open-bit.zig").OpenBitTrait;
-const UpperBlockTrait = @import("../world/block/traits/upper-block.zig").UpperBlockTrait;
-const WallConnectionTrait = @import("../world/block/traits/wall-connection.zig").WallConnectionTrait;
+const OpenBitTrait = @import("../world/block/traits/open_bit.zig").OpenBitTrait;
+const UpperBlockTrait = @import("../world/block/traits/upper_block.zig").UpperBlockTrait;
+const WallConnectionTrait = @import("../world/block/traits/wall_connection.zig").WallConnectionTrait;
 
 pub fn prepare(tecton: *Tecton) !void {
     if (tecton.prepared) return;
@@ -117,7 +118,7 @@ pub fn prepare(tecton: *Tecton) !void {
             var dir_it = worlds_dir.iterate();
             while (dir_it.next(tecton.io) catch null) |entry| {
                 if (entry.kind != .directory) continue;
-                _ = worlds.load(tecton, entry.name) catch |err| {
+                _ = worlds.load(services.host(tecton), tecton.paths.worlds, entry.name) catch |err| {
                     Raknet.Logger.ERROR("Failed to load world '{s}': {any}", .{ entry.name, err });
                     continue;
                 };
@@ -129,7 +130,7 @@ pub fn prepare(tecton: *Tecton) !void {
 
         if (tecton.worlds.count() == 0 and tecton.create_default_world) {
             Raknet.Logger.INFO("No worlds found, creating default world", .{});
-            _ = try worlds.load(tecton, "world");
+            _ = try worlds.load(services.host(tecton), tecton.paths.worlds, "world");
         }
     }
 
@@ -162,17 +163,127 @@ pub fn prepare(tecton: *Tecton) !void {
         @import("../command/list/give.zig"),
         @import("../command/list/weather.zig"),
         @import("../command/list/op.zig"),
-        @import("../command/list/floating-text.zig"),
+        @import("../command/list/floating_text.zig"),
         @import("../command/list/enchant.zig"),
         @import("../command/list/movement.zig"),
     };
     inline for (commands) |cmd| {
         try cmd.register(&tecton.command_registry);
     }
+
     try @import("../command/list/worlds.zig").register(&tecton.command_registry, tecton);
-    try @import("../command/list/world.zig").register(&tecton.command_registry, tecton);
+    try @import("../command/list/world.zig").register(&tecton.command_registry, services.commandViews(tecton).world_admin);
     tecton.prepared = true;
     if (tecton.prepare_callback) |callback| callback(tecton.lifecycle_userdata);
+}
+
+test "op and deop persist permission changes across a reload" {
+    const Op = @import("../command/list/op.zig");
+    Raknet.Logger.init(std.heap.page_allocator);
+    const PermissionManager = @TypeOf(@as(Tecton, undefined).permission_manager);
+    const CommandRegistry = @TypeOf(@as(Tecton, undefined).command_registry);
+    const CommandViews = @typeInfo(@TypeOf(services.commandViews)).@"fn".return_type.?;
+    const NetworkHandler = std.meta.Child(@TypeOf(@as(Tecton, undefined).network));
+    const fixture = "{\"groups\":{\"member\":[\"tecton.command.about\"],\"operator\":[\"*\"]},\"players\":{\"Alice\":\"member\",\"Bob\":\"operator\"}}";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "permissions.json", .data = fixture });
+    var path_buf: [512]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path});
+    var manager = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
+    defer manager.deinit();
+    var registry = CommandRegistry.init(std.testing.allocator);
+    defer registry.deinit();
+    try Op.register(&registry);
+    const Adapter = struct {
+        fn get(raw: *anyopaque, name: []const u8) []const u8 {
+            const mgr: *PermissionManager = @ptrCast(@alignCast(raw));
+            return mgr.getPlayerGroup(name);
+        }
+        fn set(raw: *anyopaque, name: []const u8, group: []const u8) !void {
+            const mgr: *PermissionManager = @ptrCast(@alignCast(raw));
+            try mgr.setPlayerGroup(name, group);
+        }
+        fn default(raw: *anyopaque) []const u8 {
+            const mgr: *PermissionManager = @ptrCast(@alignCast(raw));
+            return mgr.default_group;
+        }
+        fn refresh(_: *anyopaque, _: std.mem.Allocator, _: []const u8) void {}
+    };
+    var views: CommandViews = undefined;
+    views.permission_admin = .{ .ctx = &manager, .get_group = Adapter.get, .set_group = Adapter.set, .default_group = Adapter.default, .refresh_abilities = Adapter.refresh };
+    var network: NetworkHandler = undefined;
+    registry.dispatchConsole(views, &network, "/op Alice");
+    registry.dispatchConsole(views, &network, "/deop Bob");
+    try std.testing.expectEqualStrings("operator", manager.getPlayerGroup("Alice"));
+    try std.testing.expectEqualStrings("member", manager.getPlayerGroup("Bob"));
+    const data = try tmp.dir.readFileAlloc(std.testing.io, "permissions.json", std.testing.allocator, .limited(1024 * 1024));
+    defer std.testing.allocator.free(data);
+    try std.testing.expect(!std.mem.eql(u8, fixture, data));
+    var loaded = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
+    defer loaded.deinit();
+    try std.testing.expectEqualStrings("operator", loaded.getPlayerGroup("Alice"));
+    try std.testing.expectEqualStrings("member", loaded.getPlayerGroup("Bob"));
+    try std.testing.expect(loaded.hasPermission("Alice", "tecton.command.op"));
+    try std.testing.expect(!loaded.hasPermission("Bob", "tecton.command.op"));
+}
+
+test "op and deop refresh the target's abilities exactly once per successful change" {
+    const Op = @import("../command/list/op.zig");
+    Raknet.Logger.init(std.heap.page_allocator);
+    const PermissionManager = @TypeOf(@as(Tecton, undefined).permission_manager);
+    const CommandRegistry = @TypeOf(@as(Tecton, undefined).command_registry);
+    const CommandViews = @typeInfo(@TypeOf(services.commandViews)).@"fn".return_type.?;
+    const NetworkHandler = std.meta.Child(@TypeOf(@as(Tecton, undefined).network));
+    const fixture = "{\"groups\":{\"member\":[\"tecton.command.about\"],\"operator\":[\"*\"]},\"players\":{\"Alice\":\"member\",\"Bob\":\"operator\"}}";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "permissions.json", .data = fixture });
+    var path_buf: [512]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/permissions.json", .{tmp.sub_path});
+    var manager = PermissionManager.init(std.testing.io, std.testing.allocator, path, "member");
+    defer manager.deinit();
+    var registry = CommandRegistry.init(std.testing.allocator);
+    defer registry.deinit();
+    try Op.register(&registry);
+    const Recorder = struct {
+        manager: *PermissionManager,
+        calls: usize = 0,
+        last_name: []const u8 = "",
+        fn get(raw: *anyopaque, name: []const u8) []const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            return self.manager.getPlayerGroup(name);
+        }
+        fn set(raw: *anyopaque, name: []const u8, group: []const u8) !void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            try self.manager.setPlayerGroup(name, group);
+        }
+        fn default(raw: *anyopaque) []const u8 {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            return self.manager.default_group;
+        }
+        fn refresh(raw: *anyopaque, _: std.mem.Allocator, username: []const u8) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.calls += 1;
+            self.last_name = username;
+        }
+    };
+    var recorder = Recorder{ .manager = &manager };
+    var views: CommandViews = undefined;
+    views.permission_admin = .{ .ctx = &recorder, .get_group = Recorder.get, .set_group = Recorder.set, .default_group = Recorder.default, .refresh_abilities = Recorder.refresh };
+    var network: NetworkHandler = undefined;
+    registry.dispatchConsole(views, &network, "/op Alice");
+    try std.testing.expectEqual(@as(usize, 1), recorder.calls);
+    try std.testing.expectEqualStrings("Alice", recorder.last_name);
+    registry.dispatchConsole(views, &network, "/op Alice");
+    try std.testing.expectEqual(@as(usize, 1), recorder.calls);
+    registry.dispatchConsole(views, &network, "/deop Bob");
+    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
+    try std.testing.expectEqualStrings("Bob", recorder.last_name);
+    registry.dispatchConsole(views, &network, "/deop Bob");
+    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
+    registry.dispatchConsole(views, &network, "/op");
+    try std.testing.expectEqual(@as(usize, 2), recorder.calls);
 }
 
 fn ecsDrop(context: *anyopaque, _: EcsEntityId, position: Protocol.Vector3f, item: ItemDrop) void {

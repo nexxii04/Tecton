@@ -6,8 +6,8 @@ const Slot = enchantment.Slot;
 const SlotSet = enchantment.SlotSet;
 const Source = enchantment.Source;
 
-const ItemStack = @import("../item-stack.zig").ItemStack;
-const ItemType = @import("../item-type.zig").ItemType;
+const ItemStack = @import("../item_stack.zig").ItemStack;
+const ItemType = @import("../item_type.zig").ItemType;
 const registry_mod = @import("registry.zig");
 const events = @import("../../events/root.zig");
 const Player = @import("../../player/player.zig").Player;
@@ -49,10 +49,9 @@ pub const Context = struct {
 };
 
 pub const Rule = struct {
-    /// Diagnostic label; stored as a pointer, so it must outlive the registry.
     id: []const u8,
     priority: i16,
-    /// Runs on the tick thread and must only veto or adjust the level it receives.
+
     callback: *const fn (*Context) Verdict,
     owner_id: u32,
 };
@@ -246,143 +245,34 @@ fn testType(allocator: std.mem.Allocator, identifier: []const u8, tags: []const 
     return testing.itemType(allocator, identifier, tags, stackable);
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const ItemStack = test_owner.ItemStack;
+    pub const registry_mod = test_owner.registry_mod;
+    pub const Verdict = test_owner.Verdict;
+    pub const Context = test_owner.Context;
+    pub const registerRule = test_owner.registerRule;
+    pub const unregisterOwner = test_owner.unregisterOwner;
+    pub const registeredRules = test_owner.registeredRules;
+    pub const slotSetOf = test_owner.slotSetOf;
+    pub const validate = test_owner.validate;
+    pub const testing = test_owner.testing;
+    pub const testType = test_owner.testType;
+};
+
 test "slot derivation maps the real tags onto slots" {
-    const allocator = std.testing.allocator;
-
-    const sword = try testType(allocator, "minecraft:diamond_sword", &.{ "minecraft:is_sword", "minecraft:is_tool" }, false);
-    defer sword.deinit();
-    try std.testing.expect(slotSetOf(sword).contains(.sword));
-    try std.testing.expect(!slotSetOf(sword).contains(.tool_any));
-    try std.testing.expect(slotSetOf(sword).contains(.durable_any));
-
-    const pickaxe = try testType(allocator, "minecraft:diamond_pickaxe", &.{ "minecraft:is_pickaxe", "minecraft:is_tool" }, false);
-    defer pickaxe.deinit();
-    try std.testing.expect(slotSetOf(pickaxe).contains(.pickaxe));
-    try std.testing.expect(slotSetOf(pickaxe).contains(.tool_any));
-
-    const helmet = try testType(allocator, "minecraft:diamond_helmet", &.{"minecraft:is_armor"}, false);
-    defer helmet.deinit();
-    try std.testing.expect(slotSetOf(helmet).contains(.helmet));
-    try std.testing.expect(!slotSetOf(helmet).contains(.leggings));
-
-    const bow = try testType(allocator, "minecraft:bow", &.{}, false);
-    defer bow.deinit();
-    try std.testing.expect(slotSetOf(bow).contains(.bow));
-    try std.testing.expect(slotSetOf(bow).contains(.durable_any));
-
-    const elytra = try testType(allocator, "minecraft:elytra", &.{"minecraft:is_armor"}, false);
-    defer elytra.deinit();
-    try std.testing.expect(slotSetOf(elytra).contains(.elytra));
-    try std.testing.expect(!slotSetOf(elytra).contains(.chestplate));
-
-    const stone = try testType(allocator, "minecraft:stone", &.{}, true);
-    defer stone.deinit();
-    try std.testing.expectEqual(@as(usize, 0), slotSetOf(stone).count());
-
-    const shears = try testType(allocator, "minecraft:shears", &.{}, false);
-    defer shears.deinit();
-    try std.testing.expect(slotSetOf(shears).contains(.durable_any));
-
-    const book = try testType(allocator, "minecraft:enchanted_book", &.{}, true);
-    defer book.deinit();
-    try std.testing.expect(slotSetOf(book).contains(.book));
-    try std.testing.expect(!slotSetOf(book).contains(.durable_any));
+    try @import("rules_test.zig").Suite(test_scope).case_000();
 }
 
 test "validate enforces applicability, conflicts and level" {
-    const allocator = std.testing.allocator;
-    var registry = registry_mod.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    const sword = try testType(allocator, "minecraft:diamond_sword", &.{ "minecraft:is_sword", "minecraft:is_tool" }, false);
-    defer sword.deinit();
-    const pickaxe = try testType(allocator, "minecraft:diamond_pickaxe", &.{ "minecraft:is_pickaxe", "minecraft:is_tool" }, false);
-    defer pickaxe.deinit();
-    const stone = try testType(allocator, "minecraft:stone", &.{}, true);
-    defer stone.deinit();
-
-    var stack = ItemStack.init(allocator, sword, .{});
-    defer stack.deinit();
-
-    const sharpness = registry.resolve("sharpness").?;
-    const smite = registry.resolve("smite").?;
-    const fortune = registry.resolve("fortune").?;
-    const silk = registry.resolve("silk_touch").?;
-    const efficiency = registry.resolve("efficiency").?;
-
-    try std.testing.expectEqual(@as(u8, 5), try validate(&registry, &stack, sharpness, 5, .{}));
-    try std.testing.expect(validate(&registry, &stack, sharpness, 9, .{ .clamp_level = false }) == error.invalid_level);
-    try std.testing.expectEqual(@as(u8, 5), try validate(&registry, &stack, sharpness, 9, .{}));
-    try std.testing.expect(validate(&registry, &stack, sharpness, 0, .{}) == error.invalid_level);
-    try std.testing.expect(validate(&registry, &stack, efficiency, 1, .{}) == error.not_applicable);
-
-    var stone_stack = ItemStack.init(allocator, stone, .{});
-    defer stone_stack.deinit();
-    try std.testing.expect(validate(&registry, &stone_stack, sharpness, 1, .{}) == error.not_enchantable);
-
-    var tool_stack = ItemStack.init(allocator, pickaxe, .{});
-    defer tool_stack.deinit();
-    _ = tool_stack.enchantments.set(fortune.id, 3);
-    try std.testing.expect(validate(&registry, &tool_stack, silk, 1, .{}) == error.conflicts);
-    try std.testing.expectEqual(@as(u8, 1), try validate(&registry, &tool_stack, silk, 1, .{ .allow_conflicts = true }));
-
-    _ = stack.enchantments.set(sharpness.id, 5);
-    try std.testing.expect(validate(&registry, &stack, smite, 1, .{}) == error.conflicts);
-    try std.testing.expectEqual(@as(usize, 1), stack.enchantments.count());
+    try @import("rules_test.zig").Suite(test_scope).case_001();
 }
 
 test "rules can deny or modify and can be removed by owner" {
-    const allocator = std.testing.allocator;
-    var registry = registry_mod.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    const sword = try testType(allocator, "minecraft:diamond_sword", &.{ "minecraft:is_sword", "minecraft:is_tool" }, false);
-    defer sword.deinit();
-    var stack = ItemStack.init(allocator, sword, .{});
-    defer stack.deinit();
-    const sharpness = registry.resolve("sharpness").?;
-
-    const callbacks = struct {
-        fn deny(_: *Context) Verdict {
-            return .deny;
-        }
-        fn cap(_: *Context) Verdict {
-            return .{ .modify = 1 };
-        }
-    };
-
-    try registerRule(.{ .id = "test-deny", .priority = 10, .callback = callbacks.deny, .owner_id = 7 });
-    try std.testing.expect(validate(&registry, &stack, sharpness, 5, .{}) == error.rule_vetoed);
-
-    unregisterOwner(7);
-    try std.testing.expectEqual(@as(u8, 5), try validate(&registry, &stack, sharpness, 5, .{}));
-
-    try registerRule(.{ .id = "test-cap", .priority = 10, .callback = callbacks.cap, .owner_id = 8 });
-    try std.testing.expectEqual(@as(u8, 1), try validate(&registry, &stack, sharpness, 5, .{}));
-    unregisterOwner(8);
-    try std.testing.expectEqual(@as(usize, 0), registeredRules());
+    try @import("rules_test.zig").Suite(test_scope).case_002();
 }
 
 test "a rule that lowers the level to zero is a rejection, not a hidden removal" {
-    const allocator = std.testing.allocator;
-    var registry = registry_mod.Registry.init(allocator);
-    defer registry.deinit();
-    _ = try registry.loadVanilla();
-
-    const sword = try testType(allocator, "minecraft:diamond_sword", &.{ "minecraft:is_sword", "minecraft:is_tool" }, false);
-    defer sword.deinit();
-    var stack = ItemStack.init(allocator, sword, .{});
-    defer stack.deinit();
-
-    const callbacks = struct {
-        fn zero(_: *Context) Verdict {
-            return .{ .modify = 0 };
-        }
-    };
-    try registerRule(.{ .id = "test-zero", .priority = 10, .callback = callbacks.zero, .owner_id = 9 });
-    defer unregisterOwner(9);
-
-    try std.testing.expect(validate(&registry, &stack, registry.resolve("sharpness").?, 5, .{}) == error.invalid_level);
+    try @import("rules_test.zig").Suite(test_scope).case_003();
 }

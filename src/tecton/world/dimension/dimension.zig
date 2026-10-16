@@ -3,18 +3,18 @@ const std = @import("std");
 const Protocol = @import("protocol");
 
 const Entity = @import("../../entity/entity.zig").Entity;
-const FloatingTextManager = @import("../../entity/floating-text.zig").FloatingTextManager;
-const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const FloatingTextManager = @import("../../entity/floating_text.zig").FloatingTextManager;
+const BlockPermutation = @import("../block/block_permutation.zig").BlockPermutation;
 const Block = @import("../block/block.zig").Block;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
-const TerrainGenerator = @import("../generator/terrain-generator.zig").TerrainGenerator;
-const ThreadedGenerator = @import("../generator/threaded-generator.zig").ThreadedGenerator;
+const TerrainGenerator = @import("../generator/terrain_generator.zig").TerrainGenerator;
+const ThreadedGenerator = @import("../generator/threaded_generator.zig").ThreadedGenerator;
 const World = @import("../world.zig").World;
-const ChunkEntityIndex = @import("./entity-index.zig").ChunkEntityIndex;
-const block_pos = @import("./block-pos.zig");
+const ChunkEntityIndex = @import("./entity_index.zig").ChunkEntityIndex;
+const block_pos = @import("./block_pos.zig");
 const broadcast = @import("./broadcast.zig");
-const random_tick = @import("./random-tick.zig");
-const tick_scheduler = @import("./tick-scheduler.zig");
+const random_tick = @import("./random_tick.zig");
+const tick_scheduler = @import("./tick_scheduler.zig");
 
 pub const ChunkHash = i64;
 
@@ -139,7 +139,6 @@ pub const Dimension = struct {
         return cached.data;
     }
 
-    /// Takes ownership of `data`.
     pub fn putCachedChunkPacket(self: *Dimension, hash: ChunkHash, data: []const u8) void {
         const gen = self.chunk_generations.get(hash) orelse 0;
         if (self.chunk_packet_cache.fetchPut(hash, .{ .data = data, .generation = gen }) catch null) |old| {
@@ -174,7 +173,7 @@ pub const Dimension = struct {
         }
         if (self.chunks.fetchRemove(hash)) |entry| {
             var chunk = entry.value;
-            // Rewrite the digest so a mob that died since the last save stays gone.
+
             self.world.provider.writeChunkEntities(chunk, self) catch {};
             if (self.getBlocksInChunk(x, z).len > 0) {
                 self.world.provider.writeBlockEntities(chunk, self) catch {};
@@ -213,7 +212,7 @@ pub const Dimension = struct {
                 if (self.chunks.fetchRemove(h)) |entry| {
                     const coords2 = Protocol.ChunkCoords.unhash(h);
                     var chunk = entry.value;
-                    // Rewrite the digest so a mob that died since the last save stays gone.
+
                     self.world.provider.writeChunkEntities(chunk, self) catch {};
                     if (self.getBlocksInChunk(coords2.x, coords2.z).len > 0) {
                         self.world.provider.writeBlockEntities(chunk, self) catch {};
@@ -356,221 +355,49 @@ pub const TickScheduler = tick_scheduler.TickScheduler;
 pub const RandomTickEligibility = random_tick.RandomTickEligibility;
 pub const isChunkInSimRange = random_tick.isChunkInSimRange;
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const test_dependency_0 = @import("./entity_index.zig");
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const block_pos = test_owner.block_pos;
+    pub const broadcast = test_owner.broadcast;
+    pub const random_tick = test_owner.random_tick;
+    pub const tick_scheduler = test_owner.tick_scheduler;
+    pub const ChunkHash = test_owner.ChunkHash;
+    pub const chunkHash = test_owner.chunkHash;
+    pub const CachedPacket = test_owner.CachedPacket;
+    pub const Dimension = test_owner.Dimension;
+};
+
 test "view distance range predicate compares squared horizontal distance" {
-    try std.testing.expect(Dimension.withinViewDistance(0, 0, 8));
-    try std.testing.expect(Dimension.withinViewDistance(128, 0, 8));
-    try std.testing.expect(!Dimension.withinViewDistance(129, 0, 8));
-    try std.testing.expect(Dimension.withinViewDistance(90, 90, 8));
-    try std.testing.expect(!Dimension.withinViewDistance(100, 100, 8));
-    try std.testing.expect(Dimension.withinViewDistance(16, 0, 1));
-    try std.testing.expect(!Dimension.withinViewDistance(17, 0, 1));
+    try @import("dimension_test.zig").Suite(test_scope).case_000();
 }
 
 test "entity index chunk hash matches dimension chunk hash" {
-    const entity_index = @import("./entity-index.zig");
-    try std.testing.expectEqual(chunkHash(0, 0), entity_index.chunkHash(0, 0));
-    try std.testing.expectEqual(chunkHash(-33, 17), entity_index.chunkHash(-33, 17));
-    try std.testing.expectEqual(chunkHash(1000, -1000), entity_index.chunkHash(1000, -1000));
-    try std.testing.expectEqual(chunkHash(-1, -1), entity_index.chunkHash(-1, -1));
+    try @import("dimension_test.zig").Suite(test_scope).case_001();
 }
 
 test "blocks_by_chunk index stays consistent with blocks map" {
-    const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0x12345678);
-    const random = rng.random();
-
-    var blocks = std.AutoHashMap(i64, Protocol.BlockPosition).init(allocator);
-    defer blocks.deinit();
-    var blocks_by_chunk = std.AutoHashMap(ChunkHash, std.ArrayList(i64)).init(allocator);
-    defer {
-        var it = blocks_by_chunk.valueIterator();
-        while (it.next()) |list| list.deinit(allocator);
-        blocks_by_chunk.deinit();
-    }
-
-    for (0..100) |_| {
-        const pos = Protocol.BlockPosition{
-            .x = random.intRangeAtMost(i32, -64, 64),
-            .y = random.intRangeAtMost(i32, 0, 255),
-            .z = random.intRangeAtMost(i32, -64, 64),
-        };
-        const hash = Dimension.blockPosHash(pos);
-        const ch = chunkHash(pos.x >> 4, pos.z >> 4);
-
-        if (random.boolean()) {
-            blocks.put(hash, pos) catch continue;
-            const gop = blocks_by_chunk.getOrPut(ch) catch continue;
-            if (!gop.found_existing) {
-                gop.value_ptr.* = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
-            }
-            var already = false;
-            for (gop.value_ptr.items) |h| {
-                if (h == hash) {
-                    already = true;
-                    break;
-                }
-            }
-            if (!already) gop.value_ptr.append(allocator, hash) catch continue;
-        } else {
-            if (blocks.fetchRemove(hash)) |_| {
-                if (blocks_by_chunk.getPtr(ch)) |list| {
-                    for (list.items, 0..) |h, i| {
-                        if (h == hash) {
-                            _ = list.swapRemove(i);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        var block_it = blocks.iterator();
-        while (block_it.next()) |entry| {
-            const p = entry.value_ptr.*;
-            const c = chunkHash(p.x >> 4, p.z >> 4);
-            const list = blocks_by_chunk.getPtr(c);
-            try std.testing.expect(list != null);
-            var found = false;
-            for (list.?.items) |h| {
-                if (h == entry.key_ptr.*) {
-                    found = true;
-                    break;
-                }
-            }
-            try std.testing.expect(found);
-        }
-    }
+    try @import("dimension_test.zig").Suite(test_scope).case_002();
 }
 
 test "removeBlocksInChunk removes only target chunk blocks" {
-    const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0x87654321);
-    const random = rng.random();
-
-    for (0..100) |_| {
-        var blocks = std.AutoHashMap(i64, Protocol.BlockPosition).init(allocator);
-        defer blocks.deinit();
-        var blocks_by_chunk = std.AutoHashMap(ChunkHash, std.ArrayList(i64)).init(allocator);
-        defer {
-            var it = blocks_by_chunk.valueIterator();
-            while (it.next()) |list| list.deinit(allocator);
-            blocks_by_chunk.deinit();
-        }
-
-        const target_cx = random.intRangeAtMost(i32, -4, 4);
-        const target_cz = random.intRangeAtMost(i32, -4, 4);
-
-        for (0..20) |_| {
-            const cx = random.intRangeAtMost(i32, -4, 4);
-            const cz = random.intRangeAtMost(i32, -4, 4);
-            const pos = Protocol.BlockPosition{
-                .x = cx * 16 + random.intRangeAtMost(i32, 0, 15),
-                .y = random.intRangeAtMost(i32, 0, 255),
-                .z = cz * 16 + random.intRangeAtMost(i32, 0, 15),
-            };
-            const hash = Dimension.blockPosHash(pos);
-            const ch = chunkHash(pos.x >> 4, pos.z >> 4);
-            blocks.put(hash, pos) catch continue;
-            const gop = blocks_by_chunk.getOrPut(ch) catch continue;
-            if (!gop.found_existing) {
-                gop.value_ptr.* = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
-            }
-            var already = false;
-            for (gop.value_ptr.items) |h| {
-                if (h == hash) {
-                    already = true;
-                    break;
-                }
-            }
-            if (!already) gop.value_ptr.append(allocator, hash) catch continue;
-        }
-
-        const total_before = blocks.count();
-        const target_ch = chunkHash(target_cx, target_cz);
-        const target_count = if (blocks_by_chunk.getPtr(target_ch)) |list| list.items.len else 0;
-
-        if (blocks_by_chunk.fetchRemove(target_ch)) |entry| {
-            var list = entry.value;
-            for (list.items) |h| {
-                _ = blocks.remove(h);
-            }
-            list.deinit(allocator);
-        }
-
-        try std.testing.expectEqual(total_before - target_count, blocks.count());
-
-        var remaining_it = blocks.iterator();
-        while (remaining_it.next()) |entry| {
-            const p = entry.value_ptr.*;
-            try std.testing.expect((p.x >> 4) != target_cx or (p.z >> 4) != target_cz);
-        }
-    }
+    try @import("dimension_test.zig").Suite(test_scope).case_003();
 }
 
 test "generation counter strictly increases" {
-    const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0xface1234);
-    const random = rng.random();
-
-    var generations = std.AutoHashMap(ChunkHash, u64).init(allocator);
-    defer generations.deinit();
-
-    for (0..100) |_| {
-        const cx = random.intRangeAtMost(i32, -10, 10);
-        const cz = random.intRangeAtMost(i32, -10, 10);
-        const hash = chunkHash(cx, cz);
-
-        const old_gen = generations.get(hash) orelse 0;
-        const new_gen = old_gen + 1;
-        try generations.put(hash, new_gen);
-
-        try std.testing.expect(new_gen > old_gen);
-        try std.testing.expectEqual(new_gen, generations.get(hash).?);
-    }
+    try @import("dimension_test.zig").Suite(test_scope).case_004();
 }
 
 test "stale cache detected after generation change" {
-    const allocator = std.testing.allocator;
-    var rng = std.Random.DefaultPrng.init(0xbabe5678);
-    const random = rng.random();
-
-    var cache = std.AutoHashMap(ChunkHash, CachedPacket).init(allocator);
-    defer cache.deinit();
-    var generations = std.AutoHashMap(ChunkHash, u64).init(allocator);
-    defer generations.deinit();
-
-    for (0..100) |_| {
-        const cx = random.intRangeAtMost(i32, -5, 5);
-        const cz = random.intRangeAtMost(i32, -5, 5);
-        const hash = chunkHash(cx, cz);
-
-        const gen = generations.get(hash) orelse 0;
-        try cache.put(hash, .{ .data = &.{}, .generation = gen });
-
-        try generations.put(hash, gen + 1);
-
-        const cached = cache.get(hash).?;
-        const current_gen = generations.get(hash).?;
-        try std.testing.expect(cached.generation != current_gen);
-    }
+    try @import("dimension_test.zig").Suite(test_scope).case_005();
 }
 
 test "extracted dimension helpers stay in the test graph" {
-    _ = block_pos;
-    _ = broadcast;
-    _ = random_tick;
-    _ = tick_scheduler;
+    try @import("dimension_test.zig").Suite(test_scope).case_006();
 }
 
 test "deinit retires a block before detaching its traits" {
-    const source = @embedFile("dimension.zig");
-    const deinit_start = std.mem.indexOf(u8, source, "pub fn deinit(self: *Dimension) void {") orelse
-        return error.TestUnexpectedResult;
-    const remove = std.mem.indexOfPos(u8, source, deinit_start, "self.blocks.remove(blockPosHash(block.position));") orelse {
-        std.debug.print("dimension.zig: deinit detaches blocks whose neighbours still resolve them\n", .{});
-        return error.TestUnexpectedResult;
-    };
-    const detach = std.mem.indexOfPos(u8, source, deinit_start, "block.deinit();") orelse
-        return error.TestUnexpectedResult;
-    try std.testing.expect(remove < detach);
+    try @import("dimension_test.zig").Suite(test_scope).case_007();
 }

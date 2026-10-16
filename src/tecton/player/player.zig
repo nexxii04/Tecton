@@ -6,24 +6,29 @@ const LoginData = Protocol.Login.Decoder.LoginData;
 const Raknet = @import("Raknet");
 
 const Container = @import("../container/container.zig").Container;
-const EntityType = @import("../entity/entity-type.zig").EntityType;
+const EntityType = @import("../entity/entity_type.zig").EntityType;
 const Entity = @import("../entity/entity.zig").Entity;
-const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig");
-const ChunkStreaming = @import("../entity/traits/chunk-streaming.zig");
+const ChunkLoadingTrait = @import("../entity/traits/chunk_loading.zig");
+const ChunkStreaming = @import("../entity/traits/chunk_streaming.zig");
 const Visibility = @import("../entity/traits/visibility.zig");
-const CreatedOutputTrait = @import("../entity/traits/created-output.zig").CreatedOutputTrait;
+const CreatedOutputTrait = @import("../entity/traits/created_output.zig").CreatedOutputTrait;
 const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
 const Fire = @import("../entity/traits/fire.zig");
 const Health = @import("../entity/traits/health.zig");
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
-const TradeWindowTrait = @import("../entity/traits/trade-window.zig").TradeWindowTrait;
-pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
-const Tecton = @import("../tecton.zig").Tecton;
+const TradeWindowTrait = @import("../entity/traits/trade_window.zig").TradeWindowTrait;
+pub const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
+const contracts = @import("../core/contracts.zig");
+const EcsWorld = @import("../entity/ecs.zig").EcsWorld;
+const events_mod = @import("../events/root.zig");
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
-const MoveDelta = @import("move-delta.zig");
+const World = @import("../world/world.zig").World;
+
+pub const Host = contracts.ServerHost(Player, Entity, events_mod.Events, Dimension, World, EcsWorld, NetworkHandler);
+const MoveDelta = @import("move_delta.zig");
 const Pose = @import("pose.zig").Pose;
-const SharedBroadcast = @import("../network/shared-broadcast.zig").SharedBroadcast;
+const SharedBroadcast = @import("../transport/shared_broadcast.zig").SharedBroadcast;
 
 pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
 pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;
@@ -49,7 +54,6 @@ pub fn damageable(gamemode: Protocol.GameMode) bool {
     };
 }
 
-/// Sanity ceiling for the attack packet (vanilla reach is ~3 blocks), not a guard: the attacker's position is client-reported.
 pub const MAX_ATTACK_REACH: f32 = 8.0;
 
 pub fn withinAttackReach(attacker: Protocol.Vector3f, target: Protocol.Vector3f) bool {
@@ -73,7 +77,7 @@ pub const Player = struct {
     entity: Entity,
     connection: *Raknet.Connection,
     network: *NetworkHandler,
-    tecton: *Tecton,
+    tecton: Host,
     login_data: LoginData,
 
     xuid: []const u8,
@@ -86,7 +90,7 @@ pub const Player = struct {
     visible_players: std.AutoHashMap(i64, u32),
     visible_sweep: std.ArrayList(i64) = .empty,
     visibility_epoch: u32 = 0,
-    /// Set by the chunk-loading trait on the worker; consumed by the tick's visibility phase.
+
     visibility_due: bool = false,
     visible_entities: std.AutoHashMap(i64, i64),
     pending_removal: std.atomic.Value(bool) = .init(false),
@@ -105,12 +109,33 @@ pub const Player = struct {
     crawling: bool = false,
     pose: Pose = .standing,
 
+    pub const NbtHooks = struct {
+        pub const InventoryState = InventoryTrait.TraitState;
+        pub const HealthState = Health.State;
+
+        pub fn inventoryState(entity: *Entity) ?*InventoryState {
+            return entity.getTraitState(InventoryTrait);
+        }
+
+        pub fn healthState(entity: *Entity) ?*HealthState {
+            return entity.getTraitState(Health.HealthTrait);
+        }
+
+        pub fn clampLoadedHealth(current: f32, max: f32) f32 {
+            return Health.clampLoadedHealth(current, max);
+        }
+
+        pub fn syncAttributes(state: *const HealthState, entity: *Entity) void {
+            Health.syncAttributes(state, entity);
+        }
+    };
+
     pub fn init(
         self: *Player,
         allocator: std.mem.Allocator,
         connection: *Raknet.Connection,
         network: *NetworkHandler,
-        tecton: *Tecton,
+        tecton: Host,
         loginData: LoginData,
         entity_type: *const EntityType,
     ) !void {
@@ -219,7 +244,7 @@ pub const Player = struct {
 
     pub fn disconnectFromNetwork(self: *Player) void {
         if (!self.beginRemoval()) return;
-        // RakNet onDisconnect: mark the player here and hand it to the tick thread.
+
         self.tecton.enqueuePlayerRemoval(self);
     }
 
@@ -505,30 +530,24 @@ fn sendRemoveEntity(player: *Player, unique_entity_id: i64) void {
     player.network.sendPacket(player.connection, serialized) catch {};
 }
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const damageable = test_owner.damageable;
+    pub const MAX_ATTACK_REACH = test_owner.MAX_ATTACK_REACH;
+    pub const withinAttackReach = test_owner.withinAttackReach;
+    pub const playerDropVelocity = test_owner.playerDropVelocity;
+};
+
 test "only survival and adventure players take damage" {
-    try std.testing.expect(damageable(.Survival));
-    try std.testing.expect(damageable(.Adventure));
-    try std.testing.expect(!damageable(.Creative));
-    try std.testing.expect(!damageable(.Spectator));
-    try std.testing.expect(!damageable(.CreativeSpectator));
-    try std.testing.expect(!damageable(.SurvivalSpectator));
+    try @import("player_test.zig").Suite(test_scope).case_000();
 }
 
 test "an attack has to be within reach of the attacker" {
-    const attacker = Protocol.Vector3f.init(0, 0, 0);
-
-    try std.testing.expect(withinAttackReach(attacker, Protocol.Vector3f.init(0, 0, 0)));
-    try std.testing.expect(withinAttackReach(attacker, Protocol.Vector3f.init(2.5, 1, -2)));
-    try std.testing.expect(withinAttackReach(attacker, Protocol.Vector3f.init(MAX_ATTACK_REACH, 0, 0)));
-    try std.testing.expect(!withinAttackReach(attacker, Protocol.Vector3f.init(MAX_ATTACK_REACH + 0.01, 0, 0)));
-    try std.testing.expect(!withinAttackReach(attacker, Protocol.Vector3f.init(0, MAX_ATTACK_REACH + 1, 0)));
-    try std.testing.expect(!withinAttackReach(attacker, Protocol.Vector3f.init(500, 64, -500)));
+    try @import("player_test.zig").Suite(test_scope).case_001();
 }
 
 test "player drop velocity matches pocketmine direction toss" {
-    const vel = playerDropVelocity(Protocol.Vector2f.init(0, 0));
-
-    try std.testing.expectApproxEqAbs(@as(f32, 0), vel.x, 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0), vel.y, 0.0001);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.4), vel.z, 0.0001);
+    try @import("player_test.zig").Suite(test_scope).case_002();
 }

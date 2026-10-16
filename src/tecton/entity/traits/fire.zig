@@ -16,7 +16,7 @@ const PlayerMath = @import("../../player/player.zig");
 const broadcast = @import("../../world/dimension/broadcast.zig");
 const entities = @import("../../world/dimension/entities.zig");
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
+const BlockPermutation = @import("../../world/block/block_permutation.zig").BlockPermutation;
 
 pub const TICKS_PER_SECOND: i32 = 20;
 pub const FIRE_DAMAGE_INTERVAL_TICKS: i32 = TICKS_PER_SECOND;
@@ -366,168 +366,75 @@ pub const FireTrait = EntityTrait(State, .{
 });
 
 const testing = std.testing;
-const EntityType = @import("../entity-type.zig").EntityType;
+const EntityType = @import("../entity_type.zig").EntityType;
+
+const test_owner = @This();
+const test_scope = struct {
+    pub const test_dependency_0 = @import("../../world/chunk/chunk.zig");
+    pub const test_dependency_1 = @import("../../world/dimension/dimension.zig");
+    pub const test_dependency_2 = @import("../../world/block/block_permutation.zig");
+    pub const test_dependency_3 = @import("../../world/block/block_type.zig");
+    pub const Protocol = test_owner.Protocol;
+    pub const CompoundTag = test_owner.CompoundTag;
+    pub const IntTag = test_owner.IntTag;
+    pub const Entity = test_owner.Entity;
+    pub const Events = test_owner.Events;
+    pub const entities = test_owner.entities;
+    pub const Dimension = test_owner.Dimension;
+    pub const BlockPermutation = test_owner.BlockPermutation;
+    pub const FIRE_BLOCK_IGNITION_TICKS = test_owner.FIRE_BLOCK_IGNITION_TICKS;
+    pub const LAVA_IGNITION_TICKS = test_owner.LAVA_IGNITION_TICKS;
+    pub const State = test_owner.State;
+    pub const refreshedFireTicks = test_owner.refreshedFireTicks;
+    pub const isImmuneToFire = test_owner.isImmuneToFire;
+    pub const takesFireDamage = test_owner.takesFireDamage;
+    pub const damageCauseFor = test_owner.damageCauseFor;
+    pub const isRepeatIgnition = test_owner.isRepeatIgnition;
+    pub const onSerialize = test_owner.onSerialize;
+    pub const onDeserialize = test_owner.onDeserialize;
+    pub const syncOnFireFlag = test_owner.syncOnFireFlag;
+    pub const contactBurnDuration = test_owner.contactBurnDuration;
+    pub const hasSkyAccess = test_owner.hasSkyAccess;
+    pub const testing = test_owner.testing;
+    pub const EntityType = test_owner.EntityType;
+};
 
 test "a shorter ignition never shrinks an active burn" {
-    try testing.expectEqual(@as(i32, 80), refreshedFireTicks(0, 80));
-    try testing.expectEqual(@as(i32, 80), refreshedFireTicks(80, 40));
-    try testing.expectEqual(@as(i32, 80), refreshedFireTicks(80, 80));
-    try testing.expectEqual(@as(i32, 160), refreshedFireTicks(80, 160));
-    try testing.expectEqual(@as(i32, 0), refreshedFireTicks(0, -5));
+    try @import("fire_test.zig").Suite(test_scope).case_000();
 }
 
 test "creative and spectator entities are immune to fire" {
-    try testing.expect(isImmuneToFire(.Creative));
-    try testing.expect(isImmuneToFire(.Spectator));
-    try testing.expect(isImmuneToFire(.CreativeSpectator));
-    try testing.expect(isImmuneToFire(.SurvivalSpectator));
-    try testing.expect(!isImmuneToFire(.Survival));
-    try testing.expect(!isImmuneToFire(.Adventure));
-    try testing.expect(!isImmuneToFire(null));
+    try @import("fire_test.zig").Suite(test_scope).case_001();
 }
 
 test "a repeated contact ignition is not a new combustion" {
-    var state = State{ .fire_ticks = 200, .burn_source = .lava, .instigator_id = 0 };
-    try testing.expect(isRepeatIgnition(&state, .lava, 0));
-    try testing.expect(!isRepeatIgnition(&state, .fire_block, 0));
-    try testing.expect(!isRepeatIgnition(&state, .lava, 42));
-
-    state.fire_ticks = 0;
-    try testing.expect(!isRepeatIgnition(&state, .lava, 0));
-
-    try testing.expectEqual(@as(i32, LAVA_IGNITION_TICKS), refreshedFireTicks(LAVA_IGNITION_TICKS - 1, contactBurnDuration(.lava)));
-    try testing.expectEqual(@as(i32, FIRE_BLOCK_IGNITION_TICKS), refreshedFireTicks(FIRE_BLOCK_IGNITION_TICKS - 1, contactBurnDuration(.fire_block)));
+    try @import("fire_test.zig").Suite(test_scope).case_002();
 }
 
 test "fire resistance keeps the entity burning but cancels the damage" {
-    var state = State{};
-    try testing.expect(takesFireDamage(&state));
-
-    state.fire_resistant = true;
-    try testing.expect(!takesFireDamage(&state));
+    try @import("fire_test.zig").Suite(test_scope).case_003();
 }
 
 test "the burn damage cause follows the ignition source" {
-    try testing.expectEqual(Events.DamageCause.lava, damageCauseFor(.lava));
-    try testing.expectEqual(Events.DamageCause.fire, damageCauseFor(.fire_block));
-    try testing.expectEqual(Events.DamageCause.fire_tick, damageCauseFor(.fire_aspect));
-    try testing.expectEqual(Events.DamageCause.fire_tick, damageCauseFor(.command));
-    try testing.expectEqual(Events.DamageCause.fire_tick, damageCauseFor(.projectile));
+    try @import("fire_test.zig").Suite(test_scope).case_004();
 }
 
 test "the burn state survives an nbt round trip" {
-    const allocator = testing.allocator;
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-
-    var burning = State{ .fire_ticks = 120, .damage_timer = 7, .burn_source = .lava, .instigator_id = 42 };
-    onSerialize(&burning, &tag);
-
-    var restored = State{};
-    onDeserialize(&restored, &tag);
-    try testing.expectEqual(@as(i32, 120), restored.fire_ticks);
-    try testing.expectEqual(@as(i32, 7), restored.damage_timer);
-    try testing.expectEqual(Events.CombustSource.lava, restored.burn_source);
-    try testing.expectEqual(@as(i64, 0), restored.instigator_id);
+    try @import("fire_test.zig").Suite(test_scope).case_005();
 }
 
 test "an entity saved without fire loads cold and writes no tags" {
-    const allocator = testing.allocator;
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-
-    var cold = State{};
-    onSerialize(&cold, &tag);
-    try testing.expect(tag.get("FireTicks") == null);
-
-    var restored = State{ .fire_ticks = 120, .damage_timer = 7, .burn_source = .lava };
-    onDeserialize(&restored, &tag);
-    try testing.expectEqual(@as(i32, 120), restored.fire_ticks);
+    try @import("fire_test.zig").Suite(test_scope).case_006();
 }
 
 test "an unknown burn source falls back to fire_block" {
-    const allocator = testing.allocator;
-
-    var tag = CompoundTag.init(allocator, null);
-    defer tag.deinit(allocator);
-
-    try tag.set("FireTicks", .{ .Int = IntTag.init(99, null) });
-    try tag.set("FireBurnSource", .{ .Int = IntTag.init(99, null) });
-
-    var restored = State{};
-    onDeserialize(&restored, &tag);
-    try testing.expectEqual(@as(i32, 99), restored.fire_ticks);
-    try testing.expectEqual(Events.CombustSource.fire_block, restored.burn_source);
+    try @import("fire_test.zig").Suite(test_scope).case_007();
 }
 
 test "the on-fire flag re-synchronizes from the restored state" {
-    const allocator = testing.allocator;
-
-    const mob_type = EntityType.init("minecraft:zombie", 1, &.{}, &.{});
-    var entity = Entity.init(allocator, &mob_type, null);
-    defer entity.deinit();
-
-    var state = State{ .fire_ticks = 100 };
-    syncOnFireFlag(&state, &entity);
-    try testing.expect(entity.flags.getFlag(.OnFire));
-
-    syncOnFireFlag(&state, &entity);
-    try testing.expect(entity.flags.getFlag(.OnFire));
-
-    state.fire_ticks = 0;
-    syncOnFireFlag(&state, &entity);
-    try testing.expect(!entity.flags.getFlag(.OnFire));
+    try @import("fire_test.zig").Suite(test_scope).case_008();
 }
 
 test "sky access follows the cached column top of the chunk" {
-    const allocator = testing.allocator;
-    const ChunkImpl = @import("../../world/chunk/chunk.zig").Chunk;
-    const chunkHash = @import("../../world/dimension/dimension.zig").chunkHash;
-    const BlockState = @import("../../world/block/block-permutation.zig").BlockState;
-    const BlockType = @import("../../world/block/block-type.zig").BlockType;
-
-    try BlockPermutation.initRegistry(allocator);
-    defer BlockPermutation.deinitRegistry();
-    try BlockType.initRegistry(allocator);
-    defer BlockType.deinitRegistry();
-
-    const air_type = try BlockType.init(allocator, "minecraft:air");
-    try air_type.register();
-    const air = try BlockPermutation.init(allocator, 0, "minecraft:air", BlockState.init(allocator));
-    try air.register();
-    try air_type.addPermutation(air);
-
-    const stone_type = try BlockType.init(allocator, "minecraft:stone");
-    try stone_type.register();
-    const stone = try BlockPermutation.init(allocator, 1, "minecraft:stone", BlockState.init(allocator));
-    try stone.register();
-    try stone_type.addPermutation(stone);
-
-    const mob_type = EntityType.init("minecraft:zombie", 1, &.{}, &.{});
-    var entity = Entity.init(allocator, &mob_type, null);
-    defer entity.deinit();
-    entity.position = Protocol.Vector3f.init(4.5, 64.0, 4.5);
-
-    var dimension = Dimension.init(undefined, allocator, "overworld", .Overworld, null);
-    const chunk = try allocator.create(ChunkImpl);
-    chunk.* = ChunkImpl.init(allocator, 0, 0, .Overworld);
-    try dimension.chunks.put(chunkHash(0, 0), chunk);
-    defer dimension.deinit();
-
-    // Nothing above the mob: the rain reaches it.
-    try testing.expect(hasSkyAccess(&dimension, &entity));
-
-    // Only the mob's own column counts.
-    try chunk.setPermutation(0, 200, 0, stone, 0);
-    try testing.expect(hasSkyAccess(&dimension, &entity));
-
-    // A roof inside the two-block grace still lets the rain through.
-    try chunk.setPermutation(4, 65, 4, stone, 0);
-    try testing.expect(hasSkyAccess(&dimension, &entity));
-
-    // From feet + 2 upwards any block shelters the mob.
-    try chunk.setPermutation(4, 66, 4, stone, 0);
-    try testing.expect(!hasSkyAccess(&dimension, &entity));
+    try @import("fire_test.zig").Suite(test_scope).case_009();
 }

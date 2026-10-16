@@ -2,30 +2,22 @@ const std = @import("std");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
 
-const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
+const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
 const Player = @import("../player/player.zig").Player;
-const Tecton = @import("../tecton.zig").Tecton;
+pub const CommandViews = @import("context.zig").CommandViews;
 const Command = @import("command.zig").Command;
 const CommandContext = @import("context.zig").CommandContext;
 const CommandHandlerFn = @import("command.zig").CommandHandlerFn;
-const CommandPermission = @import("permission.zig").CommandPermission;
+const result = @import("result.zig");
 const types = @import("types.zig");
 const CommandEnum = types.CommandEnum;
 const SoftEnum = types.SoftEnum;
 const CommandParameter = types.CommandParameter;
 const CommandOverload = types.CommandOverload;
 
-pub const CommandResult = struct {
-    success: bool,
-    message: []const u8,
-};
-
-fn permissionToString(perm: CommandPermission) []const u8 {
-    _ = perm;
-    return "any";
-}
+pub const CommandResult = result.CommandResult;
+const permissionToString = result.permissionToString;
 
 pub const CommandRegistry = struct {
     allocator: std.mem.Allocator,
@@ -113,7 +105,7 @@ pub const CommandRegistry = struct {
     pub fn dispatch(
         self: *CommandRegistry,
         player: ?*Player,
-        tecton: *Tecton,
+        views: CommandViews,
         network: *NetworkHandler,
         command_line: []const u8,
         origin_type: []const u8,
@@ -129,10 +121,7 @@ pub const CommandRegistry = struct {
         };
 
         if (player) |p| {
-            const permitted = if (cmd.permission.len == 0) true else if (tecton.command_permission_checker) |checker|
-                checker(tecton.command_permission_userdata, p.xuid, cmd.permission)
-            else
-                tecton.permission_manager.hasPermission(p.username, cmd.permission);
+            const permitted = views.permissions.hasPermission(p.username, p.xuid, cmd.permission);
             if (!permitted) {
                 return .{ .success = false, .message = "You do not have permission to run this command" };
             }
@@ -142,7 +131,7 @@ pub const CommandRegistry = struct {
             .player = player,
             .args = parsed.args,
             .network = network,
-            .tecton = tecton,
+            .views = views,
             .allocator = self.allocator,
             .command_userdata = cmd.userdata,
             .origin_type = origin_type,
@@ -165,8 +154,8 @@ pub const CommandRegistry = struct {
         return .{ .success = true, .message = "" };
     }
 
-    pub fn dispatchConsole(self: *CommandRegistry, tecton: *Tecton, command_line: []const u8) void {
-        _ = self.dispatch(null, tecton, tecton.network, command_line, "console", .{0} ** 16, "");
+    pub fn dispatchConsole(self: *CommandRegistry, views: CommandViews, network: *NetworkHandler, command_line: []const u8) void {
+        _ = self.dispatch(null, views, network, command_line, "console", .{0} ** 16, "");
     }
 
     pub fn buildAvailableCommandsPacket(self: *CommandRegistry, stream: *BinaryStream) ![]const u8 {
@@ -340,34 +329,12 @@ pub const CommandRegistry = struct {
     }
 };
 
+const test_owner = @This();
+const test_scope = struct {
+    pub const std = test_owner.std;
+    pub const CommandRegistry = test_owner.CommandRegistry;
+};
+
 test "updateEnumValues replaces owned values and keeps the enum index" {
-    const allocator = std.testing.allocator;
-
-    var registry = CommandRegistry.init(allocator);
-    defer registry.deinit();
-
-    const initial = try allocator.alloc([]const u8, 1);
-    initial[0] = "world";
-    const enum_index = try registry.registerEnum(.{
-        .name = "TransferWorld",
-        .values = initial,
-        .owned = true,
-    });
-    try std.testing.expectEqual(@as(u32, 0), enum_index);
-
-    const updated = try allocator.alloc([]const u8, 2);
-    updated[0] = "world";
-    updated[1] = "arena";
-
-    try std.testing.expect(try registry.updateEnumValues("TransferWorld", updated));
-
-    try std.testing.expectEqual(@as(usize, 1), registry.enums.items.len);
-    try std.testing.expectEqual(@as(usize, 2), registry.enums.items[0].values.len);
-    try std.testing.expectEqualStrings("arena", registry.enums.items[0].values[1]);
-    try std.testing.expect(registry.enums.items[0].owned);
-
-    const orphaned = try allocator.alloc([]const u8, 1);
-    orphaned[0] = "x";
-    try std.testing.expect(!(try registry.updateEnumValues("MissingEnum", orphaned)));
-    allocator.free(orphaned);
+    try @import("registry_test.zig").Suite(test_scope).case_000();
 }

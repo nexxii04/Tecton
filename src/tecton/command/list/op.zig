@@ -40,7 +40,7 @@ fn handleOp(raw: *anyopaque) void {
         return;
     }
 
-    const perm_mgr = &ctx.tecton.permission_manager;
+    const perm_mgr = ctx.views.permission_admin;
 
     if (std.mem.eql(u8, perm_mgr.getPlayerGroup(name), "operator")) {
         ctx.sendOutput(false, "Player is already an operator");
@@ -54,6 +54,7 @@ fn handleOp(raw: *anyopaque) void {
 
     const source_op = if (ctx.player) |p| p.username else "Console";
     Raknet.Logger.INFO("{s} opped {s}", .{ source_op, name });
+    perm_mgr.refreshAbilities(ctx.allocator, name);
 
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Granted operator to {s}", .{name}) catch return;
@@ -68,20 +69,21 @@ fn handleDeop(raw: *anyopaque) void {
         return;
     }
 
-    const perm_mgr = &ctx.tecton.permission_manager;
+    const perm_mgr = ctx.views.permission_admin;
 
     if (!std.mem.eql(u8, perm_mgr.getPlayerGroup(name), "operator")) {
         ctx.sendOutput(false, "Player is not an operator");
         return;
     }
 
-    perm_mgr.setPlayerGroup(name, perm_mgr.default_group) catch {
+    perm_mgr.setPlayerGroup(name, perm_mgr.defaultGroup()) catch {
         ctx.sendOutput(false, "Failed to revoke operator");
         return;
     };
 
     const source_deop = if (ctx.player) |p| p.username else "Console";
     Raknet.Logger.INFO("{s} deopped {s}", .{ source_deop, name });
+    perm_mgr.refreshAbilities(ctx.allocator, name);
 
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Revoked operator from {s}", .{name}) catch return;

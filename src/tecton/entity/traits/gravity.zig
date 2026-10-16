@@ -4,7 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
-const MoveDelta = @import("../../player/move-delta.zig");
+const MoveDelta = @import("../../player/move_delta.zig");
 const broadcast = @import("../../world/dimension/broadcast.zig");
 
 pub const State = struct {
@@ -14,14 +14,12 @@ pub const State = struct {
     falling_distance: f32,
     falling_ticks: u32,
     on_ground: bool,
-    // Airborne broadcasts are skipped, so a falling mob pays nothing per tick.
+
     broadcast_cooldown: u8 = 0,
 };
 
 const AirBroadcast = struct { cooldown: u8, send: bool };
 
-/// One tick of the in-air broadcast cadence; physics noise below the position
-/// epsilon does not restart it.
 fn tickAirBroadcast(cooldown: u8, moved: bool, interval: u8) AirBroadcast {
     if (cooldown > 0) return .{ .cooldown = cooldown - 1, .send = false };
     if (!moved) return .{ .cooldown = 0, .send = false };
@@ -201,9 +199,8 @@ test "an in-air mob only broadcasts on its interval" {
 
     try std.testing.expect(tickAirBroadcast(waiting.cooldown, true, 2).send);
 
-    // Interval 1 keeps the every-tick behavior.
     try std.testing.expect(tickAirBroadcast(0, true, 1).send);
-    // Below the position epsilon: not worth a packet.
+
     try std.testing.expect(!tickAirBroadcast(0, false, 2).send);
     try std.testing.expect(!tickAirBroadcast(3, true, 4).send);
     try std.testing.expectEqual(@as(u8, 2), tickAirBroadcast(3, true, 4).cooldown);
