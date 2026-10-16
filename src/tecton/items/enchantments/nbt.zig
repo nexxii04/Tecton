@@ -9,10 +9,24 @@ const ItemStack = @import("../item_stack.zig").ItemStack;
 const display = @import("../traits/display.zig");
 const storage = @import("storage.zig");
 const registry_mod = @import("registry.zig");
+const book_mod = @import("enchantment.zig");
 
 pub const KEY = "ench";
+pub const STORED_KEY = "StoredEnchantments";
 pub const ID_KEY = "id";
 pub const LEVEL_KEY = "lvl";
+
+fn writeKey(stack: *const ItemStack) []const u8 {
+    if (book_mod.isBookIdentifier(stack.item_type.identifier)) return STORED_KEY;
+    return KEY;
+}
+
+fn dropKey(tag_compound: *CompoundTag, allocator: std.mem.Allocator, key: []const u8) void {
+    if (tag_compound.value.fetchRemove(key)) |removed| {
+        var previous = removed.value;
+        previous.deinit(allocator);
+    }
+}
 
 pub fn sync(stack: *ItemStack) !void {
     if (!stack.enchantments.dirty) return;
@@ -20,10 +34,8 @@ pub fn sync(stack: *ItemStack) !void {
     const allocator = stack.allocator;
     const tag_compound = try display.ensureTagCompound(stack);
 
-    if (tag_compound.value.fetchRemove(KEY)) |removed| {
-        var previous = removed.value;
-        previous.deinit(allocator);
-    }
+    dropKey(tag_compound, allocator, KEY);
+    dropKey(tag_compound, allocator, STORED_KEY);
 
     const entries = stack.enchantments.items();
     if (entries.len == 0) {
@@ -46,7 +58,7 @@ pub fn sync(stack: *ItemStack) !void {
         built = index + 1;
     }
 
-    try tag_compound.set(KEY, .{ .List = ListTag.init(tags, null) });
+    try tag_compound.set(writeKey(stack), .{ .List = ListTag.init(tags, null) });
     stack.enchantments.dirty = false;
 }
 
@@ -55,7 +67,12 @@ pub fn hydrate(stack: *ItemStack) void {
     stack.enchantments.dirty = false;
 
     const tag_compound = display.getTagCompound(stack) orelse return;
-    const ench = tag_compound.get(KEY) orelse return;
+    const book = book_mod.isBookIdentifier(stack.item_type.identifier);
+    const stored = if (book) tag_compound.get(STORED_KEY) else null;
+    const legacy = tag_compound.get(KEY);
+    const picked = if (stored) |s| s else legacy;
+    const migrated = book and ((stored == null and legacy != null) or (stored != null and legacy != null));
+    const ench = picked orelse return;
     if (ench != .List) {
         stack.enchantments.dirty = true;
         return;
@@ -103,7 +120,7 @@ pub fn hydrate(stack: *ItemStack) void {
     }
 
     if (entries.len != @as(usize, stack.enchantments.count())) repaired = true;
-    stack.enchantments.dirty = repaired;
+    stack.enchantments.dirty = repaired or migrated;
 }
 
 fn shortValue(tag: ?Tag) ?i64 {
@@ -119,6 +136,11 @@ const EnchantmentInstance = @import("enchantment.zig").EnchantmentInstance;
 
 fn testStack(allocator: std.mem.Allocator, identifier: []const u8) !ItemStack {
     const item_type = try testing.sword(allocator, identifier);
+    return ItemStack.init(allocator, item_type, .{});
+}
+
+fn testBook(allocator: std.mem.Allocator, identifier: []const u8) !ItemStack {
+    const item_type = try testing.itemType(allocator, identifier, &.{}, false);
     return ItemStack.init(allocator, item_type, .{});
 }
 
@@ -289,4 +311,69 @@ test "sync keeps the ench payload stable across repeated writes" {
 
     try std.testing.expectEqual(@as(usize, 2), first);
     try std.testing.expectEqual(first, second);
+}
+
+test "books sync to StoredEnchantments and read it back" {
+    const allocator = std.testing.allocator;
+    _ = try registry_mod.load();
+
+    var stack = try testBook(allocator, "minecraft:enchanted_book");
+    defer stack.deinit();
+    defer stack.item_type.deinit();
+
+    _ = stack.enchantments.set(9, 5);
+    try sync(&stack);
+    try std.testing.expect(!stack.enchantments.dirty);
+
+    const tag_compound = display.getTagCompound(&stack).?;
+    try std.testing.expect(tag_compound.get(KEY) == null);
+    const stored = tag_compound.get(STORED_KEY).?;
+    try std.testing.expect(stored == .List);
+    try std.testing.expectEqual(@as(usize, 1), stored.List.value.len);
+    try std.testing.expectEqual(@as(i16, 9), stored.List.value[0].Compound.get(ID_KEY).?.Short.value);
+
+    stack.enchantments.len = 0;
+    hydrate(&stack);
+    try std.testing.expectEqual(@as(u8, 5), stack.enchantments.level(9).?);
+    try std.testing.expect(!stack.enchantments.dirty);
+}
+
+test "books migrate a legacy ench payload to StoredEnchantments" {
+    const allocator = std.testing.allocator;
+    _ = try registry_mod.load();
+
+    var stack = try testBook(allocator, "minecraft:book");
+    defer stack.deinit();
+    defer stack.item_type.deinit();
+
+    stack.nbt = try testing.enchantedNbt(allocator, &.{.{ .id = 9, .level = 5 }});
+    hydrate(&stack);
+    try std.testing.expectEqual(@as(u8, 5), stack.enchantments.level(9).?);
+    try std.testing.expect(stack.enchantments.dirty);
+
+    try sync(&stack);
+    const tag_compound = display.getTagCompound(&stack).?;
+    try std.testing.expect(tag_compound.get(KEY) == null);
+    try std.testing.expectEqual(@as(usize, 1), tag_compound.get(STORED_KEY).?.List.value.len);
+    try std.testing.expect(!stack.enchantments.dirty);
+}
+
+test "a stray StoredEnchantments on a sword is dropped" {
+    const allocator = std.testing.allocator;
+    _ = try registry_mod.load();
+
+    var stack = try testStack(allocator, "minecraft:test_nbt_stray");
+    defer stack.deinit();
+    defer stack.item_type.deinit();
+
+    stack.nbt = try testing.enchantedNbtKeyed(allocator, STORED_KEY, &.{.{ .id = 9, .level = 5 }});
+    hydrate(&stack);
+    try std.testing.expectEqual(@as(u8, 0), stack.enchantments.count());
+    try std.testing.expect(!stack.enchantments.dirty);
+
+    _ = stack.enchantments.set(9, 5);
+    try sync(&stack);
+    const tag_compound = display.getTagCompound(&stack).?;
+    try std.testing.expect(tag_compound.get(STORED_KEY) == null);
+    try std.testing.expectEqual(@as(usize, 1), tag_compound.get(KEY).?.List.value.len);
 }

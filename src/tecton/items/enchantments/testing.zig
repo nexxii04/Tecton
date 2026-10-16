@@ -36,6 +36,10 @@ pub fn stone(allocator: std.mem.Allocator, identifier: []const u8) !*ItemType {
 }
 
 pub fn enchantedNbt(allocator: std.mem.Allocator, entries: []const EnchantmentInstance) !CompoundTag {
+    return enchantedNbtKeyed(allocator, "ench", entries);
+}
+
+pub fn enchantedNbtKeyed(allocator: std.mem.Allocator, key: []const u8, entries: []const EnchantmentInstance) !CompoundTag {
     var tag_compound = CompoundTag.init(allocator, null);
     const tags = try allocator.alloc(Tag, entries.len);
     for (entries, 0..) |entry, index| {
@@ -44,7 +48,7 @@ pub fn enchantedNbt(allocator: std.mem.Allocator, entries: []const EnchantmentIn
         try compound.set("lvl", .{ .Short = ShortTag.init(@intCast(entry.level), null) });
         tags[index] = .{ .Compound = compound };
     }
-    try tag_compound.set("ench", .{ .List = ListTag.init(tags, null) });
+    try tag_compound.set(key, .{ .List = ListTag.init(tags, null) });
     var root = CompoundTag.init(allocator, null);
     try root.set("tag", .{ .Compound = tag_compound });
     return root;

@@ -62,6 +62,11 @@ pub const EnchantmentInstance = struct {
     level: u8,
 };
 
+pub fn isBookIdentifier(identifier: []const u8) bool {
+    return std.mem.eql(u8, identifier, "minecraft:book") or
+        std.mem.eql(u8, identifier, "minecraft:enchanted_book");
+}
+
 pub const Enchantment = struct {
     id: u16,
     identifier: []const u8,

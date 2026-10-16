@@ -61,6 +61,7 @@ const MAX_RULES = 64;
 var rule_list: [MAX_RULES]Rule = undefined;
 var rule_count: usize = 0;
 
+/// Startup only: rules are read by the tick thread without locking, and Rule.id must outlive the process.
 pub fn registerRule(rule: Rule) !void {
     if (rule_count == MAX_RULES) return error.TooManyEnchantmentRules;
     var index: usize = 0;
@@ -162,8 +163,7 @@ pub fn slotSetOf(item_type: *const ItemType) SlotSet {
 }
 
 pub fn isBook(item_type: *const ItemType) bool {
-    return std.mem.eql(u8, item_type.identifier, "minecraft:book") or
-        std.mem.eql(u8, item_type.identifier, "minecraft:enchanted_book");
+    return enchantment.isBookIdentifier(item_type.identifier);
 }
 
 pub fn exclusivePair(first: u16, second: u16) bool {
