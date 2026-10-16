@@ -7,6 +7,7 @@ const Protocol = @import("protocol");
 const ItemType = @import("./item_type.zig").ItemType;
 const trait_mod = @import("./trait.zig");
 const EnchantmentStorage = @import("./enchantments/storage.zig").EnchantmentStorage;
+const enchantment_nbt = @import("./enchantments/nbt.zig");
 const ItemStackTraitInstance = trait_mod.ItemStackTraitInstance;
 const ItemStackTraitEvent = trait_mod.Event;
 const Player = @import("../player/player.zig").Player;
@@ -47,6 +48,24 @@ pub const ItemStack = struct {
         const item_type = ItemType.get(identifier) orelse return null;
         return init(allocator, item_type, opts);
     }
+
+    pub const NbtHooks = struct {
+        pub fn syncEnchantments(item: *ItemStack) !void {
+            return enchantment_nbt.sync(item);
+        }
+
+        pub fn load(allocator: std.mem.Allocator, name: []const u8, count: u16, metadata: u32, nbt_data: ?CompoundTag) ?ItemStack {
+            const item_type = ItemType.get(name) orelse return null;
+            var item = ItemStack.init(allocator, item_type, .{
+                .stack_size = count,
+                .metadata = metadata,
+                .nbt = nbt_data,
+            });
+            enchantment_nbt.hydrate(&item);
+            enchantment_nbt.sync(&item) catch {};
+            return item;
+        }
+    };
 
     pub fn cloneWithCount(self: *const ItemStack, allocator: std.mem.Allocator, count: u16) !ItemStack {
         var clone = init(allocator, self.item_type, .{

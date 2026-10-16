@@ -145,7 +145,7 @@ pub fn Suite(comptime scope: type) type {
 
             var decoded = try decodeNbt(allocator, bytes);
             defer decoded.deinit(allocator);
-            var item_again = deserializeItemStack(allocator, &decoded) orelse return error.TestUnexpectedResult;
+            var item_again = deserializeItemStack(allocator, ItemStack, &decoded) orelse return error.TestUnexpectedResult;
             defer item_again.deinit();
             try testing.expectEqualStrings("minecraft:test_rt_blade", item_again.item_type.identifier);
             try testing.expectEqual(@as(u16, 1), item_again.stack_size);

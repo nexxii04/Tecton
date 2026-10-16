@@ -7,3 +7,7 @@ pub const generator = @import("./generator/root.zig");
 pub const provider = @import("./provider/root.zig");
 pub const PlayerSerialization = @import("./provider/serialization.zig");
 pub const World = @import("./world.zig").World;
+
+comptime {
+    _ = @import("./provider/serialization_test_scope.zig");
+}

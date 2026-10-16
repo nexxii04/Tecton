@@ -109,6 +109,27 @@ pub const Player = struct {
     crawling: bool = false,
     pose: Pose = .standing,
 
+    pub const NbtHooks = struct {
+        pub const InventoryState = InventoryTrait.TraitState;
+        pub const HealthState = Health.State;
+
+        pub fn inventoryState(entity: *Entity) ?*InventoryState {
+            return entity.getTraitState(InventoryTrait);
+        }
+
+        pub fn healthState(entity: *Entity) ?*HealthState {
+            return entity.getTraitState(Health.HealthTrait);
+        }
+
+        pub fn clampLoadedHealth(current: f32, max: f32) f32 {
+            return Health.clampLoadedHealth(current, max);
+        }
+
+        pub fn syncAttributes(state: *const HealthState, entity: *Entity) void {
+            Health.syncAttributes(state, entity);
+        }
+    };
+
     pub fn init(
         self: *Player,
         allocator: std.mem.Allocator,

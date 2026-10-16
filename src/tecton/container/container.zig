@@ -15,6 +15,10 @@ pub const Container = struct {
     occupants: std.AutoHashMap(*Player, Protocol.ContainerId),
     muted: bool = false,
 
+    pub const NbtHooks = struct {
+        pub const Item = ItemStack;
+    };
+
     pub fn init(allocator: std.mem.Allocator, container_type: Protocol.ContainerType, size: u32) !Container {
         const storage = try allocator.alloc(?ItemStack, size);
         @memset(storage, null);

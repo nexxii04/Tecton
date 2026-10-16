@@ -52,6 +52,12 @@ pub const Entity = struct {
         _ = @atomicRmw(i64, &nextUniqueId, .Max, next, .monotonic);
     }
 
+    pub const NbtHooks = struct {
+        pub fn reserveUniqueId(uid: i64) void {
+            return Entity.reserveUniqueId(uid);
+        }
+    };
+
     pub fn init(allocator: std.mem.Allocator, entity_type: *const EntityType, dimension: ?*Dimension) Entity {
         const uid = nextRuntimeId();
         return .{
