@@ -6,6 +6,7 @@ const LoginData = Protocol.Login.Decoder.LoginData;
 const Raknet = @import("Raknet");
 
 const Container = @import("../container/container.zig").Container;
+const AnvilWindowTrait = @import("../entity/traits/anvil_window.zig").AnvilWindowTrait;
 const EntityType = @import("../entity/entity_type.zig").EntityType;
 const Entity = @import("../entity/entity.zig").Entity;
 const ChunkLoadingTrait = @import("../entity/traits/chunk_loading.zig");
@@ -229,6 +230,12 @@ pub const Player = struct {
             .initialized = false,
         });
         try self.entity.addTrait(created_output);
+
+        const anvil_window = try AnvilWindowTrait.create(allocator, .{
+            .container = undefined,
+            .initialized = false,
+        });
+        try self.entity.addTrait(anvil_window);
     }
 
     pub fn deinit(self: *Player) void {

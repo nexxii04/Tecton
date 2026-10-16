@@ -11,6 +11,9 @@ const StackRequestSlotInfo = Protocol.StackRequestSlotInfo;
 const Raknet = @import("Raknet");
 
 const Container = @import("../../container/container.zig").Container;
+const AnvilWindowTrait = @import("../../entity/traits/anvil_window.zig").AnvilWindowTrait;
+const anvil_window = @import("../../entity/traits/anvil_window.zig");
+const anvil = @import("../../items/enchantments/anvil.zig");
 const CreatedOutputTrait = @import("../../entity/traits/created_output.zig").CreatedOutputTrait;
 const CursorTrait = @import("../../entity/traits/cursor.zig").CursorTrait;
 const inventory = @import("../../entity/traits/inventory.zig");
@@ -33,8 +36,49 @@ const HandlerContext = struct {
     cursor: *CursorTrait.TraitState,
     output: ?*CreatedOutputTrait.TraitState,
     trade: ?*TradeWindowTrait.TraitState,
+    anvil: ?*AnvilWindowTrait.TraitState,
+    rename: ?[]const u8 = null,
     player: *Player,
 };
+
+fn isAnvilName(container_name: Protocol.ContainerName) bool {
+    return switch (container_name) {
+        .AnvilInput, .AnvilMaterial, .AnvilResult => true,
+        else => false,
+    };
+}
+
+fn referencesAnvil(action: StackRequestAction) bool {
+    return switch (action) {
+        .take, .place => |t| isAnvilName(t.source.container.identifier) or isAnvilName(t.destination.container.identifier),
+        .swap => |s| isAnvilName(s.source.container.identifier) or isAnvilName(s.destination.container.identifier),
+        .drop => |d| isAnvilName(d.source.container.identifier),
+        .destroy, .consume => |d| isAnvilName(d.source.container.identifier),
+        .craft_repair_and_disenchant => true,
+        else => false,
+    };
+}
+
+fn isAnvilResultSlot(ctx: *const HandlerContext, info: StackRequestSlotInfo) bool {
+    if (info.container.identifier != .AnvilResult) return false;
+    const window = ctx.anvil orelse return false;
+    return window.active;
+}
+
+fn anvilSlotBlocked(ctx: *const HandlerContext, action: StackRequestAction) bool {
+    const window = ctx.anvil orelse return false;
+    if (!window.active) return false;
+
+    switch (action) {
+        .take, .place => |t| return isAnvilResultSlot(ctx, t.destination) or
+            (isAnvilResultSlot(ctx, t.source) and !window.committed),
+        .swap => |s| return isAnvilResultSlot(ctx, s.destination) or
+            (isAnvilResultSlot(ctx, s.source) and !window.committed),
+        .drop => |d| return isAnvilResultSlot(ctx, d.source),
+        .destroy, .consume => |d| return isAnvilResultSlot(ctx, d.source),
+        else => return false,
+    }
+}
 
 fn resolveContainer(ctx: *const HandlerContext, container_name: Protocol.ContainerName) ?*Container {
     return switch (container_name) {
@@ -48,6 +92,11 @@ fn resolveContainer(ctx: *const HandlerContext, container_name: Protocol.Contain
             break :blk &trade.container;
         },
         .CreativeOutput => if (ctx.output) |output| &output.container.base else null,
+        .AnvilInput, .AnvilMaterial, .AnvilResult => blk: {
+            const window = ctx.anvil orelse break :blk null;
+            if (!window.active) break :blk null;
+            break :blk &window.container;
+        },
         else => null,
     };
 }
@@ -57,6 +106,9 @@ fn resolveCoreSlot(container_name: Protocol.ContainerName, ui_slot: u8) u32 {
         .Trade2Ingredient1, .TradeIngredient1 => 0,
         .Trade2Ingredient2, .TradeIngredient2 => 1,
         .CreativeOutput => 0,
+        .AnvilInput => anvil_window.INPUT_SLOT,
+        .AnvilMaterial => anvil_window.MATERIAL_SLOT,
+        .AnvilResult => anvil_window.RESULT_SLOT,
         else => @as(u32, ui_slot),
     };
 }
@@ -66,6 +118,11 @@ fn isTradeIngredient(container_name: Protocol.ContainerName) bool {
         .Trade2Ingredient1, .Trade2Ingredient2, .TradeIngredient1, .TradeIngredient2 => true,
         else => false,
     };
+}
+
+fn isAnvilContainer(ctx: *const HandlerContext, container: *Container) bool {
+    const window = ctx.anvil orelse return false;
+    return window.active and &window.container == container;
 }
 
 fn isTradeContainer(ctx: *const HandlerContext, container: *Container) bool {
@@ -101,6 +158,32 @@ fn refreshTradePreview(ctx: *const HandlerContext) void {
         .metadata = @intCast(offer.sell.damage),
     });
     trade_window.sendResultSlot(ctx.player, item);
+}
+
+fn refreshAnvilPreview(ctx: *const HandlerContext) void {
+    const window = ctx.anvil orelse return;
+    if (!window.active) return;
+    if (window.container.getItem(anvil_window.RESULT_SLOT) != null) return;
+
+    window.committed = false;
+
+    const first = window.container.getItem(anvil_window.INPUT_SLOT) orelse {
+        anvil_window.sendResultSlot(ctx.player, null);
+        return;
+    };
+    const second = window.container.getItem(anvil_window.MATERIAL_SLOT);
+
+    const preview = anvil.evaluate(ctx.player.entity.allocator, first, second, ctx.rename) catch {
+        anvil_window.sendResultSlot(ctx.player, null);
+        return;
+    };
+    const evaluated = preview orelse {
+        anvil_window.sendResultSlot(ctx.player, null);
+        return;
+    };
+
+    window.container.setItem(anvil_window.RESULT_SLOT, evaluated.stack);
+    anvil_window.sendResultSlot(ctx.player, window.container.getItem(anvil_window.RESULT_SLOT));
 }
 
 fn canMergeStacks(a: *const ItemStack, b: *const ItemStack) bool {
@@ -338,14 +421,24 @@ pub fn processItemStackRequest(
         .cursor = cursor_state,
         .output = player.entity.getTraitState(CreatedOutputTrait),
         .trade = player.entity.getTraitState(TradeWindowTrait),
+        .anvil = player.entity.getTraitState(AnvilWindowTrait),
+        .rename = if (request.filter_strings.len > 0) request.filter_strings[0] else null,
         .player = player,
     };
+
+    for (request.actions) |action| {
+        if (referencesAnvil(action)) {
+            if (ctx.anvil) |window| anvil_window.activate(window, player);
+            break;
+        }
+    }
 
     var changed = std.ArrayList(ChangedSlot).empty;
     defer changed.deinit(allocator);
 
     var ok = true;
     var touched_trade = false;
+    var touched_anvil = false;
     for (request.actions) |action| {
         recordActionSlots(allocator, &changed, &ctx, action) catch {
             ok = false;
@@ -353,6 +446,11 @@ pub fn processItemStackRequest(
         };
 
         if (armorRemovalBlocked(&ctx, action)) {
+            ok = false;
+            continue;
+        }
+
+        if (anvilSlotBlocked(&ctx, action)) {
             ok = false;
             continue;
         }
@@ -369,6 +467,7 @@ pub fn processItemStackRequest(
                 };
 
                 if (isTradeContainer(&ctx, src) or isTradeContainer(&ctx, dst)) touched_trade = true;
+                if (isAnvilContainer(&ctx, src) or isAnvilContainer(&ctx, dst)) touched_anvil = true;
 
                 applyTransferAction(
                     src,
@@ -391,6 +490,7 @@ pub fn processItemStackRequest(
                     continue;
                 };
                 if (isTradeContainer(&ctx, src) or isTradeContainer(&ctx, dst)) touched_trade = true;
+                if (isAnvilContainer(&ctx, src) or isAnvilContainer(&ctx, dst)) touched_anvil = true;
                 src.swapItems(
                     resolveCoreSlot(s.source.container.identifier, s.source.slot),
                     resolveCoreSlot(s.destination.container.identifier, s.destination.slot),
@@ -403,6 +503,7 @@ pub fn processItemStackRequest(
                     continue;
                 };
                 if (isTradeContainer(&ctx, src)) touched_trade = true;
+                if (isAnvilContainer(&ctx, src)) touched_anvil = true;
                 const dropped = applyDropAction(
                     src,
                     resolveCoreSlot(d.source.container.identifier, d.source.slot),
@@ -419,6 +520,7 @@ pub fn processItemStackRequest(
                     continue;
                 };
                 if (isTradeContainer(&ctx, src)) touched_trade = true;
+                if (isAnvilContainer(&ctx, src)) touched_anvil = true;
                 src.clearSlot(resolveCoreSlot(d.source.container.identifier, d.source.slot));
             },
             .consume => |d| {
@@ -426,11 +528,43 @@ pub fn processItemStackRequest(
                     ok = false;
                     continue;
                 };
+                if (isAnvilContainer(&ctx, src)) touched_anvil = true;
                 if (isTradeIngredient(d.source.container.identifier)) continue;
                 src.removeItem(
                     resolveCoreSlot(d.source.container.identifier, d.source.slot),
                     if (d.count == 0) 1 else d.count,
                 );
+            },
+            .craft_repair_and_disenchant => {
+                touched_anvil = true;
+                const window = ctx.anvil orelse {
+                    ok = false;
+                    continue;
+                };
+                if (!window.active or window.committed) {
+                    ok = false;
+                    continue;
+                }
+                if (window.container.getItem(anvil_window.RESULT_SLOT) == null) {
+                    ok = false;
+                    continue;
+                }
+
+                window.container.removeItem(anvil_window.INPUT_SLOT, 1);
+                window.container.removeItem(anvil_window.MATERIAL_SLOT, 1);
+                window.committed = true;
+
+                for ([_]Protocol.ContainerName{ .AnvilInput, .AnvilMaterial, .AnvilResult }) |name| {
+                    const slot = resolveCoreSlot(name, 0);
+                    recordChangedSlot(
+                        allocator,
+                        &changed,
+                        .{ .identifier = name, .dynamic_identifier = 0 },
+                        &window.container,
+                        @intCast(slot),
+                        @intCast(slot),
+                    ) catch {};
+                }
             },
             .craft_recipe => |c| {
                 if (c.recipe_network_id < villager_trade.TRADE_RECIPE_BASE) {
@@ -532,6 +666,7 @@ pub fn processItemStackRequest(
     }
 
     if (touched_trade) refreshTradePreview(&ctx);
+    if (touched_anvil) refreshAnvilPreview(&ctx);
 }
 
 pub fn handleItemStackRequest(

@@ -3,6 +3,8 @@ const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
 const BlockContainer = @import("../../container/block_container.zig").BlockContainer;
+const AnvilWindowTrait = @import("../../entity/traits/anvil_window.zig").AnvilWindowTrait;
+const anvil_window = @import("../../entity/traits/anvil_window.zig");
 const TradeWindowTrait = @import("../../entity/traits/trade_window.zig").TradeWindowTrait;
 const trade_window = @import("../../entity/traits/trade_window.zig");
 const BarrelTrait = @import("../../world/block/traits/barrel.zig").BarrelTrait;
@@ -20,6 +22,10 @@ pub fn handleContainerClose(
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;
     const packet = try Protocol.ContainerClosePacket.deserialize(stream);
+
+    if (player.entity.getTraitState(AnvilWindowTrait)) |window| {
+        anvil_window.deactivate(window, player);
+    }
 
     if (player.opened_container) |container| {
         if (container.occupants.get(player)) |window_id| {

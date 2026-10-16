@@ -54,6 +54,16 @@ pub const TransferReport = struct {
     skipped: u8 = 0,
 };
 
+pub const AnvilMerge = struct {
+    added: u8 = 0,
+    upgraded: u8 = 0,
+    kept: u8 = 0,
+    capped: u8 = 0,
+    conflicts: u8 = 0,
+    skipped: u8 = 0,
+    charge: u32 = 0,
+};
+
 fn stage(scratch: *EnchantmentStorage, id: u16, new_level: u8) Reject!void {
     switch (scratch.set(id, new_level)) {
         .full => return error.too_many,
@@ -408,6 +418,73 @@ pub fn transferTo(source: *ItemStack, target: *ItemStack, policy: TransferPolicy
 
 pub fn copyTo(source: *const ItemStack, target: *ItemStack, policy: TransferPolicy) Reject!TransferReport {
     return absorbInto(target, source, policy, null);
+}
+
+pub fn mergeForAnvil(target: *ItemStack, sacrifice: *const ItemStack) Reject!AnvilMerge {
+    const registry = registry_mod.ensureGlobal() orelse return error.no_registry;
+    const before = target.enchantments;
+    var report = AnvilMerge{};
+    var changed = false;
+
+    var incoming: [storage.MAX_ENCHANTMENTS]EnchantmentInstance = undefined;
+    const entry_count = sacrifice.enchantments.count();
+    @memcpy(incoming[0..entry_count], sacrifice.enchantments.items());
+
+    for (incoming[0..entry_count]) |entry| {
+        const definition = registry.get(entry.id) orelse {
+            report.skipped += 1;
+            continue;
+        };
+
+        if (target.enchantments.level(entry.id)) |current| {
+            const combined: u8 = if (current == entry.level)
+                @intCast(@min(@as(u32, current) + 1, @as(u32, definition.max_level)))
+            else
+                @max(current, entry.level);
+
+            if (combined == current) {
+                if (current == definition.max_level) {
+                    report.capped += 1;
+                } else {
+                    report.kept += 1;
+                }
+                continue;
+            }
+
+            if (target.enchantments.set(entry.id, combined) == .full) return error.too_many;
+            report.charge += @as(u32, definition.anvil_cost) * @as(u32, combined - current);
+            report.upgraded += 1;
+            changed = true;
+            continue;
+        }
+
+        if (rules.conflictsWith(registry, target.enchantments.items(), definition)) {
+            report.conflicts += 1;
+            continue;
+        }
+        if (target.enchantments.count() == storage.MAX_ENCHANTMENTS) {
+            report.skipped += 1;
+            continue;
+        }
+
+        const landing: u8 = @min(entry.level, definition.max_level);
+        if (target.enchantments.set(entry.id, landing) == .full) {
+            report.skipped += 1;
+            continue;
+        }
+        report.charge += @as(u32, definition.anvil_cost) * @as(u32, landing);
+        report.added += 1;
+        changed = true;
+    }
+
+    if (changed) {
+        target.enchantments.dirty = true;
+        nbt.sync(target) catch {
+            rollback(target, before);
+            return error.storage_failure;
+        };
+    }
+    return report;
 }
 
 pub fn syncNbt(stack: *ItemStack) Reject!void {

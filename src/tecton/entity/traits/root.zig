@@ -1,3 +1,5 @@
+pub const anvil_window = @import("./anvil_window.zig");
+pub const AnvilWindowTrait = anvil_window.AnvilWindowTrait;
 pub const chunk_loading = @import("./chunk_loading.zig");
 pub const ChunkLoadingTrait = chunk_loading.ChunkLoadingTrait;
 pub const created_output = @import("./created_output.zig");
