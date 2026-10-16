@@ -9,6 +9,9 @@ pub fn Suite(comptime scope: type) type {
         const unregisterOwner = scope.unregisterOwner;
         const registeredRules = scope.registeredRules;
         const slotSetOf = scope.slotSetOf;
+        const EnchantmentInstance = scope.EnchantmentInstance;
+        const conflictsWith = scope.conflictsWith;
+        const exclusivePair = scope.exclusivePair;
         const validate = scope.validate;
         const testing = scope.testing;
         const testType = scope.testType;
@@ -152,6 +155,33 @@ pub fn Suite(comptime scope: type) type {
             defer unregisterOwner(9);
 
             try std.testing.expect(validate(&registry, &stack, registry.resolve("sharpness").?, 5, .{}) == error.invalid_level);
+        }
+
+        pub fn case_004() !void {
+            const allocator = std.testing.allocator;
+            var registry = registry_mod.Registry.init(allocator);
+            defer registry.deinit();
+            _ = try registry.loadVanilla();
+
+            const pairs = .{
+                .{ "silk_touch", "fortune" },
+                .{ "depth_strider", "frost_walker" },
+                .{ "multishot", "piercing" },
+                .{ "riptide", "loyalty" },
+                .{ "riptide", "channeling" },
+                .{ "infinity", "mending" },
+            };
+            inline for (pairs) |pair| {
+                const first = registry.resolve(pair[0]).?;
+                const second = registry.resolve(pair[1]).?;
+                try std.testing.expectEqual(@as(u8, 0), first.group);
+                try std.testing.expectEqual(@as(u8, 0), second.group);
+                try std.testing.expect(exclusivePair(first.id, second.id));
+                try std.testing.expect(exclusivePair(second.id, first.id));
+                try std.testing.expect(!exclusivePair(first.id, first.id));
+                const current = [_]EnchantmentInstance{.{ .id = first.id, .level = 1 }};
+                try std.testing.expect(conflictsWith(&registry, &current, second));
+            }
         }
     };
 }

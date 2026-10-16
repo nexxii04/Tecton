@@ -45,4 +45,3 @@ pub const ArmorAggregate = compat.ArmorAggregate;
 pub const effects = @import("effects.zig");
 pub const MeleeImpact = effects.MeleeImpact;
 pub const Family = effects.Family;
-

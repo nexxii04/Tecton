@@ -256,6 +256,9 @@ const test_scope = struct {
     pub const unregisterOwner = test_owner.unregisterOwner;
     pub const registeredRules = test_owner.registeredRules;
     pub const slotSetOf = test_owner.slotSetOf;
+    pub const EnchantmentInstance = test_owner.enchantment.EnchantmentInstance;
+    pub const conflictsWith = test_owner.conflictsWith;
+    pub const exclusivePair = test_owner.exclusivePair;
     pub const validate = test_owner.validate;
     pub const testing = test_owner.testing;
     pub const testType = test_owner.testType;
@@ -275,4 +278,8 @@ test "rules can deny or modify and can be removed by owner" {
 
 test "a rule that lowers the level to zero is a rejection, not a hidden removal" {
     try @import("rules_test.zig").Suite(test_scope).case_003();
+}
+
+test "every exclusive pair names its vanilla identifiers" {
+    try @import("rules_test.zig").Suite(test_scope).case_004();
 }
