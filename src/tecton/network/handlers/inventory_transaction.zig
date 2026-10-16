@@ -21,6 +21,7 @@ const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").re
 const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
 const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
 const applyTraitsFromRegistry = @import("../../world/block/traits/trait.zig").applyTraitsFromRegistry;
+const bow = @import("./bow.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 
@@ -172,6 +173,11 @@ pub fn handleInventoryTransaction(
                 target.fireEvent(.Damage, .{ target, damage_event.amount });
             }
         },
+        .ReleaseItem => {
+            const data = packet.transaction_data.release_item;
+            if (data.action_type != @intFromEnum(Protocol.ReleaseItemAction.Release)) return;
+            _ = bow.release(tecton, player);
+        },
         else => {
             Raknet.Logger.WARN("Unhandled InventoryTransaction from {s}: {any}", .{
                 player.username,
@@ -188,6 +194,12 @@ fn handleUseItem(
     data: Protocol.InventoryTransactionData.UseItemTransactionData,
 ) !void {
     if (data.action_type == 1) {
+        if (bow.isHoldingBow(player)) {
+            bow.startDraw(tecton, player);
+            return;
+        }
+        bow.cancelDraw(player);
+
         const equip_state = player.entity.getTraitState(InventoryTrait) orelse return;
         _ = inventory.equipFromSlot(network, player, equip_state, equip_state.selected_slot);
         return;

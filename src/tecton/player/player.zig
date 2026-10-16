@@ -125,6 +125,7 @@ pub const Player = struct {
     broadcast_band: ?u8 = null,
     on_ground: bool = true,
     falling_distance: f32 = 0,
+    item_use_started_tick: u64 = 0,
     pending_move: ?MoveDelta.State = null,
     gliding: bool = false,
     swimming: bool = false,

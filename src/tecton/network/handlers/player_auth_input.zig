@@ -24,6 +24,7 @@ const entities = @import("../../world/dimension/entities.zig");
 const broadcast = @import("../../world/dimension/broadcast.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
+const bow = @import("./bow.zig");
 const processItemStackRequest = @import("./item_stack_request.zig").processItemStackRequest;
 
 pub fn handlePlayerBlockAction(
@@ -163,6 +164,12 @@ fn handleItemUseTransaction(
     transaction: Protocol.ItemUseTransaction,
 ) !void {
     if (transaction.action_type == 1) {
+        if (bow.isHoldingBow(player)) {
+            bow.startDraw(tecton, player);
+            return;
+        }
+        bow.cancelDraw(player);
+
         const equip_state = player.entity.getTraitState(InventoryTrait) orelse return;
         _ = inventory.equipFromSlot(network, player, equip_state, equip_state.selected_slot);
         return;

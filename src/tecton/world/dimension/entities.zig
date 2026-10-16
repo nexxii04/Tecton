@@ -11,7 +11,9 @@ const Entity = @import("../../entity/entity.zig").Entity;
 const Health = @import("../../entity/traits/health.zig");
 const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
 const ItemEntityTrait = @import("../../entity/traits/item_entity.zig").ItemEntityTrait;
+const ProjectileTrait = @import("../../entity/traits/projectile.zig").ProjectileTrait;
 const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
+const Bow = @import("../../items/bow.zig");
 const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const ItemType = @import("../../items/item_type.zig").ItemType;
 const Player = @import("../../player/player.zig").Player;
@@ -106,6 +108,31 @@ pub fn spawnItemStackEntity(dim: *Dimension, stack: ItemStack, position: Protoco
     const serialized = try serializeAddItemActor(dim, entity, &stream);
     sendAddToViewers(dim, entity, serialized);
 
+    return entity;
+}
+
+pub fn spawnArrow(
+    dim: *Dimension,
+    position: Protocol.Vector3f,
+    rotation: Protocol.Vector2f,
+    owner_runtime_id: i64,
+    speed: f32,
+    damage: f32,
+) !*Entity {
+    const entity_type = EntityTypeRegistry.get(Bow.ARROW_IDENTIFIER) orelse return error.UnknownEntityType;
+    const entity = try spawnEntity(dim, entity_type, position);
+    entity.rotation = rotation;
+    entity.motion = Bow.launchVelocity(rotation, speed);
+
+    const projectile = try ProjectileTrait.create(dim.allocator, .{
+        .owner_runtime_id = owner_runtime_id,
+        .damage = damage,
+        .age = 0,
+        .stuck_ticks = 0,
+        .stuck = false,
+        .pending_remove = false,
+    });
+    try entity.addTrait(projectile);
     return entity;
 }
 
