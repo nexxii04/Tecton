@@ -27,9 +27,12 @@ pub fn Suite(comptime scope: type) type {
         const fireBurnDuration = scope.fireBurnDuration;
         const fireAspectDurationTicks = scope.fireAspectDurationTicks;
         const thornsReflection = scope.thornsReflection;
+        const consumeDurability = scope.consumeDurability;
+        const wearTool = scope.wearTool;
         const testing = scope.testing;
         const test_helpers = scope.test_helpers;
         const FixedEntropy = scope.FixedEntropy;
+        const entropy_interface = scope.entropy_interface;
         const thornsArmor = scope.thornsArmor;
 
         pub fn case_011() !void {
@@ -178,6 +181,80 @@ pub fn Suite(comptime scope: type) type {
             try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .drowning, 7.0));
             try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .starvation, 7.0));
             try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .void, 7.0));
+        }
+
+        pub fn case_019() !void {
+            var zero = FixedEntropy{ .byte = 0 };
+            var full = FixedEntropy{ .byte = 0xff };
+
+            try testing.expect(consumeDurability(0, entropy_interface(&zero)));
+            try testing.expect(consumeDurability(0, entropy_interface(&full)));
+            try testing.expect(consumeDurability(3, entropy_interface(&zero)));
+            try testing.expect(!consumeDurability(3, entropy_interface(&full)));
+
+            var rng = std.Random.DefaultPrng.init(0xd04ab1e5);
+            const random = rng.random();
+            const trials: u32 = 20_000;
+            var hits: u32 = 0;
+            var index: u32 = 0;
+            while (index < trials) : (index += 1) {
+                if (consumeDurability(3, random)) hits += 1;
+            }
+            const rate = @as(f64, @floatFromInt(hits)) / @as(f64, trials);
+            try testing.expect(rate > 0.23 and rate < 0.27);
+        }
+
+        pub fn case_020() !void {
+            const allocator = testing.allocator;
+
+            const sword_kind = try test_helpers.itemType(allocator, "minecraft:test_wear_sword", &.{"minecraft:is_sword"}, false);
+            defer sword_kind.deinit();
+            const stone_kind = try test_helpers.itemType(allocator, "minecraft:test_wear_stone", &.{}, true);
+            defer stone_kind.deinit();
+
+            var zero = FixedEntropy{ .byte = 0 };
+            var full = FixedEntropy{ .byte = 0xff };
+
+            var stackable = ItemStack.init(allocator, stone_kind, .{});
+            defer stackable.deinit();
+            try testing.expectEqual(@as(u8, 0), wearTool(&stackable, 5, entropy_interface(&zero)));
+            try testing.expectEqual(@as(u32, 0), stackable.metadata);
+
+            var plain = ItemStack.init(allocator, sword_kind, .{});
+            defer plain.deinit();
+            try testing.expectEqual(@as(u8, 3), wearTool(&plain, 3, entropy_interface(&zero)));
+            try testing.expectEqual(@as(u32, 3), plain.metadata);
+
+            var enchanted = ItemStack.init(allocator, sword_kind, .{});
+            defer enchanted.deinit();
+            _ = enchanted.enchantments.set(compat.UNBREAKING, 3);
+            try testing.expectEqual(@as(u8, 0), wearTool(&enchanted, 4, entropy_interface(&full)));
+            try testing.expectEqual(@as(u32, 0), enchanted.metadata);
+            try testing.expectEqual(@as(u8, 2), wearTool(&enchanted, 2, entropy_interface(&zero)));
+            try testing.expectEqual(@as(u32, 2), enchanted.metadata);
+        }
+
+        pub fn case_021() !void {
+            const allocator = testing.allocator;
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_thorns_wear", &.{"minecraft:is_armor"}, false);
+            defer kind.deinit();
+
+            var firing: Container = try thornsArmor(allocator, kind, .{ 3, 0, 0, 0 });
+            defer firing.deinit();
+
+            var zero = FixedEntropy{ .byte = 0 };
+            const damage = thornsReflection(&firing, entropy_interface(&zero));
+            try testing.expect(damage >= THORNS_MIN_DAMAGE and damage <= THORNS_MAX_DAMAGE);
+            try testing.expectEqual(@as(u32, 1), firing.getItem(0).?.metadata);
+            try testing.expect(firing.getItem(1) == null);
+
+            var calm: Container = try thornsArmor(allocator, kind, .{ 0, 0, 0, 2 });
+            defer calm.deinit();
+
+            var full = FixedEntropy{ .byte = 0xff };
+            try testing.expectEqual(@as(f32, 0.0), thornsReflection(&calm, entropy_interface(&full)));
+            try testing.expectEqual(@as(u32, 0), calm.getItem(3).?.metadata);
         }
     };
 }

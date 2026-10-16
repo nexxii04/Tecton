@@ -102,7 +102,7 @@ pub fn handleInventoryTransaction(
                 const impact = EnchantmentEffects.meleeImpact(weapon, target.entity_type.identifier);
 
                 var armor: ArmorAggregate = .empty;
-                var worn: ?*const Container = null;
+                var worn: ?*Container = null;
                 if (target.getTraitState(InventoryTrait)) |victim_inventory| {
                     if (victim_inventory.armor) |*pieces| {
                         armor.refresh(pieces);
@@ -117,6 +117,15 @@ pub fn handleInventoryTransaction(
                     .cause = .entity_attack,
                 };
                 if (!tecton.events.emit(.Damage, &damage_event)) return;
+
+                if (inv_state) |state| {
+                    if (state.container.base.getItemMut(state.selected_slot)) |held| {
+                        var wear_entropy: std.Random.IoSource = .{ .io = tecton.io };
+                        if (EnchantmentEffects.wearTool(held, 1, wear_entropy.interface()) > 0) {
+                            state.container.updateSlot(state.selected_slot);
+                        }
+                    }
+                }
 
                 const dx = target.position.x - player.entity.position.x;
                 const dz = target.position.z - player.entity.position.z;

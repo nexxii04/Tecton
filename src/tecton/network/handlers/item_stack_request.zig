@@ -501,9 +501,9 @@ pub fn processItemStackRequest(
             .mine_block => |m| {
                 if (m.hotbar_slot < 0 or m.hotbar_slot >= inv_state.container.base.getSize()) continue;
                 const held = inv_state.container.base.getItemMut(@intCast(m.hotbar_slot)) orelse continue;
-                if (m.predicted_durability >= 0 and held.network_stack_id == m.stack_network_id) {
-                    held.metadata = @intCast(m.predicted_durability);
-                }
+                if (held.network_stack_id != m.stack_network_id) continue;
+                var entropy: std.Random.IoSource = .{ .io = tecton.io };
+                _ = EnchantmentEffects.wearTool(held, 1, entropy.interface());
             },
             else => |a| {
                 Raknet.Logger.WARN("Unhandeled action {any}", .{a});

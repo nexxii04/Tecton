@@ -176,7 +176,7 @@ pub fn fireAspectDurationTicks(weapon: ?*const ItemStack) i32 {
     return FIRE_ASPECT_TICKS_PER_LEVEL * @as(i32, level);
 }
 
-pub fn thornsReflection(armor: *const Container, random: std.Random) f32 {
+pub fn thornsReflection(armor: *Container, random: std.Random) f32 {
     var hardest: f32 = 0;
     var slot: u32 = 0;
     while (slot < armor.getSize()) : (slot += 1) {
@@ -189,8 +189,29 @@ pub fn thornsReflection(armor: *const Container, random: std.Random) f32 {
 
         const damage = THORNS_MIN_DAMAGE + random.float(f32) * (THORNS_MAX_DAMAGE - THORNS_MIN_DAMAGE);
         if (damage > hardest) hardest = damage;
+        const piece = armor.getItemMut(slot) orelse continue;
+        _ = wearTool(piece, 1, random);
     }
     return hardest;
+}
+
+pub fn consumeDurability(unbreaking_level: u8, random: std.Random) bool {
+    if (unbreaking_level == 0) return true;
+    const chance: f32 = 1.0 / (@as(f32, @floatFromInt(unbreaking_level)) + 1.0);
+    return random.float(f32) < chance;
+}
+
+pub fn wearTool(stack: *ItemStack, uses: u8, random: std.Random) u8 {
+    if (stack.item_type.stackable) return 0;
+    const level = ops.level(stack, compat.UNBREAKING) orelse 0;
+    var consumed: u8 = 0;
+    var i: u8 = 0;
+    while (i < uses) : (i += 1) {
+        if (!consumeDurability(level, random)) continue;
+        stack.metadata += 1;
+        consumed += 1;
+    }
+    return consumed;
 }
 
 const testing = std.testing;
@@ -253,6 +274,8 @@ const test_scope = struct {
     pub const fireBurnDuration = test_owner.fireBurnDuration;
     pub const fireAspectDurationTicks = test_owner.fireAspectDurationTicks;
     pub const thornsReflection = test_owner.thornsReflection;
+    pub const consumeDurability = test_owner.consumeDurability;
+    pub const wearTool = test_owner.wearTool;
     pub const testing = test_owner.testing;
     pub const test_helpers = test_owner.test_helpers;
     pub const FixedEntropy = test_owner.FixedEntropy;
@@ -333,4 +356,16 @@ test "mitigate scales the typed protections with an eighty percent floor" {
 
 test "mitigate leaves uncovered causes untouched" {
     try @import("effects_test.zig").Suite(test_scope).case_018();
+}
+
+test "unbreaking pays one use in level plus one times" {
+    try @import("effects_test.zig").Suite(test_scope).case_019();
+}
+
+test "wear skips stackables and spends metadata through the dice" {
+    try @import("effects_test.zig").Suite(test_scope).case_020();
+}
+
+test "a thorns reflection spends one durability on the firing piece" {
+    try @import("effects_test.zig").Suite(test_scope).case_021();
 }
