@@ -22,6 +22,8 @@ pub fn Suite(comptime scope: type) type {
         const blocksArmorRemoval = scope.blocksArmorRemoval;
         const mitigatedDamage = scope.mitigatedDamage;
         const mitigatedFireDamage = scope.mitigatedFireDamage;
+        const Events = scope.Events;
+        const mitigate = scope.mitigate;
         const fireBurnDuration = scope.fireBurnDuration;
         const fireAspectDurationTicks = scope.fireAspectDurationTicks;
         const thornsReflection = scope.thornsReflection;
@@ -128,6 +130,54 @@ pub fn Suite(comptime scope: type) type {
             defer two.deinit();
             _ = two.enchantments.set(compat.FIRE_ASPECT, 2);
             try testing.expectEqual(@as(i32, 160), fireAspectDurationTicks(&two));
+        }
+
+        pub fn case_016() !void {
+            var armor: compat.ArmorAggregate = .empty;
+            armor.protection = 8;
+            armor.fire_protection = 3;
+            armor.blast_protection = 4;
+
+            try testing.expectEqual(mitigatedDamage(&armor, 20.0), mitigate(&armor, .entity_attack, 20.0));
+            try testing.expectEqual(mitigatedFireDamage(&armor, 20.0), mitigate(&armor, .fire, 20.0));
+            try testing.expectEqual(mitigatedFireDamage(&armor, 20.0), mitigate(&armor, .fire_tick, 20.0));
+            try testing.expectEqual(mitigatedFireDamage(&armor, 20.0), mitigate(&armor, .lava, 20.0));
+        }
+
+        pub fn case_017() !void {
+            var armor: compat.ArmorAggregate = .empty;
+
+            armor.blast_protection = 4;
+            try testing.expectApproxEqAbs(@as(f32, 0.68), mitigate(&armor, .explosion, 1.0), 0.0001);
+
+            armor.blast_protection = 0;
+            armor.projectile_protection = 2;
+            try testing.expectApproxEqAbs(@as(f32, 0.84), mitigate(&armor, .projectile, 1.0), 0.0001);
+
+            armor.projectile_protection = 0;
+            armor.feather_falling = 4;
+            try testing.expectApproxEqAbs(@as(f32, 0.52), mitigate(&armor, .fall, 1.0), 0.0001);
+
+            armor.feather_falling = 200;
+            try testing.expectApproxEqAbs(@as(f32, 0.2), mitigate(&armor, .fall, 1.0), 0.0001);
+
+            armor.feather_falling = 0;
+            try testing.expectEqual(@as(f32, 1.0), mitigate(&armor, .fall, 1.0));
+        }
+
+        pub fn case_018() !void {
+            var armor: compat.ArmorAggregate = .empty;
+            armor.protection = 20;
+            armor.fire_protection = 4;
+            armor.blast_protection = 4;
+            armor.projectile_protection = 4;
+            armor.feather_falling = 4;
+
+            try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .thorns, 7.0));
+            try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .magic, 7.0));
+            try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .drowning, 7.0));
+            try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .starvation, 7.0));
+            try testing.expectEqual(@as(f32, 7.0), mitigate(&armor, .void, 7.0));
         }
     };
 }

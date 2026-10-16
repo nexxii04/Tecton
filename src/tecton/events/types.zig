@@ -46,6 +46,14 @@ pub const DamageCause = enum(u8) {
     fire = 1,
     fire_tick = 2,
     lava = 3,
+    fall = 4,
+    explosion = 5,
+    projectile = 6,
+    thorns = 7,
+    magic = 8,
+    drowning = 9,
+    starvation = 10,
+    void = 11,
 };
 
 pub const DamageEvent = struct {

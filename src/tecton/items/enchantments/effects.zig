@@ -4,6 +4,7 @@ const Protocol = @import("protocol");
 const ItemStack = @import("../item_stack.zig").ItemStack;
 const ItemType = @import("../item_type.zig").ItemType;
 const Container = @import("../../container/container.zig").Container;
+const Events = @import("../../events/types.zig");
 const ops = @import("ops.zig");
 const compat = @import("compat.zig");
 
@@ -22,6 +23,10 @@ pub const FIRE_PROTECTION_DAMAGE_PER_LEVEL: f32 = 0.08;
 pub const FIRE_PROTECTION_DURATION_PER_LEVEL: f32 = 0.15;
 pub const FIRE_PROTECTION_MAX_LEVELS: u8 = 4;
 pub const FIRE_ASPECT_TICKS_PER_LEVEL: i32 = 80;
+pub const BLAST_PROTECTION_PER_LEVEL: f32 = 0.08;
+pub const PROJECTILE_PROTECTION_PER_LEVEL: f32 = 0.08;
+pub const FEATHER_FALLING_PER_LEVEL: f32 = 0.12;
+pub const TYPED_PROTECTION_FLOOR: f32 = 0.2;
 pub const THORNS_CHANCE_PER_LEVEL: f32 = 0.15;
 pub const THORNS_MIN_DAMAGE: f32 = 1.0;
 pub const THORNS_MAX_DAMAGE: f32 = 5.0;
@@ -142,6 +147,22 @@ pub fn mitigatedFireDamage(armor: *const compat.ArmorAggregate, amount: f32) f32
     return amount * (1.0 - FIRE_PROTECTION_DAMAGE_PER_LEVEL * levels);
 }
 
+fn scaledMitigation(levels: u8, per_level: f32, amount: f32) f32 {
+    const counted: f32 = @floatFromInt(levels);
+    return amount * @max(TYPED_PROTECTION_FLOOR, 1.0 - per_level * counted);
+}
+
+pub fn mitigate(armor: *const compat.ArmorAggregate, cause: Events.DamageCause, amount: f32) f32 {
+    return switch (cause) {
+        .entity_attack => mitigatedDamage(armor, amount),
+        .fire, .fire_tick, .lava => mitigatedFireDamage(armor, amount),
+        .explosion => scaledMitigation(armor.blast_protection, BLAST_PROTECTION_PER_LEVEL, amount),
+        .projectile => scaledMitigation(armor.projectile_protection, PROJECTILE_PROTECTION_PER_LEVEL, amount),
+        .fall => scaledMitigation(armor.feather_falling, FEATHER_FALLING_PER_LEVEL, amount),
+        else => amount,
+    };
+}
+
 pub fn fireBurnDuration(base_ticks: i32, fire_protection_levels: u8) i32 {
     if (base_ticks <= 0) return 0;
     const levels: f32 = @floatFromInt(@min(fire_protection_levels, FIRE_PROTECTION_MAX_LEVELS));
@@ -223,6 +244,12 @@ const test_scope = struct {
     pub const blocksArmorRemoval = test_owner.blocksArmorRemoval;
     pub const mitigatedDamage = test_owner.mitigatedDamage;
     pub const mitigatedFireDamage = test_owner.mitigatedFireDamage;
+    pub const Events = test_owner.Events;
+    pub const BLAST_PROTECTION_PER_LEVEL = test_owner.BLAST_PROTECTION_PER_LEVEL;
+    pub const PROJECTILE_PROTECTION_PER_LEVEL = test_owner.PROJECTILE_PROTECTION_PER_LEVEL;
+    pub const FEATHER_FALLING_PER_LEVEL = test_owner.FEATHER_FALLING_PER_LEVEL;
+    pub const TYPED_PROTECTION_FLOOR = test_owner.TYPED_PROTECTION_FLOOR;
+    pub const mitigate = test_owner.mitigate;
     pub const fireBurnDuration = test_owner.fireBurnDuration;
     pub const fireAspectDurationTicks = test_owner.fireAspectDurationTicks;
     pub const thornsReflection = test_owner.thornsReflection;
@@ -294,4 +321,16 @@ test "fire protection shaves the fire damage by eight percent a level" {
 
 test "fire aspect burns for four seconds per level" {
     try @import("effects_test.zig").Suite(test_scope).case_015();
+}
+
+test "mitigate routes melee and fire to their legacy formulas" {
+    try @import("effects_test.zig").Suite(test_scope).case_016();
+}
+
+test "mitigate scales the typed protections with an eighty percent floor" {
+    try @import("effects_test.zig").Suite(test_scope).case_017();
+}
+
+test "mitigate leaves uncovered causes untouched" {
+    try @import("effects_test.zig").Suite(test_scope).case_018();
 }

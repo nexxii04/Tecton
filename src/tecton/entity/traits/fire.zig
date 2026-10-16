@@ -199,11 +199,12 @@ fn applyFireDamage(state: *State, entity: *Entity, dimension: *Dimension) void {
     var armor: ArmorAggregate = .empty;
     refreshArmor(entity, &armor);
 
+    const cause = damageCauseFor(state.burn_source);
     var event = Events.DamageEvent{
         .attacker = resolveInstigator(dimension, state),
         .victim = entity,
-        .amount = EnchantmentEffects.mitigatedFireDamage(&armor, FIRE_DAMAGE_PER_HIT),
-        .cause = damageCauseFor(state.burn_source),
+        .amount = EnchantmentEffects.mitigate(&armor, cause, FIRE_DAMAGE_PER_HIT),
+        .cause = cause,
     };
     if (!dimension.world.tecton.events.emit(.Damage, &event)) return;
     entity.fireEvent(.Damage, .{ entity, event.amount });

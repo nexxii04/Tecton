@@ -113,7 +113,7 @@ pub fn handleInventoryTransaction(
                 var damage_event = Events.DamageEvent{
                     .attacker = &player.entity,
                     .victim = target,
-                    .amount = EnchantmentEffects.mitigatedDamage(&armor, impact.damage),
+                    .amount = EnchantmentEffects.mitigate(&armor, .entity_attack, impact.damage),
                     .cause = .entity_attack,
                 };
                 if (!tecton.events.emit(.Damage, &damage_event)) return;

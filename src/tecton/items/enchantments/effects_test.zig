@@ -18,5 +18,8 @@ pub fn Suite(comptime scope: type) type {
         pub const case_013 = Part1.case_013;
         pub const case_014 = Part1.case_014;
         pub const case_015 = Part1.case_015;
+        pub const case_016 = Part1.case_016;
+        pub const case_017 = Part1.case_017;
+        pub const case_018 = Part1.case_018;
     };
 }
