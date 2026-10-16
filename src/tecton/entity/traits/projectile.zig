@@ -6,6 +6,7 @@ const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const broadcast = @import("../../world/dimension/broadcast.zig");
+const Fire = @import("./fire.zig");
 const Health = @import("./health.zig");
 const InventoryTrait = @import("./inventory.zig").InventoryTrait;
 const EnchantmentEffects = @import("../../items/enchantments/effects.zig");
@@ -18,10 +19,13 @@ pub const DRAG: f32 = 0.99;
 pub const HIT_RADIUS: f32 = 0.6;
 pub const MAX_LIFETIME_TICKS: u32 = 1200;
 pub const STUCK_TICKS: u32 = 1200;
+pub const KNOCKBACK_LIFT: f32 = 0.3;
 
 pub const State = struct {
     owner_runtime_id: i64,
     damage: f32,
+    knockback: f32,
+    burn_ticks: i32,
     age: u32,
     stuck_ticks: u32,
     stuck: bool,
@@ -83,6 +87,19 @@ pub fn outlivesFlight(age: u32, stuck_ticks: u32, stuck: bool) bool {
     return age >= MAX_LIFETIME_TICKS;
 }
 
+pub fn knockbackImpulse(direction: Protocol.Vector3f, strength: f32) ?Protocol.Vector3f {
+    if (strength <= 0) return null;
+
+    const flat = @sqrt(direction.x * direction.x + direction.z * direction.z);
+    if (flat <= 0.001) return null;
+
+    return Protocol.Vector3f.init(
+        direction.x / flat * strength,
+        KNOCKBACK_LIFT,
+        direction.z / flat * strength,
+    );
+}
+
 fn markForRemoval(state: *State, entity: *Entity) void {
     state.pending_remove = true;
     const dimension = entity.dimension orelse return;
@@ -94,7 +111,33 @@ fn solidAt(dimension: *Dimension, position: Protocol.Vector3f) bool {
     return !isPassable(permutation.identifier);
 }
 
-fn applyHit(dimension: *Dimension, state: *State, target: *Entity) bool {
+fn broadcastMotion(dimension: *Dimension, entity: *Entity) void {
+    const allocator = dimension.world.tecton.allocator;
+
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
+
+    const packet = Protocol.SetActorMotionPacket{
+        .runtime_entity_id = @bitCast(entity.runtime_id),
+        .motion = entity.motion,
+    };
+    const serialized = packet.serialize(&stream) catch return;
+
+    broadcast.broadcastToEntityViewers(dimension, entity, serialized);
+}
+
+fn applyKnockback(dimension: *Dimension, state: *State, arrow: *Entity, target: *Entity) void {
+    const impulse = knockbackImpulse(arrow.motion, state.knockback) orelse return;
+    target.motion = impulse;
+    broadcastMotion(dimension, target);
+}
+
+fn igniteTarget(dimension: *Dimension, state: *State, target: *Entity) void {
+    if (state.burn_ticks <= 0) return;
+    _ = Fire.ignite(target, .projectile, dimension.getEntity(state.owner_runtime_id), state.burn_ticks);
+}
+
+fn applyHit(dimension: *Dimension, state: *State, arrow: *Entity, target: *Entity) bool {
     const health_state = target.getTraitState(Health.HealthTrait) orelse return false;
 
     const tecton = dimension.world.tecton;
@@ -118,6 +161,9 @@ fn applyHit(dimension: *Dimension, state: *State, target: *Entity) bool {
     if (!tecton.events.emit(.Damage, &damage_event)) return false;
 
     target.fireEvent(.Damage, .{ target, damage_event.amount });
+
+    applyKnockback(dimension, state, arrow, target);
+    igniteTarget(dimension, state, target);
     return true;
 }
 
@@ -128,7 +174,7 @@ fn resolveHit(dimension: *Dimension, state: *State, arrow: *Entity, from: Protoc
         if (target == arrow) continue;
         if (target.runtime_id == state.owner_runtime_id) continue;
         if (!segmentHitsPoint(from, to, target.position, HIT_RADIUS)) continue;
-        if (!applyHit(dimension, state, target)) continue;
+        if (!applyHit(dimension, state, arrow, target)) continue;
         return true;
     }
     return false;
@@ -260,6 +306,28 @@ test "a motionless arrow still measures the distance to the point" {
     const at = Protocol.Vector3f.init(1.0, 2.0, 3.0);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), squaredDistanceToSegment(at, at, at), 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), squaredDistanceToSegment(Protocol.Vector3f.init(1.0, 3.0, 3.0), at, at), 0.0001);
+}
+
+test "the arrow pushes along the line it was flying" {
+    const forward = Protocol.Vector3f.init(0.0, -0.2, 4.0);
+    const impulse = knockbackImpulse(forward, 0.45).?;
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), impulse.x, 0.0001);
+    try std.testing.expectApproxEqAbs(KNOCKBACK_LIFT, impulse.y, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.45), impulse.z, 0.0001);
+
+    const diagonal = knockbackImpulse(Protocol.Vector3f.init(3.0, 0.0, 4.0), 0.3).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.18), diagonal.x, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.24), diagonal.z, 0.0001);
+}
+
+test "an arrow that carries no push pushes nothing" {
+    const forward = Protocol.Vector3f.init(0.0, 0.0, 4.0);
+
+    try std.testing.expect(knockbackImpulse(forward, 0.0) == null);
+    try std.testing.expect(knockbackImpulse(forward, -0.5) == null);
+    try std.testing.expect(knockbackImpulse(Protocol.Vector3f.init(0.0, 4.0, 0.0), 0.3) == null);
+    try std.testing.expect(knockbackImpulse(Protocol.Vector3f.init(0.001, 0.0, 0.0), 0.3) == null);
 }
 
 test "a flying arrow dies on its lifetime and a stuck one on its own clock" {

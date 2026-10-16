@@ -111,22 +111,30 @@ pub fn spawnItemStackEntity(dim: *Dimension, stack: ItemStack, position: Protoco
     return entity;
 }
 
+pub const ArrowSpec = struct {
+    owner_runtime_id: i64,
+    speed: f32,
+    damage: f32,
+    knockback: f32,
+    burn_ticks: i32,
+};
+
 pub fn spawnArrow(
     dim: *Dimension,
     position: Protocol.Vector3f,
     rotation: Protocol.Vector2f,
-    owner_runtime_id: i64,
-    speed: f32,
-    damage: f32,
+    spec: ArrowSpec,
 ) !*Entity {
     const entity_type = EntityTypeRegistry.get(Bow.ARROW_IDENTIFIER) orelse return error.UnknownEntityType;
     const entity = try spawnEntity(dim, entity_type, position);
     entity.rotation = rotation;
-    entity.motion = Bow.launchVelocity(rotation, speed);
+    entity.motion = Bow.launchVelocity(rotation, spec.speed);
 
     const projectile = try ProjectileTrait.create(dim.allocator, .{
-        .owner_runtime_id = owner_runtime_id,
-        .damage = damage,
+        .owner_runtime_id = spec.owner_runtime_id,
+        .damage = spec.damage,
+        .knockback = spec.knockback,
+        .burn_ticks = spec.burn_ticks,
         .age = 0,
         .stuck_ticks = 0,
         .stuck = false,

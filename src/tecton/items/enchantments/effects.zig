@@ -30,6 +30,10 @@ pub const TYPED_PROTECTION_FLOOR: f32 = 0.2;
 pub const THORNS_CHANCE_PER_LEVEL: f32 = 0.15;
 pub const THORNS_MIN_DAMAGE: f32 = 1.0;
 pub const THORNS_MAX_DAMAGE: f32 = 5.0;
+pub const POWER_PER_LEVEL: f32 = 0.25;
+pub const ARROW_BASE_KNOCKBACK: f32 = 0.3;
+pub const PUNCH_PER_LEVEL: f32 = 0.15;
+pub const FLAME_BURN_TICKS: i32 = 100;
 
 const TierDamage = struct {
     tag: []const u8,
@@ -76,6 +80,12 @@ const FAMILY_MAP = std.StaticStringMap(Family).initComptime(.{
 pub const MeleeImpact = struct {
     damage: f32,
     knockback: f32,
+};
+
+pub const ArrowImpact = struct {
+    damage: f32,
+    knockback: f32,
+    burn_ticks: i32,
 };
 
 pub fn familyOf(identifier: []const u8) Family {
@@ -130,6 +140,41 @@ pub fn meleeImpact(weapon: ?*const ItemStack, victim: []const u8) MeleeImpact {
     return .{
         .damage = attackDamage(weapon, victim),
         .knockback = knockbackImpulse(weapon),
+    };
+}
+
+pub fn arrowDamage(bow: ?*const ItemStack, base_damage: f32) f32 {
+    const stack = bow orelse return base_damage;
+    const level = ops.level(stack, compat.POWER) orelse return base_damage;
+    if (level == 0) return base_damage;
+    const levels: f32 = @as(f32, @floatFromInt(level)) + 1.0;
+    return base_damage * (1.0 + POWER_PER_LEVEL * levels);
+}
+
+pub fn arrowKnockback(bow: ?*const ItemStack) f32 {
+    const stack = bow orelse return ARROW_BASE_KNOCKBACK;
+    const level = ops.level(stack, compat.PUNCH) orelse return ARROW_BASE_KNOCKBACK;
+    return ARROW_BASE_KNOCKBACK + PUNCH_PER_LEVEL * @as(f32, @floatFromInt(level));
+}
+
+pub fn flameBurnTicks(bow: ?*const ItemStack) i32 {
+    const stack = bow orelse return 0;
+    const level = ops.level(stack, compat.FLAME) orelse return 0;
+    if (level == 0) return 0;
+    return FLAME_BURN_TICKS;
+}
+
+pub fn infiniteArrows(bow: ?*const ItemStack) bool {
+    const stack = bow orelse return false;
+    const level = ops.level(stack, compat.INFINITY) orelse return false;
+    return level > 0;
+}
+
+pub fn arrowImpact(bow: ?*const ItemStack, base_damage: f32) ArrowImpact {
+    return .{
+        .damage = arrowDamage(bow, base_damage),
+        .knockback = arrowKnockback(bow),
+        .burn_ticks = flameBurnTicks(bow),
     };
 }
 
@@ -285,6 +330,16 @@ const test_scope = struct {
     pub const test_helpers = test_owner.test_helpers;
     pub const FixedEntropy = test_owner.FixedEntropy;
     pub const thornsArmor = test_owner.thornsArmor;
+    pub const ArrowImpact = test_owner.ArrowImpact;
+    pub const POWER_PER_LEVEL = test_owner.POWER_PER_LEVEL;
+    pub const ARROW_BASE_KNOCKBACK = test_owner.ARROW_BASE_KNOCKBACK;
+    pub const PUNCH_PER_LEVEL = test_owner.PUNCH_PER_LEVEL;
+    pub const FLAME_BURN_TICKS = test_owner.FLAME_BURN_TICKS;
+    pub const arrowDamage = test_owner.arrowDamage;
+    pub const arrowKnockback = test_owner.arrowKnockback;
+    pub const flameBurnTicks = test_owner.flameBurnTicks;
+    pub const infiniteArrows = test_owner.infiniteArrows;
+    pub const arrowImpact = test_owner.arrowImpact;
 };
 
 test "the base attack damage follows the tier and blade tags" {
@@ -377,4 +432,20 @@ test "a thorns reflection spends one durability on the firing piece" {
 
 test "curse of vanishing destroys the piece instead of dropping it" {
     try @import("effects_test.zig").Suite(test_scope).case_022();
+}
+
+test "power raises the arrow damage by a quarter per level plus one" {
+    try @import("effects_test.zig").Suite(test_scope).case_023();
+}
+
+test "punch adds an impulse per level on top of the arrow push" {
+    try @import("effects_test.zig").Suite(test_scope).case_024();
+}
+
+test "flame burns for five seconds and does not scale with level" {
+    try @import("effects_test.zig").Suite(test_scope).case_025();
+}
+
+test "infinity keeps the arrow while the shot still demands one" {
+    try @import("effects_test.zig").Suite(test_scope).case_026();
 }

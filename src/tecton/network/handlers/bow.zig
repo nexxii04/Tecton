@@ -42,6 +42,10 @@ pub fn cancelDraw(player: *Player) void {
     player.item_use_started_tick = 0;
 }
 
+pub fn arrowSpend(survival: bool, infinite: bool) bool {
+    return survival and !infinite;
+}
+
 pub fn release(tecton: *Tecton, player: *Player) bool {
     const started = player.item_use_started_tick;
     player.item_use_started_tick = 0;
@@ -58,25 +62,25 @@ pub fn release(tecton: *Tecton, player: *Player) bool {
     const survival = player.gamemode != .Creative;
     var arrow_slot: ?u32 = null;
     if (survival) {
-        arrow_slot = findArrow(&inv_state.container.base) orelse return false;
+        const available = findArrow(&inv_state.container.base) orelse return false;
+        if (arrowSpend(survival, EnchantmentEffects.infiniteArrows(held))) arrow_slot = available;
     }
 
     const speed = Bow.launchSpeed(Bow.chargeAfter(drawn));
-    const damage = Bow.damageFor(speed);
+    const impact = EnchantmentEffects.arrowImpact(held, Bow.damageFor(speed));
     const spawn_position = Protocol.Vector3f.init(
         player.entity.position.x,
         player.entity.position.y,
         player.entity.position.z,
     );
 
-    const arrow = entities.spawnArrow(
-        dimension,
-        spawn_position,
-        player.entity.rotation,
-        player.entity.runtime_id,
-        speed,
-        damage,
-    ) catch return false;
+    const arrow = entities.spawnArrow(dimension, spawn_position, player.entity.rotation, .{
+        .owner_runtime_id = player.entity.runtime_id,
+        .speed = speed,
+        .damage = impact.damage,
+        .knockback = impact.knockback,
+        .burn_ticks = impact.burn_ticks,
+    }) catch return false;
 
     if (arrow_slot) |slot| inv_state.container.base.removeItem(slot, 1);
 
@@ -136,6 +140,13 @@ test "the first stack of arrows is the one the shot spends" {
 
     container.setItem(2, ItemStack.init(allocator, arrows, .{ .stack_size = 1 }));
     try testing.expectEqual(@as(u32, 2), findArrow(&container).?);
+}
+
+test "infinity is the only bow that keeps its arrow" {
+    try testing.expect(arrowSpend(true, false));
+    try testing.expect(!arrowSpend(true, true));
+    try testing.expect(!arrowSpend(false, false));
+    try testing.expect(!arrowSpend(false, true));
 }
 
 test "a draw counts from the tick the bow was used" {

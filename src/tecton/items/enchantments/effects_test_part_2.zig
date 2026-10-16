@@ -35,6 +35,16 @@ pub fn Suite(comptime scope: type) type {
         const FixedEntropy = scope.FixedEntropy;
         const entropy_interface = scope.entropy_interface;
         const thornsArmor = scope.thornsArmor;
+        const ArrowImpact = scope.ArrowImpact;
+        const POWER_PER_LEVEL = scope.POWER_PER_LEVEL;
+        const ARROW_BASE_KNOCKBACK = scope.ARROW_BASE_KNOCKBACK;
+        const PUNCH_PER_LEVEL = scope.PUNCH_PER_LEVEL;
+        const FLAME_BURN_TICKS = scope.FLAME_BURN_TICKS;
+        const arrowDamage = scope.arrowDamage;
+        const arrowKnockback = scope.arrowKnockback;
+        const flameBurnTicks = scope.flameBurnTicks;
+        const infiniteArrows = scope.infiniteArrows;
+        const arrowImpact = scope.arrowImpact;
 
         pub fn case_011() !void {
             const allocator = testing.allocator;
@@ -288,6 +298,116 @@ pub fn Suite(comptime scope: type) type {
             defer doomed.deinit();
             _ = doomed.enchantments.set(compat.CURSE_OF_VANISHING, 1);
             try testing.expect(vanishesOnDeath(&doomed));
+        }
+
+        pub fn case_023() !void {
+            const allocator = testing.allocator;
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:bow", &.{}, false);
+            defer kind.deinit();
+
+            const base: f32 = 5.85;
+            try testing.expectApproxEqAbs(base, arrowDamage(null, base), 0.0001);
+
+            var plain = ItemStack.init(allocator, kind, .{});
+            defer plain.deinit();
+            try testing.expectApproxEqAbs(base, arrowDamage(&plain, base), 0.0001);
+
+            var zero = ItemStack.init(allocator, kind, .{});
+            defer zero.deinit();
+            _ = zero.enchantments.set(compat.POWER, 0);
+            try testing.expectApproxEqAbs(base, arrowDamage(&zero, base), 0.0001);
+
+            var one = ItemStack.init(allocator, kind, .{});
+            defer one.deinit();
+            _ = one.enchantments.set(compat.POWER, 1);
+            try testing.expectApproxEqAbs(@as(f32, 8.775), arrowDamage(&one, base), 0.0001);
+
+            var five = ItemStack.init(allocator, kind, .{});
+            defer five.deinit();
+            _ = five.enchantments.set(compat.POWER, 5);
+            try testing.expectApproxEqAbs(@as(f32, 14.625), arrowDamage(&five, base), 0.0001);
+        }
+
+        pub fn case_024() !void {
+            const allocator = testing.allocator;
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:bow", &.{}, false);
+            defer kind.deinit();
+
+            try testing.expectApproxEqAbs(ARROW_BASE_KNOCKBACK, arrowKnockback(null), 0.0001);
+
+            var plain = ItemStack.init(allocator, kind, .{});
+            defer plain.deinit();
+            try testing.expectApproxEqAbs(ARROW_BASE_KNOCKBACK, arrowKnockback(&plain), 0.0001);
+
+            var one = ItemStack.init(allocator, kind, .{});
+            defer one.deinit();
+            _ = one.enchantments.set(compat.PUNCH, 1);
+            try testing.expectApproxEqAbs(@as(f32, 0.45), arrowKnockback(&one), 0.0001);
+
+            var two = ItemStack.init(allocator, kind, .{});
+            defer two.deinit();
+            _ = two.enchantments.set(compat.PUNCH, 2);
+            try testing.expectApproxEqAbs(@as(f32, 0.6), arrowKnockback(&two), 0.0001);
+            try testing.expectApproxEqAbs(PUNCH_PER_LEVEL, arrowKnockback(&two) - arrowKnockback(&one), 0.0001);
+        }
+
+        pub fn case_025() !void {
+            const allocator = testing.allocator;
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:bow", &.{}, false);
+            defer kind.deinit();
+
+            try testing.expectEqual(@as(i32, 0), flameBurnTicks(null));
+
+            var plain = ItemStack.init(allocator, kind, .{});
+            defer plain.deinit();
+            try testing.expectEqual(@as(i32, 0), flameBurnTicks(&plain));
+
+            var one = ItemStack.init(allocator, kind, .{});
+            defer one.deinit();
+            _ = one.enchantments.set(compat.FLAME, 1);
+            try testing.expectEqual(FLAME_BURN_TICKS, flameBurnTicks(&one));
+            try testing.expectEqual(@as(i32, 100), flameBurnTicks(&one));
+
+            var two = ItemStack.init(allocator, kind, .{});
+            defer two.deinit();
+            _ = two.enchantments.set(compat.FLAME, 2);
+            try testing.expectEqual(FLAME_BURN_TICKS, flameBurnTicks(&two));
+        }
+
+        pub fn case_026() !void {
+            const allocator = testing.allocator;
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:bow", &.{}, false);
+            defer kind.deinit();
+
+            const base: f32 = 5.85;
+            try testing.expect(!infiniteArrows(null));
+
+            var plain = ItemStack.init(allocator, kind, .{});
+            defer plain.deinit();
+            try testing.expect(!infiniteArrows(&plain));
+
+            const plain_impact: ArrowImpact = arrowImpact(&plain, base);
+            try testing.expectApproxEqAbs(base, plain_impact.damage, 0.0001);
+            try testing.expectApproxEqAbs(ARROW_BASE_KNOCKBACK, plain_impact.knockback, 0.0001);
+            try testing.expectEqual(@as(i32, 0), plain_impact.burn_ticks);
+
+            var loaded = ItemStack.init(allocator, kind, .{});
+            defer loaded.deinit();
+            _ = loaded.enchantments.set(compat.POWER, 2);
+            _ = loaded.enchantments.set(compat.PUNCH, 1);
+            _ = loaded.enchantments.set(compat.FLAME, 1);
+            _ = loaded.enchantments.set(compat.INFINITY, 1);
+
+            try testing.expect(infiniteArrows(&loaded));
+
+            const impact: ArrowImpact = arrowImpact(&loaded, base);
+            try testing.expectApproxEqAbs(@as(f32, 10.2375), impact.damage, 0.0001);
+            try testing.expectApproxEqAbs(@as(f32, 0.45), impact.knockback, 0.0001);
+            try testing.expectEqual(FLAME_BURN_TICKS, impact.burn_ticks);
         }
     };
 }
