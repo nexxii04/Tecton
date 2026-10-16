@@ -5,12 +5,16 @@ const Raknet = @import("Raknet");
 const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Player = @import("../../player/player.zig").Player;
+const PlayerMath = @import("../../player/player.zig");
 const NetworkHandler = @import("../../player/player.zig").NetworkHandler;
 const Container = @import("../../container/container.zig").Container;
 const EntityContainer = @import("../../container/entity_container.zig").EntityContainer;
 const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const ItemType = @import("../../items/item_type.zig").ItemType;
 const EnchantmentEffects = @import("../../items/enchantments/effects.zig");
+const entities = @import("../../world/dimension/entities.zig");
+
+pub const DEATH_DROP_PICKUP_DELAY: u32 = 40;
 
 pub const State = struct {
     container: EntityContainer,
@@ -55,6 +59,58 @@ fn onTick(state: *State, _: *Entity) void {
 
 fn onContainerUpdate(state: *State, _: *Entity, container: *Container) void {
     if (container != &state.container.base) return;
+}
+
+pub const MAX_DEATH_DROPS: u8 = 40;
+
+pub fn dropsOnDeath(gamemode: Protocol.GameMode) bool {
+    return PlayerMath.damageable(gamemode);
+}
+
+pub const DeathDrops = struct {
+    kept: [MAX_DEATH_DROPS]ItemStack = undefined,
+    kept_len: u8 = 0,
+    destroyed: u8 = 0,
+};
+
+pub fn drainForDeath(container: *Container, out: *DeathDrops) void {
+    var slot: u32 = 0;
+    while (slot < container.getSize()) : (slot += 1) {
+        const stack = container.takeItem(slot, std.math.maxInt(u16)) orelse continue;
+        if (EnchantmentEffects.vanishesOnDeath(&stack)) {
+            var doomed = stack;
+            doomed.deinit();
+            out.destroyed += 1;
+            continue;
+        }
+        out.kept[out.kept_len] = stack;
+        out.kept_len += 1;
+    }
+}
+
+fn onDeath(state: *State, entity: *Entity) void {
+    const player = getPlayer(entity) orelse return;
+    if (!dropsOnDeath(player.gamemode)) return;
+
+    const dimension = entity.dimension orelse return;
+    const spawn_position = PlayerMath.playerDropSpawnPosition(entity.position);
+    const velocity = PlayerMath.playerDropVelocity(entity.rotation);
+
+    var drops = DeathDrops{};
+    drainForDeath(&state.container.base, &drops);
+    if (state.armor) |*armor| {
+        drainForDeath(armor, &drops);
+        broadcastArmor(player.network, player, state);
+    }
+
+    for (drops.kept[0..drops.kept_len]) |stack| {
+        _ = entities.spawnItemStackEntity(dimension, stack, spawn_position, DEATH_DROP_PICKUP_DELAY, velocity) catch {
+            var dropped = stack;
+            dropped.deinit();
+        };
+    }
+
+    state.container.update();
 }
 
 pub fn getHeldItem(state: *const State) ?*const ItemStack {
@@ -254,6 +310,7 @@ pub const InventoryTrait = EntityTrait(State, .{
     .on_detach = onDetach,
     .on_spawn = onSpawn,
     .on_tick = onTick,
+    .on_death = onDeath,
     .on_container_update = onContainerUpdate,
 });
 
@@ -272,6 +329,10 @@ const test_scope = struct {
     pub const armorSlotFor = test_owner.armorSlotFor;
     pub const swapIntoArmor = test_owner.swapIntoArmor;
     pub const testArmorPiece = test_owner.testArmorPiece;
+    pub const DEATH_DROP_PICKUP_DELAY = test_owner.DEATH_DROP_PICKUP_DELAY;
+    pub const DeathDrops = test_owner.DeathDrops;
+    pub const drainForDeath = test_owner.drainForDeath;
+    pub const dropsOnDeath = test_owner.dropsOnDeath;
 };
 
 test "selectHeldSlot updates held slot without packet side effects" {
@@ -292,4 +353,12 @@ test "equipping into an empty armor slot leaves the hotbar slot cleared" {
 
 test "a right-click equip swaps the piece with the armor it lands on" {
     try @import("inventory_test.zig").Suite(test_scope).case_004();
+}
+
+test "only survival and adventure players drop their inventory on death" {
+    try @import("inventory_test.zig").Suite(test_scope).case_005();
+}
+
+test "the death drain keeps plain pieces and destroys the vanishing ones" {
+    try @import("inventory_test.zig").Suite(test_scope).case_006();
 }

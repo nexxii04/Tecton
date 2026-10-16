@@ -24,5 +24,6 @@ pub fn Suite(comptime scope: type) type {
         pub const case_019 = Part1.case_019;
         pub const case_020 = Part1.case_020;
         pub const case_021 = Part1.case_021;
+        pub const case_022 = Part1.case_022;
     };
 }

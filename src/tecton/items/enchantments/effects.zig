@@ -137,6 +137,10 @@ pub fn blocksArmorRemoval(item: *const ItemStack) bool {
     return ops.has(item, compat.CURSE_OF_BINDING);
 }
 
+pub fn vanishesOnDeath(item: *const ItemStack) bool {
+    return ops.has(item, compat.CURSE_OF_VANISHING);
+}
+
 pub fn mitigatedDamage(armor: *const compat.ArmorAggregate, amount: f32) f32 {
     const levels: f32 = @floatFromInt(@min(armor.protection, PROTECTION_MAX_LEVELS));
     return amount * (1.0 - PROTECTION_PER_LEVEL * levels);
@@ -263,6 +267,7 @@ const test_scope = struct {
     pub const knockbackImpulse = test_owner.knockbackImpulse;
     pub const meleeImpact = test_owner.meleeImpact;
     pub const blocksArmorRemoval = test_owner.blocksArmorRemoval;
+    pub const vanishesOnDeath = test_owner.vanishesOnDeath;
     pub const mitigatedDamage = test_owner.mitigatedDamage;
     pub const mitigatedFireDamage = test_owner.mitigatedFireDamage;
     pub const Events = test_owner.Events;
@@ -368,4 +373,8 @@ test "wear skips stackables and spends metadata through the dice" {
 
 test "a thorns reflection spends one durability on the firing piece" {
     try @import("effects_test.zig").Suite(test_scope).case_021();
+}
+
+test "curse of vanishing destroys the piece instead of dropping it" {
+    try @import("effects_test.zig").Suite(test_scope).case_022();
 }

@@ -6,9 +6,13 @@ const Raknet = @import("Raknet");
 
 const inventory = @import("../../entity/traits/inventory.zig");
 const InventoryTrait = inventory.InventoryTrait;
+const Health = @import("../../entity/traits/health.zig");
+const EnchantmentEffects = @import("../../items/enchantments/effects.zig");
+const ArmorAggregate = @import("../../items/enchantments/compat.zig").ArmorAggregate;
 const Events = @import("../../events/types.zig");
 const ItemType = @import("../../items/item_type.zig").ItemType;
 const Player = @import("../../player/player.zig").Player;
+const PlayerMath = @import("../../player/player.zig");
 const BlockPermutation = @import("../../world/block/block_permutation.zig").BlockPermutation;
 const BreakSpeed = @import("../../world/block/break_speed.zig").BreakSpeed;
 const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").resolveWithPlacement;
@@ -55,6 +59,8 @@ pub fn handlePlayerAuthInput(
     player.entity.head_yaw = packet.rotation.z;
     tecton.syncEcsEntity(&player.entity);
 
+    applyFallDamage(tecton, player, previous_position.y, packet.input_data.hasFlag(.VerticalCollision));
+
     {
         const input = packet.input_data;
         var pose_input = false;
@@ -95,6 +101,47 @@ pub fn handlePlayerAuthInput(
         .rotation = .{ player.entity.rotation.x, player.entity.rotation.y, player.entity.head_yaw },
         .on_ground = player.on_ground,
     };
+}
+
+fn applyFallDamage(tecton: *Tecton, player: *Player, previous_y: f32, grounded: bool) void {
+    const fallen = player.falling_distance;
+    player.falling_distance = PlayerMath.trackFall(fallen, previous_y, player.entity.position.y, grounded);
+
+    if (!bodiesLand(grounded, fallen)) return;
+    if (!PlayerMath.damageable(player.gamemode)) return;
+
+    const health_state = player.entity.getTraitState(Health.HealthTrait) orelse return;
+    if (Health.isInvulnerable(health_state, tecton.tick_count)) return;
+
+    var armor: ArmorAggregate = .empty;
+    if (player.entity.getTraitState(InventoryTrait)) |inv_state| {
+        if (inv_state.armor) |*pieces| armor.refresh(pieces);
+    }
+
+    const amount = EnchantmentEffects.mitigate(&armor, .fall, PlayerMath.fallDamage(fallen));
+    if (amount <= 0) return;
+
+    var event = Events.DamageEvent{
+        .attacker = null,
+        .victim = &player.entity,
+        .amount = amount,
+        .cause = .fall,
+    };
+    if (!tecton.events.emit(.Damage, &event)) return;
+
+    player.entity.fireEvent(.Damage, .{ &player.entity, event.amount });
+}
+
+pub fn bodiesLand(grounded: bool, fallen: f32) bool {
+    return grounded and fallen > 0;
+}
+
+test "only a grounded body that fell anything lands" {
+    try std.testing.expect(bodiesLand(true, 4.5));
+    try std.testing.expect(bodiesLand(true, 0.01));
+    try std.testing.expect(!bodiesLand(false, 4.5));
+    try std.testing.expect(!bodiesLand(true, 0));
+    try std.testing.expect(!bodiesLand(true, -1));
 }
 
 fn applyPoseTransition(start: bool, stop: bool, state: *bool) bool {

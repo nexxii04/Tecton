@@ -20,6 +20,7 @@ pub fn Suite(comptime scope: type) type {
         const knockbackImpulse = scope.knockbackImpulse;
         const meleeImpact = scope.meleeImpact;
         const blocksArmorRemoval = scope.blocksArmorRemoval;
+        const vanishesOnDeath = scope.vanishesOnDeath;
         const mitigatedDamage = scope.mitigatedDamage;
         const mitigatedFireDamage = scope.mitigatedFireDamage;
         const Events = scope.Events;
@@ -158,6 +159,15 @@ pub fn Suite(comptime scope: type) type {
             try testing.expectApproxEqAbs(@as(f32, 0.84), mitigate(&armor, .projectile, 1.0), 0.0001);
 
             armor.projectile_protection = 0;
+            armor.feather_falling = 1;
+            try testing.expectApproxEqAbs(@as(f32, 0.88), mitigate(&armor, .fall, 1.0), 0.0001);
+
+            armor.feather_falling = 2;
+            try testing.expectApproxEqAbs(@as(f32, 0.76), mitigate(&armor, .fall, 1.0), 0.0001);
+
+            armor.feather_falling = 3;
+            try testing.expectApproxEqAbs(@as(f32, 0.64), mitigate(&armor, .fall, 1.0), 0.0001);
+
             armor.feather_falling = 4;
             try testing.expectApproxEqAbs(@as(f32, 0.52), mitigate(&armor, .fall, 1.0), 0.0001);
 
@@ -255,6 +265,29 @@ pub fn Suite(comptime scope: type) type {
             var full = FixedEntropy{ .byte = 0xff };
             try testing.expectEqual(@as(f32, 0.0), thornsReflection(&calm, entropy_interface(&full)));
             try testing.expectEqual(@as(u32, 0), calm.getItem(3).?.metadata);
+        }
+
+        pub fn case_022() !void {
+            const allocator = testing.allocator;
+
+            const kind = try test_helpers.itemType(allocator, "minecraft:test_effects_vanishing", &.{"minecraft:is_armor"}, false);
+            defer kind.deinit();
+
+            var plain = ItemStack.init(allocator, kind, .{});
+            defer plain.deinit();
+            try testing.expect(!vanishesOnDeath(&plain));
+
+            _ = plain.enchantments.set(compat.CURSE_OF_BINDING, 1);
+            try testing.expect(!vanishesOnDeath(&plain));
+
+            _ = plain.enchantments.set(compat.CURSE_OF_VANISHING, 1);
+            try testing.expect(vanishesOnDeath(&plain));
+            try testing.expect(blocksArmorRemoval(&plain));
+
+            var doomed = ItemStack.init(allocator, kind, .{});
+            defer doomed.deinit();
+            _ = doomed.enchantments.set(compat.CURSE_OF_VANISHING, 1);
+            try testing.expect(vanishesOnDeath(&doomed));
         }
     };
 }

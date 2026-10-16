@@ -63,6 +63,26 @@ pub fn withinAttackReach(attacker: Protocol.Vector3f, target: Protocol.Vector3f)
     return dx * dx + dy * dy + dz * dz <= MAX_ATTACK_REACH * MAX_ATTACK_REACH;
 }
 
+pub const FALL_DAMAGE_GRACE: f32 = 3.0;
+pub const FALL_DAMAGE_PER_BLOCK: f32 = 1.0;
+
+/// Bedrock grants a three-block exemption and then one point per block past it.
+pub fn fallDamage(blocks_fallen: f32) f32 {
+    if (!(blocks_fallen > FALL_DAMAGE_GRACE)) return 0;
+    return @ceil((blocks_fallen - FALL_DAMAGE_GRACE) * FALL_DAMAGE_PER_BLOCK);
+}
+
+pub const MAX_TICK_DESCENT: f32 = 4.0;
+
+/// A drop bigger than any tick of falling is a teleport, not a fall.
+pub fn trackFall(distance: f32, previous_y: f32, new_y: f32, grounded: bool) f32 {
+    if (grounded) return 0;
+    if (new_y >= previous_y) return distance;
+    const drop = previous_y - new_y;
+    if (drop > MAX_TICK_DESCENT) return 0;
+    return distance + drop;
+}
+
 pub fn playerDropVelocity(rotation: Protocol.Vector2f) Protocol.Vector3f {
     const yaw = rotation.y * std.math.pi / 180.0;
     const pitch = rotation.x * std.math.pi / 180.0;
@@ -103,6 +123,7 @@ pub const Player = struct {
     last_broadcast: MoveDelta.LastBroadcast = .{},
     broadcast_band: ?u8 = null,
     on_ground: bool = true,
+    falling_distance: f32 = 0,
     pending_move: ?MoveDelta.State = null,
     gliding: bool = false,
     swimming: bool = false,
@@ -538,6 +559,10 @@ const test_scope = struct {
     pub const MAX_ATTACK_REACH = test_owner.MAX_ATTACK_REACH;
     pub const withinAttackReach = test_owner.withinAttackReach;
     pub const playerDropVelocity = test_owner.playerDropVelocity;
+    pub const FALL_DAMAGE_GRACE = test_owner.FALL_DAMAGE_GRACE;
+    pub const MAX_TICK_DESCENT = test_owner.MAX_TICK_DESCENT;
+    pub const fallDamage = test_owner.fallDamage;
+    pub const trackFall = test_owner.trackFall;
 };
 
 test "only survival and adventure players take damage" {
@@ -550,4 +575,12 @@ test "an attack has to be within reach of the attacker" {
 
 test "player drop velocity matches pocketmine direction toss" {
     try @import("player_test.zig").Suite(test_scope).case_002();
+}
+
+test "a fall shorter than three blocks costs nothing" {
+    try @import("player_test.zig").Suite(test_scope).case_003();
+}
+
+test "the fall tracker only counts the descent and clears on landing" {
+    try @import("player_test.zig").Suite(test_scope).case_004();
 }

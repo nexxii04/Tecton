@@ -13,6 +13,10 @@ pub fn Suite(comptime scope: type) type {
         const armorSlotFor = scope.armorSlotFor;
         const swapIntoArmor = scope.swapIntoArmor;
         const testArmorPiece = scope.testArmorPiece;
+        const DeathDrops = scope.DeathDrops;
+        const drainForDeath = scope.drainForDeath;
+        const dropsOnDeath = scope.dropsOnDeath;
+        const Enchantments = @import("../../items/enchantments/compat.zig");
 
         pub fn case_000() !void {
             const allocator = std.testing.allocator;
@@ -161,6 +165,58 @@ pub fn Suite(comptime scope: type) type {
             state.container.base.setItem(3, ItemStack.init(allocator, sword, .{}));
             try std.testing.expectEqual(@as(?u8, null), swapIntoArmor(&state, 3));
             try std.testing.expectEqual(@as(i32, 33), state.container.base.getItem(3).?.item_type.network_id);
+        }
+
+        pub fn case_005() !void {
+            try std.testing.expect(dropsOnDeath(.Survival));
+            try std.testing.expect(dropsOnDeath(.Adventure));
+            try std.testing.expect(!dropsOnDeath(.Creative));
+            try std.testing.expect(!dropsOnDeath(.Spectator));
+            try std.testing.expect(!dropsOnDeath(.CreativeSpectator));
+            try std.testing.expect(!dropsOnDeath(.SurvivalSpectator));
+        }
+
+        pub fn case_006() !void {
+            const allocator = std.testing.allocator;
+            try ItemType.initRegistry(allocator);
+            defer ItemType.deinitRegistry();
+
+            const sword = try testArmorPiece(allocator, "minecraft:test_death_sword", 51);
+            const bound = try testArmorPiece(allocator, "minecraft:test_death_boots", 52);
+            const doomed = try testArmorPiece(allocator, "minecraft:test_death_helmet", 53);
+
+            var state = State{
+                .container = try EntityContainer.init(allocator, undefined, .Inventory, 36),
+                .armor = try Container.init(allocator, .Inventory, 4),
+                .selected_slot = 0,
+                .opened = false,
+            };
+            defer state.container.deinit();
+            defer if (state.armor) |*armor| armor.deinit();
+
+            state.container.base.setItem(0, ItemStack.init(allocator, sword, .{}));
+
+            var bound_piece = ItemStack.init(allocator, bound, .{});
+            _ = bound_piece.enchantments.set(Enchantments.CURSE_OF_BINDING, 1);
+            state.container.base.setItem(1, bound_piece);
+
+            var doomed_piece = ItemStack.init(allocator, doomed, .{});
+            _ = doomed_piece.enchantments.set(Enchantments.CURSE_OF_VANISHING, 1);
+            state.armor.?.setItem(0, doomed_piece);
+
+            var drops = DeathDrops{};
+            drainForDeath(&state.container.base, &drops);
+            drainForDeath(&state.armor.?, &drops);
+
+            try std.testing.expectEqual(@as(u8, 2), drops.kept_len);
+            try std.testing.expectEqual(@as(u8, 1), drops.destroyed);
+            try std.testing.expectEqual(@as(i32, 51), drops.kept[0].item_type.network_id);
+            try std.testing.expectEqual(@as(i32, 52), drops.kept[1].item_type.network_id);
+            try std.testing.expectEqual(@as(?*const ItemStack, null), state.container.base.getItem(0));
+            try std.testing.expectEqual(@as(?*const ItemStack, null), state.container.base.getItem(1));
+            try std.testing.expectEqual(@as(?*const ItemStack, null), state.armor.?.getItem(0));
+
+            for (drops.kept[0..drops.kept_len]) |*kept| kept.deinit();
         }
     };
 }
