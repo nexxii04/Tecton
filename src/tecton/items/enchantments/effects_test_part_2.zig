@@ -306,7 +306,7 @@ pub fn Suite(comptime scope: type) type {
             const kind = try test_helpers.itemType(allocator, "minecraft:bow", &.{}, false);
             defer kind.deinit();
 
-            const base: f32 = 5.85;
+            const base: f32 = 6.0;
             try testing.expectApproxEqAbs(base, arrowDamage(null, base), 0.0001);
 
             var plain = ItemStack.init(allocator, kind, .{});
@@ -321,12 +321,12 @@ pub fn Suite(comptime scope: type) type {
             var one = ItemStack.init(allocator, kind, .{});
             defer one.deinit();
             _ = one.enchantments.set(compat.POWER, 1);
-            try testing.expectApproxEqAbs(@as(f32, 8.775), arrowDamage(&one, base), 0.0001);
+            try testing.expectApproxEqAbs(@as(f32, 9.0), arrowDamage(&one, base), 0.0001);
 
             var five = ItemStack.init(allocator, kind, .{});
             defer five.deinit();
             _ = five.enchantments.set(compat.POWER, 5);
-            try testing.expectApproxEqAbs(@as(f32, 14.625), arrowDamage(&five, base), 0.0001);
+            try testing.expectApproxEqAbs(@as(f32, 15.0), arrowDamage(&five, base), 0.0001);
         }
 
         pub fn case_024() !void {
@@ -383,7 +383,7 @@ pub fn Suite(comptime scope: type) type {
             const kind = try test_helpers.itemType(allocator, "minecraft:bow", &.{}, false);
             defer kind.deinit();
 
-            const base: f32 = 5.85;
+            const base: f32 = 6.0;
             try testing.expect(!infiniteArrows(null));
 
             var plain = ItemStack.init(allocator, kind, .{});
@@ -405,7 +405,7 @@ pub fn Suite(comptime scope: type) type {
             try testing.expect(infiniteArrows(&loaded));
 
             const impact: ArrowImpact = arrowImpact(&loaded, base);
-            try testing.expectApproxEqAbs(@as(f32, 10.2375), impact.damage, 0.0001);
+            try testing.expectApproxEqAbs(@as(f32, 10.5), impact.damage, 0.0001);
             try testing.expectApproxEqAbs(@as(f32, 0.45), impact.knockback, 0.0001);
             try testing.expectEqual(FLAME_BURN_TICKS, impact.burn_ticks);
         }
