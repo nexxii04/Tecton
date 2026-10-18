@@ -257,7 +257,7 @@ fn workerReadBlockData(
 
             const sc_y: i32 = @as(i32, @intCast(si)) - @as(i32, @intCast(offset));
             for (0..4096) |pos_idx| {
-                const palette_idx = layer.blocks[pos_idx];
+                const palette_idx = layer.paletteIndexAt(pos_idx);
                 if (!trait_palette.contains(palette_idx)) continue;
 
                 const bx: i32 = @intCast((pos_idx >> 8) & 0xf);

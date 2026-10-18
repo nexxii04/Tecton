@@ -1,12 +1,17 @@
 const std = @import("std");
 const SubChunk = @import("./subchunk.zig").SubChunk;
 const BiomeStorage = @import("./storage/biome_storage.zig").BiomeStorage;
+const BlockStorage = @import("./storage/block_storage.zig").BlockStorage;
 const BlockPermutation = @import("../block/block_permutation.zig").BlockPermutation;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const DimensionType = @import("protocol").DimensionType;
 
 pub const MAX_SUBCHUNKS: usize = 24;
 pub const OVERWORLD_OFFSET: usize = 4;
+
+pub const empty_layer_byte_budget: usize = 512;
+pub const empty_subchunk_byte_budget: usize = 1024;
+pub const superflat_chunk_byte_budget: usize = 20 * 1024;
 
 const COLUMN_COUNT: usize = 16 * 16;
 
@@ -66,23 +71,19 @@ pub const Chunk = struct {
         if (self.subchunks[idx]) |sc| return sc;
         const offset = yOffset(self.dimension);
         const sc = try self.allocator.create(SubChunk);
-        sc.* = try SubChunk.init(self.allocator, @intCast(@as(i32, @intCast(idx)) - @as(i32, @intCast(offset))));
+        sc.* = SubChunk.init(self.allocator, @intCast(@as(i32, @intCast(idx)) - @as(i32, @intCast(offset))));
         self.subchunks[idx] = sc;
         return sc;
     }
 
     pub fn getPermutation(self: *Chunk, x: i32, y: i32, z: i32, layer: usize) !*BlockPermutation {
-        const idx = self.resolveIndex(y) orelse return error.OutOfBounds;
-        const sc = try self.getOrCreateSubChunk(idx);
-        const state = try sc.getState(@intCast(x & 0xf), @intCast(@as(u32, @bitCast(y)) & 0xf), @intCast(z & 0xf), layer);
-        return BlockPermutation.getByNetworkId(state) orelse return error.UnknownPermutation;
+        return self.getPermutationReadOnly(x, y, z, layer);
     }
 
     pub fn getPermutationReadOnly(self: *const Chunk, x: i32, y: i32, z: i32, layer: usize) !*BlockPermutation {
         const idx = self.resolveIndex(y) orelse return error.OutOfBounds;
         const sc = self.subchunks[idx] orelse return BlockPermutation.getByNetworkId(0) orelse error.UnknownPermutation;
-        if (layer >= sc.layers.items.len) return BlockPermutation.getByNetworkId(0) orelse error.UnknownPermutation;
-        const state = sc.layers.items[layer].getState(@intCast(x & 0xf), @intCast(@as(u32, @bitCast(y)) & 0xf), @intCast(z & 0xf));
+        const state = sc.getState(@intCast(x & 0xf), @intCast(@as(u32, @bitCast(y)) & 0xf), @intCast(z & 0xf), layer);
         return BlockPermutation.getByNetworkId(state) orelse return error.UnknownPermutation;
     }
 
@@ -127,6 +128,14 @@ pub const Chunk = struct {
 
     pub fn invalidateHeightmap(self: *Chunk) void {
         @memset(&self.heightmap, HEIGHTMAP_UNCOMPUTED);
+    }
+
+    pub fn bytesUsed(self: *const Chunk) usize {
+        var total: usize = @sizeOf(Chunk);
+        for (self.subchunks) |maybe_sc| {
+            if (maybe_sc) |sc| total += sc.bytesUsed();
+        }
+        return total;
     }
 
     pub fn getSubChunkSendCount(self: *const Chunk) usize {
@@ -254,6 +263,81 @@ test "sky exposure looks past the two block grace" {
 
     try chunk.setPermutation(1, 66, 1, blocks.air, 0);
     try testing.expect(chunk.isSkyExposed(1, 64, 1));
+}
+
+test "a superflat chunk stays inside the per-chunk byte budget" {
+    const allocator = testing.allocator;
+    const blocks = try registerTestBlocks(allocator);
+    defer deinitTestBlocks();
+
+    var layer = try BlockStorage.init(allocator);
+    defer layer.deinit();
+    try testing.expect(layer.heapBytes() <= empty_layer_byte_budget);
+    try testing.expectEqual(0, layer.getState(3, 3, 3));
+    try layer.setState(3, 3, 3, blocks.air.network_id);
+    try testing.expect(layer.heapBytes() <= empty_layer_byte_budget);
+
+    var sub = SubChunk.init(allocator, 0);
+    defer sub.deinit();
+    try testing.expect(sub.bytesUsed() <= empty_subchunk_byte_budget);
+    try testing.expectEqual(@as(usize, 0), sub.biomes.heapBytes());
+
+    var chunk = Chunk.init(allocator, 0, 0, .Overworld);
+    defer chunk.deinit();
+
+    try testing.expect(chunk.bytesUsed() <= superflat_chunk_byte_budget);
+    try testing.expect(chunk.subchunks[4 + 12] == null);
+    try testing.expectEqualStrings("minecraft:air", (try chunk.getPermutation(5, 200, 5, 0)).identifier);
+    try testing.expect(chunk.subchunks[4 + 12] == null);
+
+    try chunk.setPermutation(0, 64, 0, blocks.stone, 0);
+    try chunk.setPermutation(15, 64, 15, blocks.stone, 0);
+
+    const sc = chunk.subchunks[8].?;
+    try testing.expectEqual(@as(usize, 1), sc.layers.items.len);
+    try testing.expectEqual(@as(usize, 2), sc.layers.items[0].paletteSlice().len);
+    try testing.expect(sc.layers.items[0].heapBytes() <= 1024);
+    try testing.expect(chunk.bytesUsed() <= superflat_chunk_byte_budget);
+
+    try testing.expectEqual(0, sc.getState(1, 1, 1, 1));
+    try testing.expectEqual(@as(usize, 1), sc.layers.items.len);
+
+    try testing.expectEqual(@as(usize, 0), sc.biomes.heapBytes());
+    try testing.expectEqual(@as(u32, 0), sc.getBiome(1, 1, 1));
+    try sc.setBiome(1, 1, 1, 7);
+    try testing.expectEqual(@as(u32, 7), sc.getBiome(1, 1, 1));
+    try testing.expectEqual(@as(u32, 0), sc.getBiome(2, 1, 1));
+}
+
+test "packed block storage round-trips through the wire format" {
+    const allocator = testing.allocator;
+    const blocks = try registerTestBlocks(allocator);
+    defer deinitTestBlocks();
+
+    var storage = try BlockStorage.init(allocator);
+    defer storage.deinit();
+
+    try storage.setState(0, 0, 0, blocks.stone.network_id);
+    for (0..40) |i| {
+        try storage.setState(@intCast(i & 0xf), @intCast(i >> 4), 3, @intCast(100 + i));
+    }
+    try testing.expect(storage.heapBytes() <= 4096);
+
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
+    try storage.serialize(&stream);
+
+    var reader = BinaryStream.init(allocator, stream.getBuffer(), null);
+    var decoded = try BlockStorage.deserialize(&reader, allocator);
+    defer decoded.deinit();
+
+    for (0..4096) |pos| {
+        try testing.expectEqual(storage.paletteIndexAt(pos), decoded.paletteIndexAt(pos));
+        const bx: u8 = @intCast((pos >> 8) & 0xf);
+        const by: u8 = @intCast(pos & 0xf);
+        const bz: u8 = @intCast((pos >> 4) & 0xf);
+        try testing.expectEqual(storage.getState(bx, by, bz), decoded.getState(bx, by, bz));
+    }
 }
 
 test "a chunk without the overworld offset keeps its own build range" {

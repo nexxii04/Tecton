@@ -187,7 +187,7 @@ pub fn Suite(comptime scope: type) type {
                         alloc.destroy(old_sc);
                     }
                     const sc = try alloc.create(SubChunk);
-                    sc.* = try SubChunk.init(alloc, index);
+                    sc.* = SubChunk.init(alloc, index);
                     c.subchunks[slot] = sc;
                     c.invalidateHeightmap();
                     c.dirty = true;

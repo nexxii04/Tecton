@@ -12,13 +12,13 @@ pub const SubChunk = struct {
     layers: std.ArrayList(BlockStorage),
     biomes: BiomeStorage,
 
-    pub fn init(allocator: std.mem.Allocator, index: i8) !SubChunk {
+    pub fn init(allocator: std.mem.Allocator, index: i8) SubChunk {
         return SubChunk{
             .allocator = allocator,
             .version = VERSION,
             .index = index,
             .layers = .{ .items = &.{}, .capacity = 0 },
-            .biomes = try BiomeStorage.init(allocator),
+            .biomes = BiomeStorage.init(allocator),
         };
     }
 
@@ -42,14 +42,20 @@ pub const SubChunk = struct {
         return &self.layers.items[layer];
     }
 
-    pub fn getState(self: *SubChunk, bx: u8, by: u8, bz: u8, layer: usize) !i32 {
-        const storage = try self.getLayer(layer);
-        return storage.getState(bx, by, bz);
+    pub fn getState(self: *SubChunk, bx: u8, by: u8, bz: u8, layer: usize) i32 {
+        if (layer >= self.layers.items.len) return 0;
+        return self.layers.items[layer].getState(bx, by, bz);
     }
 
     pub fn setState(self: *SubChunk, bx: u8, by: u8, bz: u8, state: i32, layer: usize) !void {
         const storage = try self.getLayer(layer);
         try storage.setState(bx, by, bz, state);
+    }
+
+    pub fn bytesUsed(self: *const SubChunk) usize {
+        var total = @sizeOf(SubChunk) + self.layers.capacity * @sizeOf(BlockStorage) + self.biomes.heapBytes();
+        for (self.layers.items) |*layer| total += layer.heapBytes();
+        return total;
     }
 
     pub fn getBiome(self: *const SubChunk, bx: u8, by: u8, bz: u8) u32 {
@@ -93,7 +99,7 @@ pub const SubChunk = struct {
             .version = version,
             .index = index,
             .layers = layers,
-            .biomes = try BiomeStorage.init(allocator),
+            .biomes = BiomeStorage.init(allocator),
         };
     }
 };
