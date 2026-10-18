@@ -60,14 +60,19 @@ pub fn release(tecton: *Tecton, player: *Player) bool {
     if (!Bow.canShoot(drawn)) return false;
 
     const survival = player.gamemode != .Creative;
+    const infinite = EnchantmentEffects.infiniteArrows(held);
+    const paid = arrowSpend(survival, infinite);
+
     var arrow_slot: ?u32 = null;
     if (survival) {
         const available = findArrow(&inv_state.container.base) orelse return false;
-        if (arrowSpend(survival, EnchantmentEffects.infiniteArrows(held))) arrow_slot = available;
+        if (paid) arrow_slot = available;
     }
 
     const speed = Bow.launchSpeed(Bow.chargeAfter(drawn));
     const impact = EnchantmentEffects.arrowImpact(held, Bow.damageFor(speed));
+    const critical = Bow.isCritical(drawn);
+    const damage = if (critical) Bow.criticalDamage(impact.damage) else impact.damage;
     const spawn_position = Protocol.Vector3f.init(
         player.entity.position.x,
         player.entity.position.y,
@@ -77,9 +82,12 @@ pub fn release(tecton: *Tecton, player: *Player) bool {
     const arrow = entities.spawnArrow(dimension, spawn_position, player.entity.rotation, .{
         .owner_runtime_id = player.entity.runtime_id,
         .speed = speed,
-        .damage = impact.damage,
+        .damage = damage,
         .knockback = impact.knockback,
         .burn_ticks = impact.burn_ticks,
+        .pickup_identifier = Bow.ARROW_IDENTIFIER,
+        .pickup_allowed = paid,
+        .is_critical = critical,
     }) catch return false;
 
     if (arrow_slot) |slot| inv_state.container.base.removeItem(slot, 1);

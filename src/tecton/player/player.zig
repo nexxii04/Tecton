@@ -126,6 +126,7 @@ pub const Player = struct {
     on_ground: bool = true,
     falling_distance: f32 = 0,
     item_use_started_tick: u64 = 0,
+    last_arrow_pickup_tick: u64 = 0,
     pending_move: ?MoveDelta.State = null,
     gliding: bool = false,
     swimming: bool = false,

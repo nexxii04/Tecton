@@ -12,6 +12,7 @@ const Health = @import("../../entity/traits/health.zig");
 const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
 const ItemEntityTrait = @import("../../entity/traits/item_entity.zig").ItemEntityTrait;
 const ProjectileTrait = @import("../../entity/traits/projectile.zig").ProjectileTrait;
+const criticalTrailActive = @import("../../entity/traits/projectile.zig").criticalTrailActive;
 const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
 const Bow = @import("../../items/bow.zig");
 const ItemStack = @import("../../items/item_stack.zig").ItemStack;
@@ -33,10 +34,17 @@ pub fn spawnEntity(dim: *Dimension, entity_type: *const EntityType, position: Pr
 }
 
 pub fn spawnEntityWithOptions(dim: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f, name_tag: []const u8, nametag_always_visible: bool) !*Entity {
+    return spawnEntityAt(dim, entity_type, position, Protocol.Vector2f.init(0, 0), null, name_tag, nametag_always_visible);
+}
+
+fn spawnEntityAt(dim: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f, rotation: Protocol.Vector2f, motion: ?Protocol.Vector3f, name_tag: []const u8, nametag_always_visible: bool) !*Entity {
     const entity = try dim.allocator.create(Entity);
     entity.* = Entity.init(dim.allocator, entity_type, dim);
     entity.instance_id = dim.instance_id;
     entity.position = position;
+    entity.rotation = rotation;
+    entity.head_yaw = rotation.y;
+    if (motion) |initial| entity.motion = initial;
     entity.name_tag = name_tag;
     entity.nametag_always_visible = nametag_always_visible;
     dim.world.tecton.registerEcsEntity(entity);
@@ -117,6 +125,9 @@ pub const ArrowSpec = struct {
     damage: f32,
     knockback: f32,
     burn_ticks: i32,
+    pickup_identifier: []const u8,
+    pickup_allowed: bool,
+    is_critical: bool,
 };
 
 pub fn spawnArrow(
@@ -126,21 +137,29 @@ pub fn spawnArrow(
     spec: ArrowSpec,
 ) !*Entity {
     const entity_type = EntityTypeRegistry.get(Bow.ARROW_IDENTIFIER) orelse return error.UnknownEntityType;
-    const entity = try spawnEntity(dim, entity_type, position);
-    entity.rotation = rotation;
-    entity.motion = Bow.launchVelocity(rotation, spec.speed);
+    const motion = Bow.launchVelocity(rotation, spec.speed);
+    const entity = try spawnEntityAt(dim, entity_type, position, Bow.rotationOf(motion), motion, "", false);
 
     const projectile = try ProjectileTrait.create(dim.allocator, .{
         .owner_runtime_id = spec.owner_runtime_id,
         .damage = spec.damage,
         .knockback = spec.knockback,
         .burn_ticks = spec.burn_ticks,
+        .pickup_identifier = spec.pickup_identifier,
+        .pickup_allowed = spec.pickup_allowed,
+        .is_critical = spec.is_critical,
         .age = 0,
         .stuck_ticks = 0,
         .stuck = false,
         .pending_remove = false,
     });
     try entity.addTrait(projectile);
+
+    if (criticalTrailActive(spec.is_critical, false)) {
+        entity.flags.setFlag(.Critical, true);
+        updateEntityActorFlags(dim, entity);
+    }
+
     return entity;
 }
 
@@ -229,6 +248,7 @@ fn serializeAddEntity(dim: *Dimension, entity: *Entity, stream: *BinaryStream) !
         .runtime_entity_id = @bitCast(entity.runtime_id),
         .entity_type = entity.entity_type.identifier,
         .position = entity.position,
+        .velocity = entity.motion,
         .pitch = entity.rotation.x,
         .yaw = entity.rotation.y,
         .head_yaw = entity.head_yaw,
