@@ -45,6 +45,19 @@ pub const ServerProperties = struct {
         return @min(@max(requested, min_max_mtu), max_max_mtu);
     }
 
+    pub const max_view_distance_limit: u32 = 32;
+    pub const min_view_distance: i32 = 2;
+
+    pub fn clampViewDistance(requested: i32, configured_max: u32) i32 {
+        const ceiling: i32 = @intCast(@min(configured_max, max_view_distance_limit));
+        const upper = @max(ceiling, min_view_distance);
+        return std.math.clamp(requested, min_view_distance, upper);
+    }
+
+    pub fn effectiveMaxViewDistance(self: *const ServerProperties) i32 {
+        return clampViewDistance(std.math.maxInt(i32), self.max_view_distance);
+    }
+
     pub const min_inbound_ring_slots: u32 = 64;
     pub const max_inbound_ring_slots: u32 = 1 << 20;
     pub const min_inbound_ring_slot_size: u32 = 512;
@@ -267,4 +280,8 @@ test "verbose startup logs are disabled in release modes" {
 
 test "startup logs are never emitted from a test binary" {
     try @import("config_test.zig").Suite(test_scope).case_016();
+}
+
+test "the client chunk radius clamps to the supported range" {
+    try @import("config_test.zig").Suite(test_scope).case_017();
 }

@@ -6,7 +6,7 @@ pub fn Suite(comptime scope: type) type {
         const Chunk = scope.Chunk;
         const Dimension = scope.Dimension;
         const ChunkEntityIndex = scope.ChunkEntityIndex;
-        const CachedPacket = scope.CachedPacket;
+        const ChunkPacketCache = scope.ChunkPacketCache;
         const chunkHash = scope.chunkHash;
         const BlockPermutation = scope.BlockPermutation;
         const BlockState = scope.BlockState;
@@ -77,7 +77,7 @@ pub fn Suite(comptime scope: type) type {
                 .entity_index = ChunkEntityIndex.init(allocator),
                 .blocks = std.AutoHashMap(i64, *Block).init(allocator),
                 .blocks_by_chunk = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), std.ArrayList(*Block)).init(allocator),
-                .chunk_packet_cache = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), CachedPacket).init(allocator),
+                .chunk_packet_cache = ChunkPacketCache.init(allocator),
                 .chunk_generations = std.AutoHashMap(@TypeOf(chunkHash(0, 0)), u64).init(allocator),
                 .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
                 .spawn_position = .{ .x = 0, .y = 0, .z = 0 },

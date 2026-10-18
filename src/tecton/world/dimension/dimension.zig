@@ -11,6 +11,7 @@ const TerrainGenerator = @import("../generator/terrain_generator.zig").TerrainGe
 const ThreadedGenerator = @import("../generator/threaded_generator.zig").ThreadedGenerator;
 const World = @import("../world.zig").World;
 const ChunkEntityIndex = @import("./entity_index.zig").ChunkEntityIndex;
+const ChunkPacketCache = @import("./chunk_packet_cache.zig").ChunkPacketCache;
 const block_pos = @import("./block_pos.zig");
 const broadcast = @import("./broadcast.zig");
 const random_tick = @import("./random_tick.zig");
@@ -22,11 +23,6 @@ pub fn chunkHash(x: i32, z: i32) ChunkHash {
     return (@as(i64, x) << 32) | @as(i64, @as(u32, @bitCast(z)));
 }
 
-pub const CachedPacket = struct {
-    data: []const u8,
-    generation: u64,
-};
-
 pub const Dimension = struct {
     world: *World,
     allocator: std.mem.Allocator,
@@ -37,7 +33,7 @@ pub const Dimension = struct {
     entity_index: ChunkEntityIndex,
     blocks: std.AutoHashMap(i64, *Block),
     blocks_by_chunk: std.AutoHashMap(ChunkHash, std.ArrayList(*Block)),
-    chunk_packet_cache: std.AutoHashMap(ChunkHash, CachedPacket),
+    chunk_packet_cache: ChunkPacketCache,
     chunk_generations: std.AutoHashMap(ChunkHash, u64),
     pending_removals: std.ArrayList(i64),
     spawn_position: Protocol.BlockPosition,
@@ -69,7 +65,7 @@ pub const Dimension = struct {
             .entity_index = ChunkEntityIndex.init(allocator),
             .blocks = std.AutoHashMap(i64, *Block).init(allocator),
             .blocks_by_chunk = std.AutoHashMap(ChunkHash, std.ArrayList(*Block)).init(allocator),
-            .chunk_packet_cache = std.AutoHashMap(ChunkHash, CachedPacket).init(allocator),
+            .chunk_packet_cache = ChunkPacketCache.init(allocator),
             .chunk_generations = std.AutoHashMap(ChunkHash, u64).init(allocator),
             .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
             .spawn_position = spawn,
@@ -105,10 +101,6 @@ pub const Dimension = struct {
 
         self.pending_removals.deinit(self.allocator);
 
-        var cache_iter = self.chunk_packet_cache.valueIterator();
-        while (cache_iter.next()) |cached| {
-            self.allocator.free(cached.data);
-        }
         self.chunk_packet_cache.deinit();
         self.chunk_generations.deinit();
 
@@ -126,24 +118,32 @@ pub const Dimension = struct {
     }
 
     pub fn invalidateChunkPacketCache(self: *Dimension, x: i32, z: i32) void {
-        const hash = chunkHash(x, z);
-        if (self.chunk_packet_cache.fetchRemove(hash)) |entry| {
-            self.allocator.free(entry.value.data);
-        }
+        self.chunk_packet_cache.remove(chunkHash(x, z));
     }
 
     pub fn getCachedChunkPacket(self: *Dimension, hash: ChunkHash) ?[]const u8 {
-        const cached = self.chunk_packet_cache.get(hash) orelse return null;
-        const current_gen = self.chunk_generations.get(hash) orelse 0;
-        if (cached.generation != current_gen) return null;
-        return cached.data;
+        return self.chunk_packet_cache.get(hash, self.chunk_generations.get(hash) orelse 0);
     }
 
     pub fn putCachedChunkPacket(self: *Dimension, hash: ChunkHash, data: []const u8) void {
-        const gen = self.chunk_generations.get(hash) orelse 0;
-        if (self.chunk_packet_cache.fetchPut(hash, .{ .data = data, .generation = gen }) catch null) |old| {
-            self.allocator.free(old.value.data);
-        }
+        self.chunk_packet_cache.put(hash, self.chunk_generations.get(hash) orelse 0, data);
+    }
+
+    pub fn cachedPacketCount(self: *const Dimension) usize {
+        return self.chunk_packet_cache.count();
+    }
+
+    pub fn cachedPacketBytes(self: *const Dimension) usize {
+        return self.chunk_packet_cache.bytesHeld();
+    }
+
+    pub fn chunkGenerationCount(self: *const Dimension) usize {
+        return self.chunk_generations.count();
+    }
+
+    pub fn forgetChunkResources(self: *Dimension, hash: ChunkHash) void {
+        self.chunk_packet_cache.remove(hash);
+        _ = self.chunk_generations.remove(hash);
     }
 
     pub fn getOrCreateChunk(self: *Dimension, x: i32, z: i32) !*Chunk {
@@ -168,9 +168,7 @@ pub const Dimension = struct {
 
     pub fn removeChunk(self: *Dimension, x: i32, z: i32) void {
         const hash = chunkHash(x, z);
-        if (self.chunk_packet_cache.fetchRemove(hash)) |cached| {
-            self.allocator.free(cached.value.data);
-        }
+        self.forgetChunkResources(hash);
         if (self.chunks.fetchRemove(hash)) |entry| {
             var chunk = entry.value;
 
@@ -222,6 +220,7 @@ pub const Dimension = struct {
                     }
                     self.removeBlocksInChunk(coords2.x, coords2.z);
                     self.world.provider.uncacheChunk(coords2.x, coords2.z, self);
+                    self.forgetChunkResources(h);
                     chunk.deinit();
                     self.allocator.destroy(chunk);
                 }
@@ -366,7 +365,8 @@ const test_scope = struct {
     pub const tick_scheduler = test_owner.tick_scheduler;
     pub const ChunkHash = test_owner.ChunkHash;
     pub const chunkHash = test_owner.chunkHash;
-    pub const CachedPacket = test_owner.CachedPacket;
+    pub const ChunkPacketCache = test_owner.ChunkPacketCache;
+    pub const World = test_owner.World;
     pub const Dimension = test_owner.Dimension;
 };
 
@@ -400,4 +400,12 @@ test "extracted dimension helpers stay in the test graph" {
 
 test "deinit retires a block before detaching its traits" {
     try @import("dimension_test.zig").Suite(test_scope).case_007();
+}
+
+test "forgetting a chunk drops its cached packet and generation" {
+    try @import("dimension_test.zig").Suite(test_scope).case_008();
+}
+
+test "every chunk unload path forgets the per-chunk resources" {
+    try @import("dimension_test.zig").Suite(test_scope).case_009();
 }

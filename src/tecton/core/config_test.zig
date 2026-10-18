@@ -252,5 +252,31 @@ pub fn Suite(comptime scope: type) type {
         pub fn case_016() !void {
             try std.testing.expect(!shouldEmitStartupLogs());
         }
+
+        pub fn case_017() !void {
+            const clamp = ServerProperties.clampViewDistance;
+
+            try std.testing.expectEqual(@as(i32, 8), clamp(8, 16));
+            try std.testing.expectEqual(@as(i32, 16), clamp(16, 16));
+
+            try std.testing.expectEqual(@as(i32, 32), clamp(128, 128));
+            try std.testing.expectEqual(@as(i32, 32), clamp(std.math.maxInt(i32), 4096));
+
+            try std.testing.expectEqual(@as(i32, 4), clamp(10, 4));
+
+            try std.testing.expectEqual(ServerProperties.min_view_distance, clamp(0, 16));
+            try std.testing.expectEqual(ServerProperties.min_view_distance, clamp(-1, 16));
+            try std.testing.expectEqual(ServerProperties.min_view_distance, clamp(std.math.minInt(i32), 16));
+
+            try std.testing.expectEqual(ServerProperties.min_view_distance, clamp(5, 0));
+
+            var properties = ServerProperties{ .allocator = std.testing.allocator };
+            defer properties.deinit();
+            try std.testing.expectEqual(@as(i32, 16), properties.effectiveMaxViewDistance());
+            properties.max_view_distance = 128;
+            try std.testing.expectEqual(@as(i32, 32), properties.effectiveMaxViewDistance());
+            properties.max_view_distance = 0;
+            try std.testing.expectEqual(ServerProperties.min_view_distance, properties.effectiveMaxViewDistance());
+        }
     };
 }

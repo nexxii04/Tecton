@@ -192,6 +192,15 @@ pub const Tecton = struct {
                 mob_broadcast_interval,
             });
         }
+
+        if (owned_config.max_view_distance > ServerProperties.max_view_distance_limit) {
+            Raknet.Logger.WARN("max-view-distance={d} exceeds the supported ceiling {d}: client requests are clamped to {d}", .{
+                owned_config.max_view_distance,
+                ServerProperties.max_view_distance_limit,
+                ServerProperties.max_view_distance_limit,
+            });
+        }
+
         const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(owned_config.max_players)) * 8);
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();

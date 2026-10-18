@@ -158,6 +158,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
     };
 
     if (player.entity.dimension != work.dimension) {
+        if (work.send_chunk_packets) dropPendingHashes(&player.pending_chunks, work.hashes[0..work.count]);
         for (0..work.count) |i| {
             if (work.packets[i].len > 0) allocator.free(work.packets[i]);
             if (work.chunks[i]) |chunk| {
@@ -227,8 +228,8 @@ fn onBatchComplete(ctx: *anyopaque) void {
             work.packets[i] = &.{};
         }
 
+        dropPendingHashes(&player.pending_chunks, work.hashes[0..work.count]);
         for (0..work.count) |i| {
-            _ = player.pending_chunks.remove(work.hashes[i]);
             if ((work.delivery_mask >> @intCast(i)) & 1 != 0) {
                 player.sent_chunks.put(work.hashes[i], {}) catch {};
             }
@@ -265,6 +266,10 @@ fn releaseCachedPackets(allocator: std.mem.Allocator, cached_packets: []const []
     for (cached_packets) |packet| {
         if (packet.len > 0) allocator.free(packet);
     }
+}
+
+fn dropPendingHashes(pending: *std.AutoHashMap(i64, void), hashes: []const i64) void {
+    for (hashes) |hash| _ = pending.remove(hash);
 }
 
 fn blockEntityTypeId(block_identifier: []const u8) []const u8 {
@@ -363,6 +368,11 @@ fn cleanupBatchWork(ctx: *anyopaque) void {
     work.dimension.inflight_batches -= 1;
     const allocator = work.allocator;
     if (work.owner_state) |owner| onBatchOwnedComplete(@ptrCast(@alignCast(owner)));
+    if (work.send_chunk_packets) {
+        if (work.tecton.players.byRuntimeId(work.runtime_id)) |player| {
+            dropPendingHashes(&player.pending_chunks, work.hashes[0..work.count]);
+        }
+    }
     for (0..work.count) |i| {
         if (work.packets[i].len > 0) allocator.free(work.packets[i]);
         if (work.chunks[i]) |chunk| {
@@ -712,6 +722,7 @@ const test_owner = @This();
 const test_scope = struct {
     pub const std = test_owner.std;
     pub const releaseCachedPackets = test_owner.releaseCachedPackets;
+    pub const dropPendingHashes = test_owner.dropPendingHashes;
 };
 
 test "two-tier chunk classification matches squared distance formula" {
@@ -720,4 +731,12 @@ test "two-tier chunk classification matches squared distance formula" {
 
 test "releasing an abandoned batch's cached packets frees every allocation" {
     try @import("chunk_streaming_test.zig").Suite(test_scope).case_001();
+}
+
+test "dropping pending hashes releases exactly the batch's chunks" {
+    try @import("chunk_streaming_test.zig").Suite(test_scope).case_002();
+}
+
+test "every abandoned batch path releases its pending hashes" {
+    try @import("chunk_streaming_test.zig").Suite(test_scope).case_003();
 }

@@ -8,7 +8,7 @@ pub fn Suite(comptime scope: type) type {
         const tick_scheduler = scope.tick_scheduler;
         const ChunkHash = scope.ChunkHash;
         const chunkHash = scope.chunkHash;
-        const CachedPacket = scope.CachedPacket;
+        const ChunkPacketCache = scope.ChunkPacketCache;
         const Dimension = scope.Dimension;
 
         pub fn case_000() !void {
@@ -189,24 +189,21 @@ pub fn Suite(comptime scope: type) type {
             var rng = std.Random.DefaultPrng.init(0xbabe5678);
             const random = rng.random();
 
-            var cache = std.AutoHashMap(ChunkHash, CachedPacket).init(allocator);
+            var cache = ChunkPacketCache.init(allocator);
             defer cache.deinit();
-            var generations = std.AutoHashMap(ChunkHash, u64).init(allocator);
-            defer generations.deinit();
 
             for (0..100) |_| {
                 const cx = random.intRangeAtMost(i32, -5, 5);
                 const cz = random.intRangeAtMost(i32, -5, 5);
                 const hash = chunkHash(cx, cz);
+                const gen = random.intRangeAtMost(u64, 0, 1_000_000);
 
-                const gen = generations.get(hash) orelse 0;
-                try cache.put(hash, .{ .data = &.{}, .generation = gen });
+                cache.put(hash, gen, try allocator.dupe(u8, "packet"));
+                try std.testing.expect(cache.get(hash, gen) != null);
 
-                try generations.put(hash, gen + 1);
-
-                const cached = cache.get(hash).?;
-                const current_gen = generations.get(hash).?;
-                try std.testing.expect(cached.generation != current_gen);
+                try std.testing.expect(cache.get(hash, gen + 1) == null);
+                try std.testing.expectEqual(@as(usize, 0), cache.count());
+                try std.testing.expectEqual(@as(usize, 0), cache.bytesHeld());
             }
         }
 
@@ -229,5 +226,49 @@ pub fn Suite(comptime scope: type) type {
                 return error.TestUnexpectedResult;
             try std.testing.expect(remove < detach);
         }
+
+        pub fn case_008() !void {
+            const allocator = std.testing.allocator;
+            var world: scope.World = undefined;
+            var dim = Dimension.init(&world, allocator, "test", .Overworld, null);
+            defer dim.deinit();
+
+            const hash = chunkHash(4, -7);
+            dim.putCachedChunkPacket(hash, try allocator.dupe(u8, "packet-bytes"));
+            try dim.chunk_generations.put(hash, 3);
+
+            try std.testing.expectEqual(@as(usize, 1), dim.cachedPacketCount());
+            try std.testing.expectEqual(@as(usize, 12), dim.cachedPacketBytes());
+            try std.testing.expectEqual(@as(usize, 1), dim.chunkGenerationCount());
+
+            dim.forgetChunkResources(hash);
+
+            try std.testing.expectEqual(@as(usize, 0), dim.cachedPacketCount());
+            try std.testing.expectEqual(@as(usize, 0), dim.cachedPacketBytes());
+            try std.testing.expectEqual(@as(usize, 0), dim.chunkGenerationCount());
+
+            dim.forgetChunkResources(hash);
+            try std.testing.expectEqual(@as(usize, 0), dim.cachedPacketCount());
+        }
+
+        pub fn case_009() !void {
+            const source = @embedFile("dimension.zig");
+            try expectForgetIn(source, "pub fn removeChunk");
+            try expectForgetIn(source, "pub fn releaseUnrenderedChunks");
+        }
+
+        fn expectForgetIn(source: []const u8, signature: []const u8) !void {
+            const start = std.mem.indexOf(u8, source, signature) orelse {
+                std.debug.print("dimension.zig: missing {s}\n", .{signature});
+                return error.TestUnexpectedResult;
+            };
+            const next_fn = std.mem.indexOfPos(u8, source, start + signature.len, "\n    pub fn ") orelse source.len;
+            const body = source[start..next_fn];
+            if (std.mem.indexOf(u8, body, "forgetChunkResources") == null) {
+                std.debug.print("dimension.zig: {s} must drop the cached packet and generation\n", .{signature});
+                return error.TestUnexpectedResult;
+            }
+        }
+
     };
 }

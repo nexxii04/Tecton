@@ -2,6 +2,7 @@ pub fn Suite(comptime scope: type) type {
     return struct {
         const std = scope.std;
         const releaseCachedPackets = scope.releaseCachedPackets;
+        const dropPendingHashes = scope.dropPendingHashes;
 
         pub fn case_000() !void {
             var rng = std.Random.DefaultPrng.init(0xabcd1234);
@@ -35,6 +36,50 @@ pub fn Suite(comptime scope: type) type {
             cached[2] = try allocator.dupe(u8, "cached-2");
 
             releaseCachedPackets(allocator, &cached);
+        }
+
+        pub fn case_002() !void {
+            const allocator = std.testing.allocator;
+            var pending = std.AutoHashMap(i64, void).init(allocator);
+            defer pending.deinit();
+
+            for (1..6) |i| try pending.put(@intCast(i), {});
+
+            const hashes = [_]i64{ 2, 4, 99 };
+            dropPendingHashes(&pending, &hashes);
+
+            try std.testing.expectEqual(@as(usize, 3), pending.count());
+            try std.testing.expect(pending.contains(1));
+            try std.testing.expect(!pending.contains(2));
+            try std.testing.expect(pending.contains(3));
+            try std.testing.expect(!pending.contains(4));
+            try std.testing.expect(pending.contains(5));
+
+            dropPendingHashes(&pending, &hashes);
+            try std.testing.expectEqual(@as(usize, 3), pending.count());
+        }
+
+        pub fn case_003() !void {
+            const source = @embedFile("chunk_streaming.zig");
+
+            try std.testing.expect(containsBetween(
+                source,
+                "fn cleanupBatchWork",
+                "for (0..work.count) |i| {",
+                "dropPendingHashes",
+            ));
+            try std.testing.expect(containsBetween(
+                source,
+                "if (player.entity.dimension != work.dimension) {",
+                "const dimension: ?*Dimension",
+                "dropPendingHashes",
+            ));
+        }
+
+        fn containsBetween(source: []const u8, start_marker: []const u8, end_marker: []const u8, needle: []const u8) bool {
+            const start = std.mem.indexOf(u8, source, start_marker) orelse return false;
+            const end = std.mem.indexOfPos(u8, source, start + start_marker.len, end_marker) orelse return false;
+            return std.mem.indexOf(u8, source[start..end], needle) != null;
         }
     };
 }
