@@ -257,6 +257,26 @@ pub fn Suite(comptime scope: type) type {
             try expectForgetIn(source, "pub fn releaseUnrenderedChunks");
         }
 
+        pub fn case_010() !void {
+            const allocator = std.testing.allocator;
+            var world: scope.World = undefined;
+            var dim = Dimension.init(&world, allocator, "test", .Overworld, null);
+            defer dim.deinit();
+
+            const hash = chunkHash(3, 4);
+            try std.testing.expect(!dim.isPacketInflight(hash));
+
+            dim.markPacketInflight(hash);
+            dim.markPacketInflight(hash);
+            try std.testing.expect(dim.isPacketInflight(hash));
+            try std.testing.expectEqual(@as(usize, 1), dim.inflightPacketCount());
+
+            dim.clearPacketInflight(hash);
+            dim.clearPacketInflight(hash);
+            try std.testing.expect(!dim.isPacketInflight(hash));
+            try std.testing.expectEqual(@as(usize, 0), dim.inflightPacketCount());
+        }
+
         fn expectForgetIn(source: []const u8, signature: []const u8) !void {
             const start = std.mem.indexOf(u8, source, signature) orelse {
                 std.debug.print("dimension.zig: missing {s}\n", .{signature});

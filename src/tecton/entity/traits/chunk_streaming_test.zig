@@ -76,6 +76,40 @@ pub fn Suite(comptime scope: type) type {
             ));
         }
 
+        pub fn case_004() !void {
+            const PacketAction = scope.PacketAction;
+            const choose = scope.choosePacketAction;
+
+            try std.testing.expectEqual(PacketAction.send_cached, choose(false, false, true, false));
+            try std.testing.expectEqual(PacketAction.send_cached, choose(false, false, true, true));
+            try std.testing.expectEqual(PacketAction.send_cached, choose(true, true, true, false));
+            try std.testing.expectEqual(PacketAction.send_cached, choose(true, true, true, true));
+            try std.testing.expectEqual(PacketAction.wait, choose(true, false, true, true));
+            try std.testing.expectEqual(PacketAction.wait, choose(false, false, false, true));
+            try std.testing.expectEqual(PacketAction.wait, choose(true, true, false, true));
+            try std.testing.expectEqual(PacketAction.schedule, choose(true, false, true, false));
+            try std.testing.expectEqual(PacketAction.schedule, choose(false, false, false, false));
+            try std.testing.expectEqual(PacketAction.schedule, choose(true, true, false, false));
+            try std.testing.expectEqual(PacketAction.schedule, choose(true, false, false, false));
+        }
+
+        pub fn case_005() !void {
+            const source = @embedFile("chunk_streaming.zig");
+
+            try std.testing.expect(containsBetween(
+                source,
+                "fn onBatchComplete",
+                "const player =",
+                "clearPacketInflight",
+            ));
+            try std.testing.expect(containsBetween(
+                source,
+                "fn cleanupBatchWork",
+                "for (0..work.count) |i| {",
+                "clearPacketInflight",
+            ));
+        }
+
         fn containsBetween(source: []const u8, start_marker: []const u8, end_marker: []const u8, needle: []const u8) bool {
             const start = std.mem.indexOf(u8, source, start_marker) orelse return false;
             const end = std.mem.indexOfPos(u8, source, start + start_marker.len, end_marker) orelse return false;

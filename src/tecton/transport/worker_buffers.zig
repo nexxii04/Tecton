@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const WorkerBuffers = struct {
-    pub const HARD_CAPACITY: usize = 4 * 1024 * 1024;
+    pub const HARD_CAPACITY: usize = 1024 * 1024;
     const MAX_STALL_YIELDS: usize = 1_000_000;
 
     arenas: [2]std.heap.ArenaAllocator,

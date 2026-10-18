@@ -4,7 +4,7 @@ const Player = @import("../player/player.zig").Player;
 const ChunkHash = @import("../world/dimension/dimension.zig").ChunkHash;
 const WorldRegistry = @import("worlds.zig").WorldRegistry;
 
-pub const chunks_per_tick: usize = 32;
+pub const chunks_per_tick: usize = 8;
 pub const players_per_tick: usize = 2;
 pub const ns_budget: u64 = 2_000_000;
 

@@ -34,6 +34,7 @@ pub const Dimension = struct {
     blocks: std.AutoHashMap(i64, *Block),
     blocks_by_chunk: std.AutoHashMap(ChunkHash, std.ArrayList(*Block)),
     chunk_packet_cache: ChunkPacketCache,
+    inflight_packets: std.AutoHashMap(ChunkHash, void),
     chunk_generations: std.AutoHashMap(ChunkHash, u64),
     pending_removals: std.ArrayList(i64),
     spawn_position: Protocol.BlockPosition,
@@ -66,6 +67,7 @@ pub const Dimension = struct {
             .blocks = std.AutoHashMap(i64, *Block).init(allocator),
             .blocks_by_chunk = std.AutoHashMap(ChunkHash, std.ArrayList(*Block)).init(allocator),
             .chunk_packet_cache = ChunkPacketCache.init(allocator),
+            .inflight_packets = std.AutoHashMap(ChunkHash, void).init(allocator),
             .chunk_generations = std.AutoHashMap(ChunkHash, u64).init(allocator),
             .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
             .spawn_position = spawn,
@@ -77,6 +79,7 @@ pub const Dimension = struct {
     }
 
     pub fn deinit(self: *Dimension) void {
+
         if (self.floating_texts) |manager| manager.destroy();
 
         var bbc_iter = self.blocks_by_chunk.valueIterator();
@@ -102,6 +105,7 @@ pub const Dimension = struct {
         self.pending_removals.deinit(self.allocator);
 
         self.chunk_packet_cache.deinit();
+        self.inflight_packets.deinit();
         self.chunk_generations.deinit();
 
         var iter = self.chunks.valueIterator();
@@ -119,6 +123,22 @@ pub const Dimension = struct {
 
     pub fn invalidateChunkPacketCache(self: *Dimension, x: i32, z: i32) void {
         self.chunk_packet_cache.remove(chunkHash(x, z));
+    }
+
+    pub fn markPacketInflight(self: *Dimension, hash: ChunkHash) void {
+        self.inflight_packets.put(hash, {}) catch {};
+    }
+
+    pub fn clearPacketInflight(self: *Dimension, hash: ChunkHash) void {
+        _ = self.inflight_packets.remove(hash);
+    }
+
+    pub fn isPacketInflight(self: *const Dimension, hash: ChunkHash) bool {
+        return self.inflight_packets.contains(hash);
+    }
+
+    pub fn inflightPacketCount(self: *const Dimension) usize {
+        return self.inflight_packets.count();
     }
 
     pub fn getCachedChunkPacket(self: *Dimension, hash: ChunkHash) ?[]const u8 {
@@ -202,6 +222,14 @@ pub const Dimension = struct {
             for (snapshots) |player| {
                 if (player.entity.dimension != self or player.entity.instance_id != self.instance_id) continue;
                 if (player.sent_chunks.contains(h)) {
+                    still_needed = true;
+                    break;
+                }
+                const px = @as(i32, @intFromFloat(@floor(player.entity.position.x))) >> 4;
+                const pz = @as(i32, @intFromFloat(@floor(player.entity.position.z))) >> 4;
+                const pdx = coords.x - px;
+                const pdz = coords.z - pz;
+                if (pdx * pdx + pdz * pdz <= sim * sim) {
                     still_needed = true;
                     break;
                 }
@@ -408,4 +436,8 @@ test "forgetting a chunk drops its cached packet and generation" {
 
 test "every chunk unload path forgets the per-chunk resources" {
     try @import("dimension_test.zig").Suite(test_scope).case_009();
+}
+
+test "in-flight packet marks are reference counted per chunk" {
+    try @import("dimension_test.zig").Suite(test_scope).case_010();
 }

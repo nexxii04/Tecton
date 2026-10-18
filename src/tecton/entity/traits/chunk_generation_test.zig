@@ -40,6 +40,25 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expect(shouldReadTraitPositions(true));
         }
 
+        pub fn case_005() !void {
+            const entity = ParsedBlockEntity{
+                .x = 1,
+                .y = 70,
+                .z = 2,
+                .trait_ids = &.{},
+                .nbt_data = null,
+            };
+
+            var parsed = [_]ParsedBlockEntity{entity};
+            const with_actors = ChunkBlockData{ .parsed_entities = &parsed, .trait_positions = &.{} };
+            const plain = ChunkBlockData{ .parsed_entities = &.{}, .trait_positions = &.{} };
+
+            try std.testing.expect(shouldCacheChunkPacket(true, &with_actors));
+            try std.testing.expect(shouldCacheChunkPacket(true, &plain));
+            try std.testing.expect(!shouldCacheChunkPacket(false, &with_actors));
+            try std.testing.expect(shouldCacheChunkPacket(false, &plain));
+        }
+
         pub fn case_003() !void {
             const allocator = std.testing.allocator;
 

@@ -32,6 +32,14 @@ const ChunkStreamState = struct {
 
 const MAX_INFLIGHT_BATCHES: u32 = 4;
 
+pub const PacketAction = enum { send_cached, wait, schedule };
+
+fn choosePacketAction(in_simulation: bool, loaded: bool, cached: bool, in_flight: bool) PacketAction {
+    if (cached and (!in_simulation or loaded)) return .send_cached;
+    if (in_flight) return .wait;
+    return .schedule;
+}
+
 pub fn queueChunkStreaming(player: *Player) !void {
     const tecton = player.tecton;
     const dimension = player.entity.dimension orelse return;
@@ -132,6 +140,9 @@ fn onBatchComplete(ctx: *anyopaque) void {
     work.dimension.inflight_batches -= 1;
     const allocator = work.allocator;
     defer {
+        if (work.send_chunk_packets) {
+            for (work.hashes[0..work.count]) |hash| work.dimension.clearPacketInflight(hash);
+        }
         if (work.owner_state) |owner| onBatchOwnedComplete(@ptrCast(@alignCast(owner)));
         releaseCachedPackets(allocator, work.cached_packets);
         allocator.free(work.coords);
@@ -212,7 +223,6 @@ fn onBatchComplete(ctx: *anyopaque) void {
     if (work.send_chunk_packets) {
         if (dimension) |dim| {
             for (0..work.count) |i| {
-                if (work.in_simulation[i]) continue;
                 const cached = work.cached_packets[i];
                 if (cached.len == 0) continue;
                 dim.putCachedChunkPacket(work.hashes[i], cached);
@@ -369,6 +379,7 @@ fn cleanupBatchWork(ctx: *anyopaque) void {
     const allocator = work.allocator;
     if (work.owner_state) |owner| onBatchOwnedComplete(@ptrCast(@alignCast(owner)));
     if (work.send_chunk_packets) {
+        for (work.hashes[0..work.count]) |hash| work.dimension.clearPacketInflight(hash);
         if (work.tecton.players.byRuntimeId(work.runtime_id)) |player| {
             dropPendingHashes(&player.pending_chunks, work.hashes[0..work.count]);
         }
@@ -539,23 +550,26 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
 
             const ring = state.ring;
             if (ring == 0) {
-                state.ring = 1;
-                state.ring_idx = 0;
                 const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = state.center_x, .z = state.center_z });
                 if (!player.sent_chunks.contains(chunk_hash) and !player.pending_chunks.contains(chunk_hash)) {
-                    if (sim_dist <= 0) {
-                        if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
-                            sendCachedChunkPacket(player.connection, cached);
+                    const loaded = dimension.getChunk(state.center_x, state.center_z) != null;
+                    const cached = dimension.getCachedChunkPacket(chunk_hash);
+                    switch (choosePacketAction(sim_dist > 0, loaded, cached != null, dimension.isPacketInflight(chunk_hash))) {
+                        .send_cached => {
+                            sendCachedChunkPacket(player.connection, cached.?);
+                            if (loaded) sendLiveBlockActorDataForChunk(allocator, player, dimension, state.center_x, state.center_z);
                             player.sent_chunks.put(chunk_hash, {}) catch {};
-                            continue;
-                        }
-                    }
-                    {
-                        coord_buf[count] = .{ .x = state.center_x, .z = state.center_z };
-                        hash_buf[count] = chunk_hash;
-                        count += 1;
+                        },
+                        .wait => return false,
+                        .schedule => {
+                            coord_buf[count] = .{ .x = state.center_x, .z = state.center_z };
+                            hash_buf[count] = chunk_hash;
+                            count += 1;
+                        },
                     }
                 }
+                state.ring = 1;
+                state.ring_idx = 0;
                 continue;
             }
 
@@ -567,27 +581,39 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             }
 
             const coords = ringCoord(state.center_x, state.center_z, ring, state.ring_idx);
-            state.ring_idx += 1;
 
             const dx = coords[0] - state.center_x;
             const dz = coords[1] - state.center_z;
-            if (dx * dx + dz * dz > state.radius * state.radius) continue;
+            if (dx * dx + dz * dz > state.radius * state.radius) {
+                state.ring_idx += 1;
+                continue;
+            }
 
             const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = coords[0], .z = coords[1] });
-            if (player.sent_chunks.contains(chunk_hash) or player.pending_chunks.contains(chunk_hash)) continue;
+            if (player.sent_chunks.contains(chunk_hash) or player.pending_chunks.contains(chunk_hash)) {
+                state.ring_idx += 1;
+                continue;
+            }
 
             const in_simulation = dx * dx + dz * dz <= sim_dist * sim_dist;
-            if (!in_simulation) {
-                if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
-                    sendCachedChunkPacket(player.connection, cached);
+            const loaded = dimension.getChunk(coords[0], coords[1]) != null;
+            const cached = dimension.getCachedChunkPacket(chunk_hash);
+            switch (choosePacketAction(in_simulation, loaded, cached != null, dimension.isPacketInflight(chunk_hash))) {
+                .send_cached => {
+                    sendCachedChunkPacket(player.connection, cached.?);
+                    if (loaded) sendLiveBlockActorDataForChunk(allocator, player, dimension, coords[0], coords[1]);
                     player.sent_chunks.put(chunk_hash, {}) catch {};
+                    state.ring_idx += 1;
                     continue;
-                }
+                },
+                .wait => return false,
+                .schedule => {},
             }
 
             coord_buf[count] = .{ .x = coords[0], .z = coords[1] };
             hash_buf[count] = chunk_hash;
             count += 1;
+            state.ring_idx += 1;
         }
 
         if (count == 0) break;
@@ -684,6 +710,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
         state.inflight += 1;
         dimension.inflight_batches += 1;
         for (work.coords) |coord| flushChunkStateForStreaming(dimension, coord.x, coord.z);
+        for (work.hashes) |hash| dimension.markPacketInflight(hash);
 
         state.tecton.threaded_tasks.enqueue(.{
             .work = generation.workerLoadAndCompress,
@@ -723,6 +750,8 @@ const test_scope = struct {
     pub const std = test_owner.std;
     pub const releaseCachedPackets = test_owner.releaseCachedPackets;
     pub const dropPendingHashes = test_owner.dropPendingHashes;
+    pub const PacketAction = test_owner.PacketAction;
+    pub const choosePacketAction = test_owner.choosePacketAction;
 };
 
 test "two-tier chunk classification matches squared distance formula" {
@@ -739,4 +768,12 @@ test "dropping pending hashes releases exactly the batch's chunks" {
 
 test "every abandoned batch path releases its pending hashes" {
     try @import("chunk_streaming_test.zig").Suite(test_scope).case_003();
+}
+
+test "a cached packet is served unless a simulation chunk still needs loading" {
+    try @import("chunk_streaming_test.zig").Suite(test_scope).case_004();
+}
+
+test "every completed batch releases its in-flight packet marks" {
+    try @import("chunk_streaming_test.zig").Suite(test_scope).case_005();
 }

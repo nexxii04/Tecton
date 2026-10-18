@@ -48,7 +48,8 @@ fn shouldReadTraitPositions(in_simulation: bool) bool {
 }
 
 fn shouldCacheChunkPacket(in_simulation: bool, data: *const ChunkBlockData) bool {
-    return !in_simulation and data.parsed_entities.len == 0;
+    if (in_simulation) return true;
+    return data.parsed_entities.len == 0;
 }
 
 pub const ChunkBatchWork = struct {
@@ -511,6 +512,10 @@ test "render-only chunks skip trait-position scan" {
 
 test "chunk column packet serialization matches full chunk path" {
     try @import("chunk_generation_test.zig").Suite(test_scope).case_003();
+}
+
+test "simulation chunks reuse their packet even when they hold block actors" {
+    try @import("chunk_generation_test.zig").Suite(test_scope).case_005();
 }
 
 test "parse block entity blob decodes positions and traits" {
