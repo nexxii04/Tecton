@@ -34,6 +34,7 @@ const visibility_mod = @import("./entity/traits/visibility.zig");
 const resolveWorkerCount = @import("./tasks/threaded_tasks.zig").resolveWorkerCount;
 const totalServerThreadCount = @import("./tasks/threaded_tasks.zig").totalServerThreadCount;
 const TickProfiler = @import("./core/tick_profiler.zig").TickProfiler;
+const pool_allocator = @import("./core/pool_allocator.zig");
 pub const block_root = @import("./world/block/root.zig");
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const EcsWorld = @import("entity/ecs.zig").EcsWorld;
@@ -752,6 +753,23 @@ pub const Tecton = struct {
         self.save.deinit(self.allocator);
         self.threaded_tasks.deinit();
         self.shutting_down = true;
+
+        Raknet.Logger.INFO("Allocator: {d} KiB mapped in {d} pool chunks, {d} contention spins", .{
+            pool_allocator.mappedBytes() / 1024,
+            pool_allocator.poolChunks(),
+            pool_allocator.contentionSpins(),
+        });
+        var pool_class: usize = 0;
+        while (pool_class < pool_allocator.class_total) : (pool_class += 1) {
+            const stats = pool_allocator.classStats(pool_class);
+            if (stats.chunks == 0) continue;
+            Raknet.Logger.INFO("Pool class {d} B: {d} KiB mapped, {d} chunks, {d} live slots", .{
+                stats.slot,
+                stats.mapped_bytes / 1024,
+                stats.chunks,
+                stats.live,
+            });
+        }
 
         self.players.silence();
         self.players.destroyPlayers();
