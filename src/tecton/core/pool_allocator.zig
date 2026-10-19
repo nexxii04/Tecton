@@ -6,6 +6,7 @@ pub const PoolAllocator = struct {
     pub const max_slot: usize = slot_min << (class_count - 1);
     pub const min_chunk_size: usize = 64 * 1024;
     pub const chunk_size: usize = 1 << 20;
+    pub const shard_count: usize = 4;
 
     const vtable: std.mem.Allocator.VTable = .{
         .alloc = allocFn,
@@ -16,20 +17,25 @@ pub const PoolAllocator = struct {
 
     const Node = struct { next: ?*Node };
 
-    const ChunkHeader = struct { live: u32 };
+    const ChunkHeader = struct {
+        all_prev: ?*ChunkHeader = null,
+        all_next: ?*ChunkHeader = null,
+        live: u32 = 0,
+        shard: u8 = 0,
+    };
 
-    const Class = struct {
+    const Shard = struct {
+        lock: std.atomic.Value(bool) align(std.atomic.cache_line) = .init(false),
         head: ?*Node = null,
         bump: [*]u8 = undefined,
         bump_left: usize = 0,
-
-        lock: std.atomic.Value(bool) align(std.atomic.cache_line) = .init(false),
+        all: ?*ChunkHeader = null,
         chunks: usize = 0,
         mapped_bytes: usize = 0,
         live: usize = 0,
         spins: u64 = 0,
 
-        fn acquire(self: *Class) void {
+        fn acquire(self: *Shard) void {
             var spins: u64 = 0;
             while (self.lock.swap(true, .acquire)) {
                 std.atomic.spinLoopHint();
@@ -38,9 +44,27 @@ pub const PoolAllocator = struct {
             self.spins += spins;
         }
 
-        fn release(self: *Class) void {
+        fn release(self: *Shard) void {
             self.lock.store(false, .release);
         }
+
+        fn linkAll(self: *Shard, header: *ChunkHeader) void {
+            header.all_prev = null;
+            header.all_next = self.all;
+            if (self.all) |head| head.all_prev = header;
+            self.all = header;
+        }
+
+        fn unlinkAll(self: *Shard, header: *ChunkHeader) void {
+            if (header.all_prev) |prev| prev.all_next = header.all_next else self.all = header.all_next;
+            if (header.all_next) |next| next.all_prev = header.all_prev;
+            header.all_prev = null;
+            header.all_next = null;
+        }
+    };
+
+    const Class = struct {
+        shards: [shard_count]Shard = @splat(.{}),
     };
 
     classes: [class_count]Class = @splat(.{}),
@@ -48,6 +72,10 @@ pub const PoolAllocator = struct {
     mapped_bytes: std.atomic.Value(u64) = .init(0),
 
     pub const ClassStats = struct { slot: usize, chunks: usize, live: usize, mapped_bytes: usize };
+
+    comptime {
+        if (@sizeOf(ChunkHeader) > slot_min) @compileError("chunk header does not fit in the smallest slot");
+    }
 
     pub fn allocator(self: *PoolAllocator) std.mem.Allocator {
         return .{ .ptr = self, .vtable = &vtable };
@@ -57,26 +85,65 @@ pub const PoolAllocator = struct {
         return self.mapped_bytes.load(.monotonic);
     }
 
-    pub fn contentionSpins(self: *const PoolAllocator) u64 {
+    pub fn contentionSpins(self: *PoolAllocator) u64 {
         var total: u64 = 0;
-        for (self.classes) |class| total += class.spins;
+        for (&self.classes) |*class| {
+            for (&class.shards) |*shard| {
+                shard.acquire();
+                defer shard.release();
+                total += shard.spins;
+            }
+        }
         return total;
     }
 
-    pub fn poolChunks(self: *const PoolAllocator) usize {
+    pub fn poolChunks(self: *PoolAllocator) usize {
         var total: usize = 0;
-        for (self.classes) |class| total += class.chunks;
+        for (&self.classes) |*class| {
+            for (&class.shards) |*shard| {
+                shard.acquire();
+                defer shard.release();
+                total += shard.chunks;
+            }
+        }
         return total;
     }
 
-    pub fn classStats(self: *const PoolAllocator, index: usize) ClassStats {
+    pub fn classStats(self: *PoolAllocator, index: usize) ClassStats {
         const class = &self.classes[index];
+        var chunks: usize = 0;
+        var live: usize = 0;
+        var mapped: usize = 0;
+        for (&class.shards) |*shard| {
+            shard.acquire();
+            defer shard.release();
+            chunks += shard.chunks;
+            live += shard.live;
+            mapped += shard.mapped_bytes;
+        }
         return .{
             .slot = slotSize(index),
-            .chunks = class.chunks,
-            .live = class.live,
-            .mapped_bytes = class.mapped_bytes,
+            .chunks = chunks,
+            .live = live,
+            .mapped_bytes = mapped,
         };
+    }
+
+    pub fn deinit(self: *PoolAllocator) void {
+        for (&self.classes, 0..) |*class, class_index| {
+            const chunk_len = chunkSizeForSlot(slotSize(class_index));
+            for (&class.shards) |*shard| {
+                var cursor = shard.all;
+                while (cursor) |header| {
+                    const next = header.all_next;
+                    const base: [*]u8 = @ptrFromInt(@intFromPtr(header));
+                    self.large.rawFree(base[0..chunk_len], .fromByteUnits(chunk_len), 0);
+                    cursor = next;
+                }
+                shard.* = .{};
+            }
+        }
+        self.mapped_bytes.store(0, .monotonic);
     }
 
     fn slotSize(index: usize) usize {
@@ -113,70 +180,67 @@ pub const PoolAllocator = struct {
         return chunk;
     }
 
-    fn allocFn(context: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
-        const self: *PoolAllocator = @ptrCast(@alignCast(context));
-        const index = classIndex(len, alignment) orelse
-            return self.large.rawAlloc(len, alignment, ra);
-
-        const class = &self.classes[index];
+    fn allocSmall(self: *PoolAllocator, index: usize, shard_index: usize) ?[*]u8 {
         const slot = slotSize(index);
         const chunk_len = chunkSizeForSlot(slot);
+        const shard = &self.classes[index].shards[shard_index];
 
-        class.acquire();
-        defer class.release();
+        shard.acquire();
+        defer shard.release();
 
-        if (class.head) |node| {
-            class.head = node.next;
-            class.live += 1;
+        if (shard.head) |node| {
+            shard.head = node.next;
+            shard.live += 1;
             headerAt(@intFromPtr(node), chunk_len).live += 1;
             return @ptrCast(node);
         }
-        if (class.bump_left > 0) {
-            const next = class.bump;
-            class.bump += slot;
-            class.bump_left -= 1;
-            class.live += 1;
+
+        if (shard.bump_left > 0) {
+            const next = shard.bump;
+            shard.bump += slot;
+            shard.bump_left -= 1;
+            shard.live += 1;
             headerAt(@intFromPtr(next), chunk_len).live += 1;
             return next;
         }
-        const chunk = self.mapChunk(chunk_len) orelse return null;
-        class.chunks += 1;
-        class.mapped_bytes += chunk_len;
-        class.live += 1;
 
+        const chunk = self.mapChunk(chunk_len) orelse return null;
         const header: *ChunkHeader = @ptrCast(@alignCast(chunk));
+        header.* = .{ .shard = @intCast(shard_index) };
+        shard.chunks += 1;
+        shard.mapped_bytes += chunk_len;
+        shard.linkAll(header);
+        shard.bump = chunk + slot * 2;
+        shard.bump_left = chunk_len / slot - 2;
+        shard.live += 1;
         header.live = 1;
-        class.bump = chunk + slot * 2;
-        class.bump_left = chunk_len / slot - 2;
         return chunk + slot;
     }
 
-    fn freeFn(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
-        const self: *PoolAllocator = @ptrCast(@alignCast(context));
-        const index = classIndex(memory.len, alignment) orelse
-            return self.large.rawFree(memory, alignment, ra);
-
-        const class = &self.classes[index];
-        const slot = slotSize(index);
-        const chunk_len = chunkSizeForSlot(slot);
+    fn freeSmall(self: *PoolAllocator, index: usize, chunk_len: usize, memory: []u8) void {
         const addr = @intFromPtr(memory.ptr);
-        const node: *Node = @ptrCast(@alignCast(memory.ptr));
-
-        class.acquire();
-        node.next = class.head;
-        class.head = node;
-        class.live -= 1;
-
         const header = headerAt(addr, chunk_len);
-        if (header.live > 0) header.live -= 1;
-        if (header.live == 0 and class.chunks > 1) {
-            retireChunk(self, class, chunkBase(addr, chunk_len), chunk_len);
+        const shard = &self.classes[index].shards[header.shard];
+
+        shard.acquire();
+        defer shard.release();
+
+        std.debug.assert(header.live > 0);
+        header.live -= 1;
+        shard.live -= 1;
+
+        if (header.live == 0 and shard.chunks > 1) {
+            retireChunk(self, shard, chunkBase(addr, chunk_len), chunk_len);
+            return;
         }
-        class.release();
+
+        const node: *Node = @ptrCast(@alignCast(memory.ptr));
+        node.next = shard.head;
+        shard.head = node;
     }
 
-    fn retireChunk(self: *PoolAllocator, class: *Class, base: usize, chunk_len: usize) void {
-        var link = &class.head;
+    fn retireChunk(self: *PoolAllocator, shard: *Shard, base: usize, chunk_len: usize) void {
+        var link = &shard.head;
         while (link.*) |node| {
             if (chunkBase(@intFromPtr(node), chunk_len) == base) {
                 link.* = node.next;
@@ -185,16 +249,32 @@ pub const PoolAllocator = struct {
             }
         }
 
-        if (chunkBase(@intFromPtr(class.bump), chunk_len) == base) {
-            class.bump_left = 0;
+        if (shard.bump_left > 0 and chunkBase(@intFromPtr(shard.bump), chunk_len) == base) {
+            shard.bump_left = 0;
         }
 
-        class.chunks -= 1;
-        class.mapped_bytes -= chunk_len;
+        const header: *ChunkHeader = @ptrFromInt(base);
+        shard.unlinkAll(header);
+        shard.chunks -= 1;
+        shard.mapped_bytes -= chunk_len;
         _ = self.mapped_bytes.fetchSub(chunk_len, .monotonic);
 
         const bytes: [*]u8 = @ptrFromInt(base);
         self.large.rawFree(bytes[0..chunk_len], .fromByteUnits(chunk_len), 0);
+    }
+
+    fn allocFn(context: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *PoolAllocator = @ptrCast(@alignCast(context));
+        const index = classIndex(len, alignment) orelse
+            return self.large.rawAlloc(len, alignment, ra);
+        return self.allocSmall(index, currentShard());
+    }
+
+    fn freeFn(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *PoolAllocator = @ptrCast(@alignCast(context));
+        const index = classIndex(memory.len, alignment) orelse
+            return self.large.rawFree(memory, alignment, ra);
+        self.freeSmall(index, chunkSizeForSlot(slotSize(index)), memory);
     }
 
     fn resizeFn(context: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
@@ -215,6 +295,19 @@ pub const PoolAllocator = struct {
         return if (old.? == new.?) memory.ptr else null;
     }
 };
+
+threadlocal var thread_shard: usize = std.math.maxInt(usize);
+
+var shard_sequence: std.atomic.Value(usize) = .init(0);
+
+fn currentShard() usize {
+    var index = thread_shard;
+    if (index == std.math.maxInt(usize)) {
+        index = shard_sequence.fetchAdd(1, .monotonic) & (PoolAllocator.shard_count - 1);
+        thread_shard = index;
+    }
+    return index;
+}
 
 var instance: PoolAllocator = .{};
 
@@ -252,6 +345,7 @@ fn testPool() PoolAllocator {
 
 test "small allocations reuse freed slots across classes" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     const a = try alloc.alloc(u8, 100);
@@ -266,6 +360,7 @@ test "small allocations reuse freed slots across classes" {
 
 test "a free on another class does not hand out the wrong slot" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     const small = try alloc.alloc(u8, 40);
@@ -283,6 +378,7 @@ test "a free on another class does not hand out the wrong slot" {
 
 test "requested alignment is honoured for pool slots" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     inline for (.{ 32, 64, 4096, 16 * 1024 }) |alignment| {
@@ -294,6 +390,7 @@ test "requested alignment is honoured for pool slots" {
 
 test "allocations above the largest class fall through to the backing allocator" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     const big = try alloc.alloc(u8, PoolAllocator.max_slot + 1);
@@ -304,6 +401,7 @@ test "allocations above the largest class fall through to the backing allocator"
 
 test "buffers above 64 KiB reuse a slot from the shared pool instead of remapping" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     const big_len = 100 * 1024;
@@ -319,6 +417,7 @@ test "buffers above 64 KiB reuse a slot from the shared pool instead of remappin
 
 test "the largest class serves a slot from a dedicated chunk" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     const first = try alloc.alloc(u8, PoolAllocator.max_slot);
@@ -333,6 +432,7 @@ test "the largest class serves a slot from a dedicated chunk" {
 
 test "resize keeps the pointer within a class and rejects moves across classes" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     const first = try alloc.alloc(u8, 1000);
@@ -347,6 +447,7 @@ test "resize keeps the pointer within a class and rejects moves across classes" 
 
 test "an empty chunk goes back to the backing allocator" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
     const chunk_len = chunkBytesForSlot(64);
 
@@ -367,6 +468,7 @@ test "an empty chunk goes back to the backing allocator" {
 
 test "a retired chunk is not reached through a stale free-list entry" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
     const chunk_len = chunkBytesForSlot(64);
 
@@ -388,6 +490,7 @@ test "a retired chunk is not reached through a stale free-list entry" {
 
 test "interleaved frees still retire whole chunks" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
     const chunk_len = chunkBytesForSlot(64);
 
@@ -403,8 +506,65 @@ test "interleaved frees still retire whole chunks" {
     try testing.expectEqual(@as(usize, 1), pool.poolChunks());
 }
 
+test "freed slots are reused before a new chunk is mapped" {
+    var pool = testPool();
+    defer pool.deinit();
+    const alloc = pool.allocator();
+    const chunk_len = chunkBytesForSlot(64);
+
+    var slots: [900][]u8 = undefined;
+    for (&slots) |*slot| slot.* = try alloc.alloc(u8, 64);
+    try testing.expectEqual(@as(usize, 1), pool.poolChunks());
+
+    for (slots, 0..) |slot, index| {
+        if (index % 2 == 0) alloc.free(slot);
+    }
+
+    var again: [450][]u8 = undefined;
+    for (&again) |*slot| slot.* = try alloc.alloc(u8, 64);
+    try testing.expectEqual(@as(usize, 1), pool.poolChunks());
+
+    for (again) |slot| alloc.free(slot);
+    for (slots, 0..) |slot, index| {
+        if (index % 2 != 0) alloc.free(slot);
+    }
+
+    try testing.expectEqual(@as(u64, chunk_len), pool.mapped_bytes.load(.monotonic));
+}
+
+test "a slot freed from another thread retires its owner chunk" {
+    var pool = testPool();
+    defer pool.deinit();
+    const alloc = pool.allocator();
+    const chunk_len = chunkBytesForSlot(64);
+
+    const total = 2500;
+    var slots: [total][]u8 = undefined;
+    for (&slots) |*slot| {
+        slot.* = try alloc.alloc(u8, 64);
+        @memset(slot.*, 0x5C);
+    }
+    try testing.expect(pool.poolChunks() >= 3);
+
+    const Releaser = struct {
+        fn run(a: std.mem.Allocator, batch: []const []u8) void {
+            for (batch) |slot| {
+                for (slot) |byte| std.debug.assert(byte == 0x5C);
+                a.free(slot);
+            }
+        }
+    };
+
+    const thread = try std.Thread.spawn(.{}, Releaser.run, .{ alloc, slots[0..] });
+    thread.join();
+
+    try testing.expectEqual(@as(u64, chunk_len), pool.mapped_bytes.load(.monotonic));
+    try testing.expectEqual(@as(usize, 1), pool.poolChunks());
+}
+
 test "concurrent allocations keep their contents and release their chunks" {
     var pool = testPool();
+    defer pool.deinit();
     const alloc = pool.allocator();
 
     const Worker = struct {
@@ -440,7 +600,7 @@ test "concurrent allocations keep their contents and release their chunks" {
         }
     };
 
-    var threads: [4]std.Thread = undefined;
+    var threads: [PoolAllocator.shard_count]std.Thread = undefined;
     for (&threads, 0..) |*thread, index| {
         thread.* = try std.Thread.spawn(.{}, Worker.run, .{ alloc, 0x1000 + index });
     }
@@ -451,7 +611,38 @@ test "concurrent allocations keep their contents and release their chunks" {
     while (class_index < PoolAllocator.class_count) : (class_index += 1) {
         retained += chunkBytesForSlot(PoolAllocator.slot_min << @intCast(class_index));
     }
-    try testing.expect(pool.mapped_bytes.load(.monotonic) <= retained);
+    try testing.expect(pool.mapped_bytes.load(.monotonic) <= retained * PoolAllocator.shard_count);
+}
+
+test "every mapped chunk is accounted for and deinit releases all of them" {
+    var pool = testPool();
+    const alloc = pool.allocator();
+
+    const sizes = [_]usize{ 24, 100, 900, 5000, 70 * 1024, PoolAllocator.max_slot };
+    var handed: [sizes.len * 8][]u8 = undefined;
+    var count: usize = 0;
+
+    for (0..8) |round| {
+        for (sizes, 0..) |size, index| {
+            const memory = try alloc.alloc(u8, size);
+            @memset(memory, @as(u8, @truncate(round + index)));
+            handed[count] = memory;
+            count += 1;
+        }
+    }
+
+    var accounted: u64 = 0;
+    var class_index: usize = 0;
+    while (class_index < PoolAllocator.class_count) : (class_index += 1) {
+        accounted += pool.classStats(class_index).mapped_bytes;
+    }
+    try testing.expectEqual(pool.mapped_bytes.load(.monotonic), accounted);
+
+    for (handed[0..count]) |memory| alloc.free(memory);
+    pool.deinit();
+
+    try testing.expectEqual(@as(u64, 0), pool.mapped_bytes.load(.monotonic));
+    try testing.expectEqual(@as(usize, 0), pool.poolChunks());
 }
 
 test "chunk sizes stay between one slot and the retention ceiling" {
