@@ -222,3 +222,43 @@ test "the public API is organized as module namespaces" {
     _ = tecton.nbt;
     _ = tecton.binary_stream;
 }
+
+test "an embedded server does not allocate on the tick thread in steady state" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    var server = try tecton.Server.init(.{
+        .io = io,
+        .allocator = allocator,
+        .composition = tecton.composition,
+        .properties = tecton.ServerProperties{
+            .allocator = allocator,
+            .address = "127.0.0.1",
+            .port = 0,
+            .count_allocations = true,
+        },
+        .enable_console = false,
+        .discover_native_plugins = false,
+        .auto_load_worlds = false,
+        .create_default_world = false,
+    });
+    defer server.deinit();
+    try std.testing.expect(server.isCountingAllocations());
+    try server.start();
+
+    const warmup_until = server.tick_count + 40;
+    while (server.tick_count < warmup_until) {
+        try io.sleep(.fromNanoseconds(std.time.ns_per_ms * 5), .awake);
+    }
+
+    server.resetTickAllocationPeak();
+    const measured_until = server.tick_count + 20;
+    while (server.tick_count < measured_until) {
+        try io.sleep(.fromNanoseconds(std.time.ns_per_ms * 5), .awake);
+    }
+
+    const peak = server.peakTickAllocations();
+    if (peak != 0) {
+        std.debug.print("embedded tick allocation peak {d}, last tick {d}\n", .{ peak, server.lastTickAllocations() });
+    }
+    try std.testing.expectEqual(@as(usize, 0), peak);
+}

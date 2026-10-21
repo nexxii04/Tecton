@@ -112,7 +112,7 @@ pub fn Suite(comptime scope: type) type {
             var properties = ServerProperties{ .allocator = std.testing.allocator };
             defer properties.deinit();
             try std.testing.expect(properties.network_inbound_ring);
-            try std.testing.expectEqual(@as(u32, 8192), properties.inbound_ring_slots);
+            try std.testing.expectEqual(@as(u32, 512), properties.inbound_ring_slots);
             try std.testing.expectEqual(@as(u32, 1536), properties.inbound_ring_slot_size);
 
             try scope.set_field(&properties, "network-inbound-ring", "false");
@@ -272,7 +272,7 @@ pub fn Suite(comptime scope: type) type {
 
             var properties = ServerProperties{ .allocator = std.testing.allocator };
             defer properties.deinit();
-            try std.testing.expectEqual(@as(i32, 16), properties.effectiveMaxViewDistance());
+            try std.testing.expectEqual(@as(i32, 8), properties.effectiveMaxViewDistance());
             properties.max_view_distance = 128;
             try std.testing.expectEqual(@as(i32, 32), properties.effectiveMaxViewDistance());
             properties.max_view_distance = 0;

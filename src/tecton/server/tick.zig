@@ -4,6 +4,7 @@ const Timestamp = std.Io.Timestamp;
 const Tecton = @import("../tecton.zig").Tecton;
 const entities = @import("../world/dimension/entities.zig");
 const Events = @import("../events/root.zig");
+const alloc_counter = @import("../core/alloc_counter.zig");
 const Raknet = @import("Raknet");
 
 const packet_drain_budget_pct: u64 = 5;
@@ -13,6 +14,7 @@ const save_pass_interval_ticks: u64 = 6000;
 
 pub fn onTick(context: ?*anyopaque) void {
     const tecton = @as(*Tecton, @ptrCast(@alignCast(context)));
+    const alloc_mark = if (tecton.counting_allocations) alloc_counter.mark() else null;
     if (tecton.tick_thread_id.load(.monotonic) == 0) {
         tecton.tick_thread_id.store(@intCast(std.Thread.getCurrentId()), .release);
     }
@@ -149,4 +151,16 @@ pub fn onTick(context: ?*anyopaque) void {
 
     if (tecton.tick_count % save_pass_interval_ticks == 0) tecton.beginSavePass();
     tecton.tickIncrementalSave();
+
+    if (alloc_mark) |mark| {
+        const recorded = alloc_counter.since(mark);
+        tecton.recordTickAllocations(recorded.allocations);
+        if (recorded.allocations > 0 and tecton.tick_count % target_tps_u64 == 0) {
+            Raknet.Logger.WARN("Tick allocations: {d} allocations, {d} bytes on the tick thread (peak {d} per tick)", .{
+                recorded.allocations,
+                recorded.bytes,
+                tecton.peakTickAllocations(),
+            });
+        }
+    }
 }

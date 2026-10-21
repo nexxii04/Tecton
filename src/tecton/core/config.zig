@@ -24,14 +24,19 @@ pub const ServerProperties = struct {
     worker_threads: u32 = 0,
     worker_layout: WorkerLayout = .split,
     parallel_visibility: bool = true,
-    max_view_distance: u32 = 16,
+    max_view_distance: u32 = 8,
     simulation_distance: u32 = 4,
     max_mtu: u16 = max_max_mtu,
     movement_send_priority: []const u8 = "immediate",
     movement_distance_bands: bool = true,
     network_inbound_ring: bool = true,
-    inbound_ring_slots: u32 = 8192,
+    inbound_ring_slots: u32 = 512,
     inbound_ring_slot_size: u32 = 1536,
+    output_slab_slots: u32 = 512,
+    transient_slab_slots: u32 = 128,
+    outbound_queue_slots: u32 = 1024,
+    ecs_capacity: u32 = 1024,
+    count_allocations: bool = false,
     mob_broadcast_interval: u8 = 2,
     default_group: []const u8 = "member",
 
@@ -97,7 +102,12 @@ pub const ServerProperties = struct {
         .movement_distance_bands = "Rate-limit player movement updates by distance to the nearest viewer (false restores a delta every tick)",
         .network_inbound_ring = "Use the zero-alloc SPSC inbound ring instead of the per-packet heap queue (false restores the legacy path)",
         .inbound_ring_slots = "Inbound ring slots (clamped to 64-1048576 and rounded up to a power of two)",
-        .inbound_ring_slot_size = "Bytes per inbound ring slot (clamped to 512-65536; larger datagrams use a heap fallback)",
+        .inbound_ring_slot_size = "Bytes per inbound ring slot (clamped to 512-65536; larger payloads use bounded overflow slots)",
+        .output_slab_slots = "Reliable output datagram slots reserved at startup (minimum 64)",
+        .transient_slab_slots = "Transient output datagram slots reserved at startup (minimum 64)",
+        .outbound_queue_slots = "Outbound queue slots reserved at startup (minimum 64, rounded to a power of two)",
+        .ecs_capacity = "Entity slots reserved at startup (minimum 64; exhaustion never grows storage in the tick)",
+        .count_allocations = "Count allocations made by the tick thread and warn when a tick allocates (diagnostics)",
         .mob_broadcast_interval = "Ticks between in-air mob movement broadcasts (clamped to 1-20; 1 is the old every-tick behavior)",
         .default_group = "Default permission group for new players",
     };
@@ -280,6 +290,33 @@ test "verbose startup logs are disabled in release modes" {
 
 test "startup logs are never emitted from a test binary" {
     try @import("config_test.zig").Suite(test_scope).case_016();
+}
+
+test "memory capacities survive saving and loading properties" {
+    const allocator = std.testing.allocator;
+    var properties = ServerProperties{ .allocator = allocator };
+    defer properties.deinit();
+    try std.testing.expectEqual(@as(u32, 512), properties.output_slab_slots);
+    try std.testing.expectEqual(@as(u32, 128), properties.transient_slab_slots);
+    try std.testing.expectEqual(@as(u32, 1024), properties.outbound_queue_slots);
+    try std.testing.expectEqual(@as(u32, 1024), properties.ecs_capacity);
+    try properties.setField("output-slab-slots", "2048");
+    try properties.setField("transient-slab-slots", "256");
+    try properties.setField("outbound-queue-slots", "4096");
+    try properties.setField("ecs-capacity", "8192");
+    try properties.setField("count-allocations", "true");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buf: [256]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/memory.properties", .{tmp.sub_path});
+    try properties.save(std.testing.io, path);
+    var loaded = try ServerProperties.load(std.testing.io, allocator, path);
+    defer loaded.deinit();
+    try std.testing.expectEqual(@as(u32, 2048), loaded.output_slab_slots);
+    try std.testing.expectEqual(@as(u32, 256), loaded.transient_slab_slots);
+    try std.testing.expectEqual(@as(u32, 4096), loaded.outbound_queue_slots);
+    try std.testing.expectEqual(@as(u32, 8192), loaded.ecs_capacity);
+    try std.testing.expect(loaded.count_allocations);
 }
 
 test "the client chunk radius clamps to the supported range" {

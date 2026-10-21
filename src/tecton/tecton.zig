@@ -35,6 +35,7 @@ const resolveWorkerCount = @import("./tasks/threaded_tasks.zig").resolveWorkerCo
 const totalServerThreadCount = @import("./tasks/threaded_tasks.zig").totalServerThreadCount;
 const TickProfiler = @import("./core/tick_profiler.zig").TickProfiler;
 const pool_allocator = @import("./core/pool_allocator.zig");
+const alloc_counter = @import("./core/alloc_counter.zig");
 pub const block_root = @import("./world/block/root.zig");
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const EcsWorld = @import("entity/ecs.zig").EcsWorld;
@@ -113,6 +114,9 @@ pub const Tecton = struct {
     serialized_item_registry: ?[]const u8,
     serialized_biome_definitions: ?[]const u8,
     tick_count: u64 = 0,
+    counting_allocations: bool = false,
+    last_tick_allocations: std.atomic.Value(usize) = .init(0),
+    peak_tick_allocations: std.atomic.Value(usize) = .init(0),
     work_time_accumulator: u64 = 0,
     raknet_time_accumulator: u64 = 0,
     tick_interval_accumulator: u64 = 0,
@@ -146,10 +150,19 @@ pub const Tecton = struct {
 
     pub fn init(options: ServerOptions) !Tecton {
         const io = options.io;
-        const allocator = options.allocator;
-        Raknet.Logger.init(allocator);
-        var owned_config = options.properties orelse try ServerProperties.load(io, allocator, "server.properties");
+        const base_allocator = options.allocator;
+        Raknet.Logger.init(base_allocator);
+        var owned_config = options.properties orelse try ServerProperties.load(io, base_allocator, "server.properties");
         errdefer owned_config.deinit();
+
+        const counting_allocations = owned_config.count_allocations and alloc_counter.install(base_allocator);
+        if (owned_config.count_allocations and !counting_allocations) {
+            Raknet.Logger.WARN("count-allocations is already bound to another allocator in this process; the tick allocation count stays off", .{});
+        }
+        const allocator = if (counting_allocations) counted: {
+            Raknet.Logger.INFO("Allocation accounting enabled: counting allocator calls made by the tick thread", .{});
+            break :counted alloc_counter.allocator();
+        } else base_allocator;
 
         var auth_service: ?AuthService = null;
         errdefer if (auth_service) |*service| service.deinit();
@@ -202,7 +215,7 @@ pub const Tecton = struct {
             });
         }
 
-        const ecs_capacity = @max(@as(usize, 4096), @as(usize, @intCast(owned_config.max_players)) * 8);
+        const ecs_capacity = @max(@as(usize, 64), @as(usize, owned_config.ecs_capacity));
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();
         const raknet = Raknet.Server.init(io, .{
@@ -222,6 +235,9 @@ pub const Tecton = struct {
                 .gamemode = @tagName(owned_config.gameMode()),
             },
             .max_mtu = max_mtu,
+            .output_slab_slots = @max(64, owned_config.output_slab_slots),
+            .transient_slab_slots = @max(64, owned_config.transient_slab_slots),
+            .outbound_queue_slots = std.math.ceilPowerOfTwo(usize, @max(@as(usize, 64), owned_config.outbound_queue_slots)) catch return error.InvalidRingSize,
         }) catch |err| {
             if (err == error.AddressInUse) {
                 Raknet.Logger.ERROR("Address {s}:{d} is already in use, shutting down", .{ owned_config.address, owned_config.port });
@@ -231,6 +247,7 @@ pub const Tecton = struct {
         return Tecton{
             .io = io,
             .allocator = allocator,
+            .counting_allocations = counting_allocations,
             .config = owned_config,
             .paths = options.paths,
             .enable_console = options.enable_console,
@@ -313,6 +330,30 @@ pub const Tecton = struct {
 
     pub fn isStarted(self: *const Tecton) bool {
         return self.started;
+    }
+
+    pub fn isCountingAllocations(self: *const Tecton) bool {
+        return self.counting_allocations;
+    }
+
+    pub fn lastTickAllocations(self: *const Tecton) usize {
+        return self.last_tick_allocations.load(.acquire);
+    }
+
+    pub fn peakTickAllocations(self: *const Tecton) usize {
+        return self.peak_tick_allocations.load(.acquire);
+    }
+
+    pub fn recordTickAllocations(self: *Tecton, allocations: usize) void {
+        self.last_tick_allocations.store(allocations, .release);
+        var peak = self.peak_tick_allocations.load(.monotonic);
+        while (allocations > peak) {
+            peak = self.peak_tick_allocations.cmpxchgWeak(peak, allocations, .acq_rel, .monotonic) orelse break;
+        }
+    }
+
+    pub fn resetTickAllocationPeak(self: *Tecton) void {
+        self.peak_tick_allocations.store(0, .release);
     }
 
     pub fn setCommandPermissionChecker(self: *Tecton, checker: ?CommandPermissionChecker, userdata: ?*anyopaque) void {
@@ -584,7 +625,10 @@ pub const Tecton = struct {
             @bitCast(entity.flags.flags_one),
             1.0,
             0,
-        ) catch return;
+        ) catch |err| {
+            Raknet.Logger.WARN("ECS registration failed: {s}", .{@errorName(err)});
+            return;
+        };
         entity.ecs_id = @bitCast(id);
     }
 
