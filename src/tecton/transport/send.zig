@@ -1,3 +1,5 @@
+const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
+
 pub fn Methods(comptime scope: type) type {
     return struct {
         const std = scope.std;
@@ -9,10 +11,7 @@ pub fn Methods(comptime scope: type) type {
 
         pub fn sendUncompressedPacket(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
             const packets = [_][]const u8{packet};
-            const options = CompressionOptions{ .compression_method = .NotPresent, .compression_threshold = 255 };
-            const compressed = try Compression.compress(&packets, options, self.allocator);
-            defer self.allocator.free(compressed);
-            deliver(conn, compressed, .normal);
+            return sendFramed(self, conn, &packets, .{ .compression_method = .NotPresent, .compression_threshold = 255 }, .normal);
         }
 
         pub fn sendPacket(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
@@ -21,9 +20,7 @@ pub fn Methods(comptime scope: type) type {
 
         pub fn sendPacketWith(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8, priority: SendPriority) !void {
             const packets = [_][]const u8{packet};
-            const compressed = try Compression.compress(&packets, self.options, self.allocator);
-            defer self.allocator.free(compressed);
-            deliver(conn, compressed, priority);
+            return sendFramed(self, conn, &packets, self.options, priority);
         }
 
         pub fn sendImmediate(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
@@ -35,9 +32,7 @@ pub fn Methods(comptime scope: type) type {
         }
 
         pub fn sendPacketsWith(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8, priority: SendPriority) !void {
-            const compressed = try Compression.compress(packets, self.options, self.allocator);
-            defer self.allocator.free(compressed);
-            deliver(conn, compressed, priority);
+            return sendFramed(self, conn, packets, self.options, priority);
         }
 
         pub fn sendPacketsUncompressed(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) !void {
@@ -45,15 +40,63 @@ pub fn Methods(comptime scope: type) type {
         }
 
         pub fn sendPacketsUncompressedWith(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8, priority: SendPriority) !void {
+            if (priority == .immediate and self.options.compression_method != .NotPresent) {
+                conn.sendPacketBatch(packets, switch (priority) {
+                    .normal => .Normal,
+                    .immediate => .Immediate,
+                });
+                return;
+            }
             var options = self.options;
             options.compression_threshold = std.math.maxInt(u16);
-            const compressed = try Compression.compress(packets, options, self.allocator);
-            defer self.allocator.free(compressed);
-            deliver(conn, compressed, priority);
+            return sendFramed(self, conn, packets, options, priority);
         }
 
-        fn deliver(conn: *Raknet.Connection, bytes: []const u8, priority: SendPriority) void {
-            conn.sendReliableMessage(bytes, switch (priority) {
+        fn sendFramed(
+            self: *NetworkHandler,
+            conn: *Raknet.Connection,
+            packets: []const []const u8,
+            options: CompressionOptions,
+            priority: SendPriority,
+        ) !void {
+            const capacity = Compression.frameCapacity(packets, options);
+            if (self.frame_buffers) |frame_buffers| {
+                if (capacity <= FrameBuffers.slot_size and capacity <= maxFramePayload(conn)) {
+                    const buffers = frame_buffers.allocator();
+                    const buffer = try buffers.alloc(u8, capacity);
+                    const framed = Compression.compressInto(packets, options, buffer) catch |err| {
+                        buffers.free(buffer);
+                        return err;
+                    };
+
+                    const frame = Raknet.Proto.Frame.init(null, null, null, 0, .ReliableOrdered, framed, null, null, null, buffers);
+                    conn.sendFrame(frame, switch (priority) {
+                        .normal => .Normal,
+                        .immediate => .Immediate,
+                    });
+                    return;
+                }
+            }
+
+            const framed = try Compression.compress(packets, options, self.allocator);
+            deliverOwned(self, conn, framed, priority);
+        }
+
+        fn maxFramePayload(conn: *Raknet.Connection) usize {
+            return if (conn.mtu_size > 36) conn.mtu_size - 36 else 0;
+        }
+
+        fn deliverOwned(self: *NetworkHandler, conn: *Raknet.Connection, bytes: []const u8, priority: SendPriority) void {
+            const transport_allocator = conn.server.options.allocator;
+            if (self.allocator.ptr != transport_allocator.ptr or self.allocator.vtable != transport_allocator.vtable) {
+                defer self.allocator.free(bytes);
+                conn.sendReliableMessage(bytes, switch (priority) {
+                    .normal => .Normal,
+                    .immediate => .Immediate,
+                });
+                return;
+            }
+            conn.sendReliableMessageOwned(bytes, switch (priority) {
                 .normal => .Normal,
                 .immediate => .Immediate,
             });

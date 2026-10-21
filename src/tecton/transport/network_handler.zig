@@ -19,13 +19,14 @@ const host_mod = @import("./host.zig");
 const InboundRing = @import("./inbound_ring.zig").InboundRing;
 const worker_buffers_mod = @import("./worker_buffers.zig");
 const WorkerBuffers = worker_buffers_mod.WorkerBuffers;
+const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
 
 pub const QueuedPacket = queue.QueuedPacket;
 pub const PacketDrainResult = queue.PacketDrainResult;
 pub const ScratchBuffer = scratch_mod.ScratchBuffer;
 pub const SendPriority = priority_mod.SendPriority;
 
-const DECOMPRESS_POOL_CAPACITY: usize = 1024;
+const DECOMPRESS_POOL_CAPACITY: usize = 256;
 
 const INPUT_DECOMPRESS_CAP: usize = 128;
 
@@ -51,7 +52,6 @@ const DecompressWork = struct {
     arena_result: ?ArenaDecompressResult = null,
 
     arena_outstanding: ?*std.atomic.Value(u32) = null,
-    completed: bool = false,
 };
 
 const DecompressWorkPool = node_pool.NodePool(DecompressWork);
@@ -68,6 +68,7 @@ pub const NetworkHandler = struct {
     decompress_pending: std.atomic.Value(usize) = .init(0),
     dropped_packets: std.atomic.Value(usize) = .init(0),
     scratch: ScratchBuffer,
+    frame_buffers: ?*FrameBuffers = null,
     connections: connections_mod.ConnectionRegistry,
     inbound_ring: ?*InboundRing = null,
 
@@ -82,6 +83,7 @@ pub const NetworkHandler = struct {
         host: host_mod.Host,
     ) !*NetworkHandler {
         const self = try allocator.create(NetworkHandler);
+        errdefer allocator.destroy(self);
         self.* = .{
             .host = host,
             .io = io,
@@ -98,13 +100,21 @@ pub const NetworkHandler = struct {
             .connections = connections_mod.ConnectionRegistry.init(allocator),
         };
         self.decompress_pool = try DecompressWorkPool.init(io, allocator, DECOMPRESS_POOL_CAPACITY);
+        errdefer self.decompress_pool.deinit(allocator);
         self.scratch = ScratchBuffer.init(allocator);
+        errdefer self.scratch.deinit();
+        if (self.scratch.stream.capacity() == 0) return error.OutOfMemory;
+        const frame_buffers = try allocator.create(FrameBuffers);
+        errdefer allocator.destroy(frame_buffers);
+        frame_buffers.* = FrameBuffers.init(allocator);
+        self.frame_buffers = frame_buffers;
         return self;
     }
 
     pub fn startInputPump(self: *NetworkHandler) !void {
         if (self.input_pump != null) return;
         self.input_pump_running.store(true, .release);
+        errdefer self.input_pump_running.store(false, .release);
         self.input_pump = try std.Thread.spawn(.{}, inputPumpLoop, .{self});
     }
 
@@ -215,6 +225,7 @@ pub const NetworkHandler = struct {
 
     pub fn deinit(self: *NetworkHandler) void {
         self.stopInputPump();
+        Compression.deinitThreadLocal();
         for (self.packet_queue.items) |entry| self.allocator.free(entry.payload);
         self.packet_queue.deinit(self.allocator);
         for (self.worker_buffers) |*buffers| buffers.deinit();
@@ -225,9 +236,34 @@ pub const NetworkHandler = struct {
         self.decompress_pool.deinit(self.allocator);
         self.scratch.deinit();
         self.connections.deinit();
+        if (self.frame_buffers) |buffers| {
+            buffers.deinit();
+            self.allocator.destroy(buffers);
+            self.frame_buffers = null;
+        }
         self.allocator.destroy(self);
     }
 };
+
+fn exerciseHandlerInit(allocator: std.mem.Allocator) !void {
+    var tasks = ThreadedTaskQueue.init(std.testing.io, allocator, 1);
+    defer tasks.deinit();
+    const handler = try NetworkHandler.init(std.testing.io, allocator, &tasks, .{
+        .ctx = &tasks,
+        .dispatch = struct {
+            fn run(_: *anyopaque, _: *Raknet.Connection, _: []const []const u8) void {}
+        }.run,
+        .disconnected = struct {
+            fn run(_: *anyopaque, _: *Raknet.Connection) void {}
+        }.run,
+    });
+    defer handler.deinit();
+    try handler.enableInboundRing(64, 64);
+}
+
+test "network initialization unwinds allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseHandlerInit, .{});
+}
 
 const TestDispatchState = struct {
     dispatched_packets: usize = 0,
@@ -245,6 +281,7 @@ const test_scope = struct {
     pub const DecompressWorkPool = test_owner.DecompressWorkPool;
     pub const NetworkHandler = test_owner.NetworkHandler;
     pub const TestDispatchState = test_owner.TestDispatchState;
+    pub const Compression = test_owner.Compression;
 };
 
 test "drainPackets caps by queue bound and budget, and requeues the rest" {
@@ -255,8 +292,16 @@ test "ring drainPackets processes in order, drops stale generations and honors t
     try @import("network_handler_test.zig").Suite(test_scope).case_001();
 }
 
-test "oversize ring payloads dispatch intact bytes from the heap fallback" {
+test "immediate batches borrow slab storage while normal sends retain their priority and allocator ownership" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_003();
+}
+
+test "oversize ring payloads dispatch intact bytes from reserved overflow slots" {
     try @import("network_handler_test.zig").Suite(test_scope).case_002();
+}
+
+test "steady state sends frame packets without allocating" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_004();
 }
 
 const helper_owner = @This();
