@@ -132,6 +132,7 @@ pub const EcsWorld = struct {
     empty_metadata: Metadata = .{},
 
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !EcsWorld {
+        if (capacity > std.math.maxInt(i32)) return error.CapacityExceeded;
         const generations = try allocator.alloc(u16, capacity);
         errdefer allocator.free(generations);
         const alive = try allocator.alloc(bool, capacity);
@@ -152,17 +153,7 @@ pub const EcsWorld = struct {
         errdefer metadata.deinit();
         var item_drops = try DenseStore(ItemDrop).init(allocator, capacity);
         errdefer item_drops.deinit();
-        const drop_queue = allocator.alloc(DropRequest, capacity) catch |err| {
-            item_drops.deinit();
-            metadata.deinit();
-            health.deinit();
-            physics.deinit();
-            transforms.deinit();
-            allocator.free(free_indices);
-            allocator.free(alive);
-            allocator.free(generations);
-            return err;
-        };
+        const drop_queue = try allocator.alloc(DropRequest, capacity);
 
         return .{
             .allocator = allocator,
@@ -177,6 +168,37 @@ pub const EcsWorld = struct {
             .item_drops = item_drops,
             .drop_queue = drop_queue,
         };
+    }
+
+    pub fn reserve(self: *EcsWorld, capacity: usize) !void {
+        const previous_capacity = self.generations.len;
+        if (capacity <= previous_capacity) return;
+        var replacement = try EcsWorld.init(self.allocator, capacity);
+        errdefer replacement.deinit();
+        @memcpy(replacement.generations[0..previous_capacity], self.generations);
+        @memcpy(replacement.alive[0..previous_capacity], self.alive);
+        @memcpy(replacement.free_indices[0..self.free_len], self.free_indices[0..self.free_len]);
+        for (previous_capacity..capacity, self.free_len..) |index, free_index| {
+            replacement.free_indices[free_index] = @intCast(index);
+        }
+        replacement.free_len = self.free_len + capacity - previous_capacity;
+        inline for (.{ "transforms", "physics", "health", "metadata", "item_drops" }) |field| {
+            const source = &@field(self, field);
+            const target = &@field(replacement, field);
+            @memcpy(target.sparse[0..source.sparse.len], source.sparse);
+            @memcpy(target.dense_ids[0..source.len], source.dense_ids[0..source.len]);
+            @memcpy(target.dense_values[0..source.len], source.dense_values[0..source.len]);
+            target.len = source.len;
+        }
+        @memcpy(replacement.drop_queue[0..self.drop_len], self.drop_queue[0..self.drop_len]);
+        replacement.drop_len = self.drop_len;
+        replacement.drop_callback = self.drop_callback;
+        replacement.drop_context = self.drop_context;
+        replacement.sync_callback = self.sync_callback;
+        replacement.sync_context = self.sync_context;
+        replacement.empty_metadata = self.empty_metadata;
+        self.deinit();
+        self.* = replacement;
     }
 
     pub fn deinit(self: *EcsWorld) void {
@@ -271,6 +293,28 @@ pub const EcsWorld = struct {
         DropSystem.run(self);
     }
 
+    test "reservation preserves entity generations components and pending drops" {
+        try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseReserve, .{});
+    }
+
+    test "ecs operations and ticks never allocate after reservation" {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var world = try EcsWorld.init(failing.allocator(), 64);
+        defer world.deinit();
+        const allocations = failing.alloc_index;
+        failing.fail_index = allocations;
+        for (0..64) |_| {
+            const id = try world.registerLegacy(.zero(), .zero(), .zero(), 0, 1, 1);
+            try world.physics.add(id, .{ .enabled = true });
+            try world.attachItemDrop(id, .{ .identifier = "minecraft:stone", .count = 1 });
+            try std.testing.expect(world.queueEntityDrop(id, .zero()));
+        }
+        try std.testing.expectError(error.CapacityExceeded, world.create(1));
+        for (0..100) |_| world.tick();
+        try std.testing.expectEqual(allocations, failing.alloc_index);
+        try std.testing.expect(!failing.has_induced_failure);
+    }
+
     test "entity generations invalidate stale ids" {
         try @import("ecs_test.zig").Suite(EcsWorld).case_000();
     }
@@ -283,3 +327,25 @@ pub const EcsWorld = struct {
         try @import("ecs_test.zig").Suite(EcsWorld).case_002();
     }
 };
+
+fn exerciseReserve(allocator: std.mem.Allocator) !void {
+    var world = try EcsWorld.init(allocator, 2);
+    defer world.deinit();
+    const stale = try world.create(1);
+    try std.testing.expect(world.destroy(stale));
+    const held = try world.registerLegacy(.{ .x = 3, .y = 4, .z = 5 }, .zero(), .zero(), 42, 1, 2);
+    try world.attachItemDrop(held, .{ .identifier = "minecraft:stone", .count = 7 });
+    try std.testing.expect(world.queueEntityDrop(held, .zero()));
+    try world.reserve(8);
+    try std.testing.expect(!world.isAlive(stale));
+    try std.testing.expect(world.isAlive(held));
+    try std.testing.expectEqual(@as(f32, 3), world.transforms.get(held).?.position.x);
+    try std.testing.expectEqual(@as(u64, 42), world.metadata.get(held).?.flags);
+    try std.testing.expectEqual(@as(usize, 1), world.drop_len);
+    try std.testing.expectEqual(@as(u16, 7), world.drop_queue[0].item.count);
+    for (0..7) |_| {
+        const id = try world.create(3);
+        try std.testing.expect(id.index != held.index);
+    }
+    try std.testing.expectError(error.CapacityExceeded, world.create(3));
+}

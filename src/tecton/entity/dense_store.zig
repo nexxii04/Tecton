@@ -11,6 +11,7 @@ pub fn DenseStore(comptime EntityId: type, comptime T: type) type {
         len: usize = 0,
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
+            if (capacity > std.math.maxInt(i32)) return error.CapacityExceeded;
             const sparse = try allocator.alloc(i32, capacity);
             errdefer allocator.free(sparse);
             @memset(sparse, -1);
@@ -23,6 +24,18 @@ pub fn DenseStore(comptime EntityId: type, comptime T: type) type {
                 .dense_ids = dense_ids,
                 .dense_values = dense_values,
             };
+        }
+
+        pub fn reserve(self: *Self, capacity: usize) !void {
+            if (capacity <= self.sparse.len) return;
+            if (capacity > std.math.maxInt(i32)) return error.CapacityExceeded;
+            var replacement = try Self.init(self.allocator, capacity);
+            @memcpy(replacement.sparse[0..self.sparse.len], self.sparse);
+            @memcpy(replacement.dense_ids[0..self.len], self.dense_ids[0..self.len]);
+            @memcpy(replacement.dense_values[0..self.len], self.dense_values[0..self.len]);
+            replacement.len = self.len;
+            self.deinit();
+            self.* = replacement;
         }
 
         pub fn deinit(self: *Self) void {
@@ -78,4 +91,21 @@ pub fn DenseStore(comptime EntityId: type, comptime T: type) type {
             return self.dense_ids[@intCast(self.sparse[id.index])].generation == id.generation;
         }
     };
+}
+
+fn exerciseStoreReserve(allocator: std.mem.Allocator) !void {
+    const Id = struct { index: u32, generation: u16 };
+    var store = try DenseStore(Id, u64).init(allocator, 2);
+    defer store.deinit();
+    const id: Id = .{ .index = 1, .generation = 7 };
+    try store.add(id, 42);
+    try store.reserve(8);
+    try std.testing.expectEqual(@as(u64, 42), store.get(id).?.*);
+    try store.add(.{ .index = 7, .generation = 3 }, 99);
+    store.remove(id);
+    try std.testing.expectEqual(@as(u64, 99), store.get(.{ .index = 7, .generation = 3 }).?.*);
+}
+
+test "dense store reservation preserves sparse mappings and unwinds allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseStoreReserve, .{});
 }
