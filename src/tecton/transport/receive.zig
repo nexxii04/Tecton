@@ -35,7 +35,8 @@ pub fn Methods(comptime scope: type) type {
                     continue;
                 }
 
-                const work = self.decompress_pool.acquire(self.allocator) orelse {
+                const work = self.decompress_pool.acquire() orelse {
+                    _ = self.dropped_packets.fetchAdd(1, .monotonic);
                     ring.discard(popped);
                     continue;
                 };
@@ -109,7 +110,8 @@ pub fn Methods(comptime scope: type) type {
 
                 if (self.decompress_pending.load(.monotonic) >= INPUT_DECOMPRESS_CAP) break;
 
-                const work = self.decompress_pool.acquire(self.allocator) orelse {
+                const work = self.decompress_pool.acquire() orelse {
+                    _ = self.dropped_packets.fetchAdd(1, .monotonic);
                     self.allocator.free(entry.payload);
                     entry.payload = &.{};
                     continue;
@@ -159,7 +161,7 @@ pub fn Methods(comptime scope: type) type {
         }
         pub fn publishToRing(self: *NetworkHandler, ring: *InboundRing, conn: *scope.Raknet.Connection, payload: []const u8) void {
             const generation = self.connections.currentGeneration(self.io, conn) orelse return;
-            _ = ring.publish(self.allocator, conn, generation, payload) orelse {
+            _ = ring.publish(conn, generation, payload) orelse {
                 _ = self.dropped_packets.fetchAdd(1, .monotonic);
                 return;
             };

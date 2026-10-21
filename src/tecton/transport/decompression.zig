@@ -16,10 +16,6 @@ pub fn Methods(comptime scope: type) type {
 
         pub fn decompressTask(ctx: *anyopaque) void {
             const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
-            defer {
-                work.completed = true;
-                _ = work.handler.decompress_pending.fetchSub(1, .monotonic);
-            }
             work.decompressed = Compression.decompress(work.raw, work.handler.options, work.allocator) catch |err| {
                 std.log.err("decompress failed: {}", .{err});
                 work.allocator.free(work.raw);
@@ -32,10 +28,6 @@ pub fn Methods(comptime scope: type) type {
 
         pub fn ringDecompressTask(ctx: *anyopaque) void {
             const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
-            defer {
-                work.completed = true;
-                _ = work.handler.decompress_pending.fetchSub(1, .monotonic);
-            }
 
             var decoded = false;
             if (workerBuffersForCurrentThread(work.handler)) |buffers| {
@@ -79,7 +71,7 @@ pub fn Methods(comptime scope: type) type {
             work.decompressed = null;
 
             if (work.raw_heap) |heap| {
-                work.allocator.free(heap);
+                work.ring.?.ring.releaseOverflow(heap);
                 work.raw_heap = null;
             }
 
@@ -91,6 +83,8 @@ pub fn Methods(comptime scope: type) type {
             }
             work.arena_outstanding = null;
 
+            const previous = work.handler.decompress_pending.fetchSub(1, .monotonic);
+            std.debug.assert(previous > 0);
             work.handler.decompress_pool.release(work);
         }
 
@@ -99,7 +93,7 @@ pub fn Methods(comptime scope: type) type {
             if (work.decompressed) |result| result.deinit();
             work.decompressed = null;
             if (work.raw_heap) |heap| {
-                work.allocator.free(heap);
+                work.ring.?.ring.releaseOverflow(heap);
                 work.raw_heap = null;
             }
             if (work.raw.len > 0 and work.raw_heap == null and work.ring == null) {
@@ -113,11 +107,8 @@ pub fn Methods(comptime scope: type) type {
             }
             work.arena_outstanding = null;
 
-            if (!work.completed) {
-                work.completed = true;
-                const pending_before = work.handler.decompress_pending.fetchSub(1, .monotonic);
-                std.debug.assert(pending_before > 0);
-            }
+            const pending_before = work.handler.decompress_pending.fetchSub(1, .monotonic);
+            std.debug.assert(pending_before > 0);
             work.handler.decompress_pool.release(work);
         }
     };
