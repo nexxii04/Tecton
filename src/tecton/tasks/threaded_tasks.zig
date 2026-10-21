@@ -89,6 +89,9 @@ pub const ThreadedTaskQueue = struct {
     }
 
     pub fn start(self: *ThreadedTaskQueue) !void {
+        if (self.running) return;
+        if (self.shards.len != 0) return error.QueueAlreadyStarted;
+        errdefer self.deinit();
         self.running = true;
         self.stop_requested.store(false, .release);
         const resolution = resolveWorkerCount(self.configured_worker_count);
@@ -100,19 +103,25 @@ pub const ThreadedTaskQueue = struct {
         self.input_shard_count = self.layout_resolution.input_worker_count;
         self.world_shard_count = self.layout_resolution.world_worker_count;
 
-        self.shards = try self.allocator.alloc(TaskShard, worker_count);
-        for (self.shards, 0..) |*shard, i| {
+        const shards = try self.allocator.alloc(TaskShard, worker_count);
+        var initialized: usize = 0;
+        for (shards, 0..) |*shard, i| {
             const kind: Kind = if (i < self.input_shard_count) .input else .world;
             const capacity = if (kind == .input) input_queue_capacity else world_queue_capacity;
-            shard.* = try TaskShard.init(self.allocator, kind, capacity);
+            shard.* = TaskShard.init(self.allocator, kind, capacity) catch |err| {
+                for (shards[0..initialized]) |*ready| ready.queue.deinit(self.allocator);
+                self.allocator.free(shards);
+                return err;
+            };
+            initialized += 1;
         }
+        self.shards = shards;
 
         self.completed_input = try MpmcRing(ThreadedTask).init(self.allocator, completed_queue_capacity);
-        errdefer self.completed_input.deinit(self.allocator);
         self.completed_world = try MpmcRing(ThreadedTask).init(self.allocator, completed_queue_capacity);
-        errdefer self.completed_world.deinit(self.allocator);
 
         self.workers = try self.allocator.alloc(?std.Thread, worker_count);
+        @memset(self.workers, null);
         for (self.workers, 0..) |*w, i| {
             w.* = try std.Thread.spawn(.{}, workerLoop, .{ self, i });
         }
@@ -218,6 +227,16 @@ pub const ThreadedTaskQueue = struct {
 
     const workerLoop = @import("worker.zig").Methods(helper_scope).workerLoop;
 };
+
+fn exerciseQueueStart(allocator: std.mem.Allocator) !void {
+    var queue = ThreadedTaskQueue.init(std.testing.io, allocator, 1);
+    defer queue.deinit();
+    try queue.start();
+}
+
+test "worker startup unwinds every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseQueueStart, .{});
+}
 
 const test_owner = @This();
 const test_scope = struct {

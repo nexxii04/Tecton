@@ -6,6 +6,7 @@ pub fn Suite(comptime scope: type) type {
         const private_compression_readVarInt = scope.private_compression_readVarInt;
         const private_compression_unframe = scope.private_compression_unframe;
         pub fn case_000() !void {
+            defer Compression.deinitThreadLocal();
             const allocator = std.testing.allocator;
             var rng = std.Random.DefaultPrng.init(0xdeadbeef);
             const random = rng.random();
@@ -34,6 +35,7 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_001() !void {
+            defer Compression.deinitThreadLocal();
             const allocator = std.testing.allocator;
             var rng = std.Random.DefaultPrng.init(0xcafe9876);
             const random = rng.random();
@@ -117,6 +119,7 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_008() !void {
+            defer Compression.deinitThreadLocal();
             const allocator = std.testing.allocator;
             var rng = std.Random.DefaultPrng.init(0x5eed1234);
             const random = rng.random();
@@ -153,6 +156,7 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_009() !void {
+            defer Compression.deinitThreadLocal();
             const allocator = std.testing.allocator;
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
@@ -177,6 +181,7 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_010() !void {
+            defer Compression.deinitThreadLocal();
             const allocator = std.testing.allocator;
             const options = CompressionOptions{
                 .compression_method = .Zlib,
@@ -201,6 +206,39 @@ pub fn Suite(comptime scope: type) type {
                 try std.testing.expectEqualSlices(u8, payload[0..len], result.packets[0]);
                 _ = arena.reset(.retain_capacity);
             }
+        }
+
+        pub fn case_011() !void {
+            defer Compression.deinitThreadLocal();
+            var medium: [600]u8 = undefined;
+            for (&medium, 0..) |*byte, index| byte.* = @intCast(index % 251);
+            var large: [4096]u8 = undefined;
+            @memset(&large, 0x7E);
+            const small = [_]u8{0x11} ** 40;
+
+            try expectSameBytes(&.{&small}, .{ .compression_method = .Zlib, .compression_threshold = 255 });
+            try expectSameBytes(&.{&medium}, .{ .compression_method = .Zlib, .compression_threshold = 255 });
+            try expectSameBytes(&.{ &medium, &small }, .{ .compression_method = .Zlib, .compression_threshold = 1 });
+            try expectSameBytes(&.{&large}, .{ .compression_method = .Zlib, .compression_threshold = 255 });
+            try expectSameBytes(&.{&medium}, .{ .compression_method = .NotPresent, .compression_threshold = 255 });
+        }
+
+        fn expectSameBytes(packets: []const []const u8, options: CompressionOptions) !void {
+            const allocator = std.testing.allocator;
+            const capacity = Compression.frameCapacity(packets, options);
+
+            const expected = try Compression.compress(packets, options, allocator);
+            defer allocator.free(expected);
+            try std.testing.expect(capacity >= expected.len);
+
+            const buffer = try allocator.alloc(u8, capacity);
+            defer allocator.free(buffer);
+            const framed = try Compression.compressInto(packets, options, buffer);
+            try std.testing.expectEqualSlices(u8, expected, framed);
+
+            const tight = try allocator.alloc(u8, capacity - 1);
+            defer allocator.free(tight);
+            try std.testing.expectError(error.CompressionBufferTooSmall, Compression.compressInto(packets, options, tight));
         }
     };
 }

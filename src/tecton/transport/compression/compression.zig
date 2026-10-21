@@ -8,6 +8,7 @@ const c = @cImport({
 
 threadlocal var tl_stream: ?*c.z_stream = null;
 threadlocal var tl_inflate_stream: ?*c.z_stream = null;
+threadlocal var tl_framed: []u8 = &.{};
 
 fn acquireThreadLocal() !*c.z_stream {
     if (tl_stream) |s| {
@@ -63,72 +64,106 @@ pub const ArenaDecompressResult = struct {
 };
 
 pub const Compression = struct {
+    pub fn deinitThreadLocal() void {
+        if (tl_stream) |stream| {
+            _ = c.deflateEnd(stream);
+            std.heap.c_allocator.destroy(stream);
+            tl_stream = null;
+        }
+        if (tl_inflate_stream) |stream| {
+            _ = c.inflateEnd(stream);
+            std.heap.c_allocator.destroy(stream);
+            tl_inflate_stream = null;
+        }
+        if (tl_framed.len > 0) {
+            std.heap.c_allocator.free(tl_framed);
+            tl_framed = &.{};
+        }
+    }
+
     pub fn compress(
         packets: []const []const u8,
         options: CompressionOptions,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        const method = options.compression_method;
-        const threshold = options.compression_threshold;
+        const capacity = frameCapacity(packets, options);
+        const buffer = try allocator.alloc(u8, capacity);
+        errdefer allocator.free(buffer);
 
-        var framed_size: usize = 0;
-        for (packets) |packet| {
-            framed_size += varintSize(packet.len) + packet.len;
+        const framed = try compressInto(packets, options, buffer);
+        if (framed.len == capacity) return buffer;
+        return allocator.realloc(buffer, framed.len);
+    }
+
+    pub fn frameCapacity(packets: []const []const u8, options: CompressionOptions) usize {
+        const framed_size = framedLength(packets);
+        if (compresses(options, framed_size)) {
+            return 2 + @as(usize, @intCast(c.compressBound(@intCast(framed_size))));
         }
+        return headerLength(options) + framed_size;
+    }
 
-        const should_compress = framed_size >= threshold and method == .Zlib;
+    pub fn compressInto(packets: []const []const u8, options: CompressionOptions, dest: []u8) ![]const u8 {
+        const framed_size = framedLength(packets);
 
-        if (should_compress) {
-            const max_compressed = c.compressBound(@intCast(framed_size));
-            const buffer = try allocator.alloc(u8, @intCast(2 + max_compressed));
-            errdefer allocator.free(buffer);
+        if (compresses(options, framed_size)) {
+            const max_compressed: usize = @intCast(c.compressBound(@intCast(framed_size)));
+            if (dest.len < 2 + max_compressed) return error.CompressionBufferTooSmall;
 
-            buffer[0] = 254;
-            buffer[1] = @intFromEnum(method);
+            const framed = try framedScratch(framed_size);
+            framePackets(packets, framed);
 
-            const framed_buffer = try allocator.alloc(u8, framed_size);
-            defer allocator.free(framed_buffer);
+            dest[0] = 254;
+            dest[1] = @intFromEnum(options.compression_method);
 
-            var write_pos: usize = 0;
-            for (packets) |packet| {
-                write_pos += writeVarInt(framed_buffer[write_pos..], packet.len);
-                @memcpy(framed_buffer[write_pos..][0..packet.len], packet);
-                write_pos += packet.len;
-            }
-
-            var stream = try acquireThreadLocal();
-
-            stream.next_in = @constCast(framed_buffer.ptr);
+            const stream = try acquireThreadLocal();
+            stream.next_in = framed.ptr;
             stream.avail_in = @as(c_uint, @intCast(framed_size));
-            stream.next_out = buffer.ptr + 2;
+            stream.next_out = dest.ptr + 2;
             stream.avail_out = @as(c_uint, @intCast(max_compressed));
 
-            const ret = c.deflate(stream, c.Z_FINISH);
-            if (ret != c.Z_STREAM_END) {
-                return error.ZlibDeflateFailed;
-            }
-
-            const actual_size = 2 + (max_compressed - stream.avail_out);
-            return allocator.realloc(buffer, actual_size);
-        } else {
-            const header_size: usize = if (method == .NotPresent) 1 else 2;
-            const buffer = try allocator.alloc(u8, header_size + framed_size);
-            errdefer allocator.free(buffer);
-
-            buffer[0] = 254;
-            if (method != .NotPresent) {
-                buffer[1] = 0xFF;
-            }
-
-            var write_pos = header_size;
-            for (packets) |packet| {
-                write_pos += writeVarInt(buffer[write_pos..], packet.len);
-                @memcpy(buffer[write_pos..][0..packet.len], packet);
-                write_pos += packet.len;
-            }
-
-            return buffer;
+            if (c.deflate(stream, c.Z_FINISH) != c.Z_STREAM_END) return error.ZlibDeflateFailed;
+            return dest[0 .. 2 + (max_compressed - stream.avail_out)];
         }
+
+        const header_size = headerLength(options);
+        if (dest.len < header_size + framed_size) return error.CompressionBufferTooSmall;
+
+        dest[0] = 254;
+        if (options.compression_method != .NotPresent) dest[1] = 0xFF;
+        framePackets(packets, dest[header_size..][0..framed_size]);
+        return dest[0 .. header_size + framed_size];
+    }
+
+    fn framedLength(packets: []const []const u8) usize {
+        var framed_size: usize = 0;
+        for (packets) |packet| framed_size += varintSize(packet.len) + packet.len;
+        return framed_size;
+    }
+
+    fn headerLength(options: CompressionOptions) usize {
+        return if (options.compression_method == .NotPresent) 1 else 2;
+    }
+
+    fn compresses(options: CompressionOptions, framed_size: usize) bool {
+        return options.compression_method == .Zlib and framed_size >= options.compression_threshold;
+    }
+
+    fn framePackets(packets: []const []const u8, dest: []u8) void {
+        var write_pos: usize = 0;
+        for (packets) |packet| {
+            write_pos += writeVarInt(dest[write_pos..], packet.len);
+            @memcpy(dest[write_pos..][0..packet.len], packet);
+            write_pos += packet.len;
+        }
+    }
+
+    fn framedScratch(needed: usize) ![]u8 {
+        if (tl_framed.len >= needed) return tl_framed[0..needed];
+        const grown = try std.heap.c_allocator.alloc(u8, needed);
+        if (tl_framed.len > 0) std.heap.c_allocator.free(tl_framed);
+        tl_framed = grown;
+        return tl_framed[0..needed];
     }
 
     pub fn decompressInto(
@@ -211,6 +246,7 @@ pub const Compression = struct {
 
         if (method == .Snappy) {
             const empty = try allocator.alloc(u8, 0);
+            errdefer allocator.free(empty);
             const packets = try allocator.alloc([]const u8, 0);
             return .{ .packets = packets, .buffer = empty, .allocator = allocator };
         }
@@ -282,6 +318,10 @@ test "decompressInto borrows the input for uncompressed framing" {
 
 test "decompressInto survives many back-to-back uses of the pooled inflate stream" {
     try @import("compression_test.zig").Suite(test_scope).case_010();
+}
+
+test "compressInto writes the same wire bytes as compress and rejects short buffers" {
+    try @import("compression_test.zig").Suite(test_scope).case_011();
 }
 
 const codec_owner = @This();

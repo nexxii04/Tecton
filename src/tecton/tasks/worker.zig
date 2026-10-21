@@ -10,10 +10,7 @@ pub fn Methods(comptime scope: type) type {
             self.stop_requested.store(true, .release);
             self.running = false;
             for (self.shards) |*shard| {
-                shard.mutex.lock(self.io) catch |err| {
-                    std.log.err("failed to acquire lock: {}", .{err});
-                    continue;
-                };
+                shard.mutex.lockUncancelable(self.io);
                 shard.idle.store(false, .release);
                 shard.cond.broadcast(self.io);
                 shard.mutex.unlock(self.io);
@@ -73,6 +70,7 @@ pub fn Methods(comptime scope: type) type {
         pub fn workerLoop(self: *ThreadedTaskQueue, shard_idx: usize) void {
             scope.workerIndex().* = shard_idx;
             defer scope.workerIndex().* = NO_WORKER;
+            defer @import("../transport/compression/compression.zig").Compression.deinitThreadLocal();
 
             const shard = &self.shards[shard_idx];
             while (true) {
@@ -82,7 +80,7 @@ pub fn Methods(comptime scope: type) type {
                     continue;
                 }
 
-                if (!self.running) return;
+                if (self.stop_requested.load(.acquire)) return;
 
                 shard.mutex.lock(self.io) catch |err| {
                     std.log.err("failed to acquire lock: {}", .{err});
@@ -90,7 +88,7 @@ pub fn Methods(comptime scope: type) type {
                     continue;
                 };
                 shard.idle.store(true, .release);
-                while (self.running and shard.queue.empty()) {
+                while (!self.stop_requested.load(.acquire) and shard.queue.empty()) {
                     shard.cond.wait(self.io, &shard.mutex) catch |err| {
                         std.log.err("worker condition wait failed: {}", .{err});
                         shard.mutex.unlock(self.io);
