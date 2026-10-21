@@ -243,6 +243,34 @@ test "the heightmap reports the top block of a column" {
     try testing.expectEqual(@as(i32, -64), chunk.topBlockY(0, 0));
 }
 
+test "block storage grows across seven-bit threshold and rejects corrupt wire data" {
+    const allocator = testing.allocator;
+    const blocks = try registerTestBlocks(allocator);
+    defer deinitTestBlocks();
+
+    var storage = try BlockStorage.init(allocator);
+    defer storage.deinit();
+
+    for (0..80) |i| {
+        try storage.setState(@intCast(i & 15), @intCast((i >> 4) & 15), 0, @intCast(1000 + i));
+    }
+    for (0..80) |i| {
+        try testing.expectEqual(@as(i32, @intCast(1000 + i)), storage.getState(@intCast(i & 15), @intCast((i >> 4) & 15), 0));
+    }
+
+    var invalid_bits = [_]u8{14};
+    var reader = BinaryStream.init(testing.failing_allocator, &invalid_bits, null);
+    try testing.expectError(error.InvalidBitsPerBlock, BlockStorage.deserialize(&reader, allocator));
+
+    var corrupt = [_]u8{0} ** 516;
+    corrupt[0] = (1 << 1) | 1;
+    corrupt[1] = 1;
+    corrupt[513] = 2;
+    corrupt[514] = @intCast(blocks.air.network_id << 1);
+    reader = BinaryStream.init(testing.failing_allocator, &corrupt, null);
+    try testing.expectError(error.InvalidPaletteIndex, BlockStorage.deserialize(&reader, allocator));
+}
+
 test "sky exposure looks past the two block grace" {
     const allocator = testing.allocator;
     const blocks = try registerTestBlocks(allocator);
@@ -338,6 +366,33 @@ test "packed block storage round-trips through the wire format" {
         const bz: u8 = @intCast((pos >> 4) & 0xf);
         try testing.expectEqual(storage.getState(bx, by, bz), decoded.getState(bx, by, bz));
     }
+}
+
+fn exerciseChunkGrowth(allocator: std.mem.Allocator, stone: *BlockPermutation) !void {
+    var chunk = Chunk.init(allocator, 0, 0, .Overworld);
+    defer chunk.deinit();
+    try chunk.setPermutation(0, 64, 0, stone, 0);
+    for (0..40) |index| try chunk.subchunks[8].?.setState(@intCast(index & 15), @intCast(index >> 4), 3, @intCast(100 + index), 0);
+    try std.testing.expectEqual(@as(i32, 139), chunk.subchunks[8].?.getState(7, 2, 3, 0));
+}
+
+test "chunk layer growth unwinds every allocation failure" {
+    const blocks = try registerTestBlocks(testing.allocator);
+    defer deinitTestBlocks();
+    try testing.checkAllAllocationFailures(testing.allocator, exerciseChunkGrowth, .{blocks.stone});
+}
+
+test "chunk serialization borrows a fixed output buffer without allocating" {
+    const blocks = try registerTestBlocks(testing.allocator);
+    defer deinitTestBlocks();
+    var chunk = Chunk.init(testing.allocator, 0, 0, .Overworld);
+    defer chunk.deinit();
+    try chunk.setPermutation(0, -64, 0, blocks.stone, 0);
+    var bytes: [4096]u8 = undefined;
+    var stream = BinaryStream.init(testing.failing_allocator, &bytes, null);
+    stream.reset();
+    try chunk.serialize(&stream);
+    try testing.expect(stream.getBuffer().len > 0);
 }
 
 test "a chunk without the overworld offset keeps its own build range" {

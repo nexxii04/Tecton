@@ -16,6 +16,7 @@ pub const SuperflatGenerator = struct {
 
     pub fn init(allocator: std.mem.Allocator, properties: GeneratorProperties) !*SuperflatGenerator {
         const self = try allocator.create(SuperflatGenerator);
+        errdefer allocator.destroy(self);
         self.* = SuperflatGenerator{
             .allocator = allocator,
             .properties = properties,
@@ -48,6 +49,10 @@ pub const SuperflatGenerator = struct {
 
         const chunk = try allocator.create(Chunk);
         chunk.* = Chunk.init(allocator, x, z, self.properties.dimension_type);
+        errdefer {
+            chunk.deinit();
+            allocator.destroy(chunk);
+        }
 
         var bx: u8 = 0;
         while (bx < 16) : (bx += 1) {

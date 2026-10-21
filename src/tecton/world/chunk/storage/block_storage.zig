@@ -76,6 +76,7 @@ pub const BlockStorage = struct {
             if (self.palette.items.len >= MAX_PALETTE) return error.PaletteOverflow;
             palette_index = @intCast(self.palette.items.len);
             try self.palette.append(self.allocator, state);
+            errdefer self.palette.items.len -= 1;
             try self.widen();
         }
 
@@ -97,8 +98,12 @@ pub const BlockStorage = struct {
     }
 
     fn bitsFor(palette_len: usize) u5 {
-        if (palette_len <= 1) return 1;
-        return @intCast(std.math.log2_int_ceil(usize, palette_len));
+        const needed = std.math.log2_int_ceil(usize, @max(palette_len, 2));
+        return @intCast(switch (needed) {
+            1...6 => needed,
+            7, 8 => 8,
+            else => 16,
+        });
     }
 
     fn wordsFor(bits: u5) usize {
@@ -225,7 +230,10 @@ pub const BlockStorage = struct {
         const bits_per_block: u8 = palette_and_flag >> 1;
         const is_runtime = (palette_and_flag & 1) != 0;
 
-        if (bits_per_block > 16) return error.InvalidBitsPerBlock;
+        switch (bits_per_block) {
+            0, 1...6, 8, 16 => {},
+            else => return error.InvalidBitsPerBlock,
+        }
 
         var wire_words: ?[]u32 = null;
         defer if (wire_words) |w| allocator.free(w);
@@ -245,7 +253,7 @@ pub const BlockStorage = struct {
         if (is_runtime) {
             const palette_size_encoded = try stream.readVarInt();
             const palette_size_signed = decodeZigZag32(palette_size_encoded);
-            if (palette_size_signed < 0) return error.InvalidPaletteSize;
+            if (palette_size_signed < 0 or palette_size_signed > MAX_PALETTE) return error.InvalidPaletteSize;
             const palette_size: usize = @intCast(palette_size_signed);
             for (0..palette_size) |_| {
                 const encoded = try stream.readVarInt();
@@ -255,7 +263,7 @@ pub const BlockStorage = struct {
             }
         } else {
             const palette_size_i = try stream.readInt32(.Little);
-            if (palette_size_i < 0) return error.InvalidPaletteSize;
+            if (palette_size_i < 0 or palette_size_i > MAX_PALETTE) return error.InvalidPaletteSize;
             const palette_size: usize = @intCast(palette_size_i);
             for (0..palette_size) |_| {
                 const nbt_opts = NBT.ReadWriteOptions{ .name = true, .tag_type = true, .varint = false, .endian = .Little };
@@ -307,6 +315,7 @@ pub const BlockStorage = struct {
             .bits = bitsFor(palette.items.len),
             .air = air_perm.network_id,
         };
+        palette = .empty;
         errdefer storage.deinit();
 
         if (wire_words) |words| {
@@ -316,6 +325,7 @@ pub const BlockStorage = struct {
             for (0..MAX_SIZE) |position| {
                 const shift: u5 = @intCast((position % blocks_per_word) * @as(usize, bits_per_block));
                 const state = (words[position / blocks_per_word] >> shift) & mask;
+                if (state >= storage.palette.items.len) return error.InvalidPaletteIndex;
                 writeIndex(storage.words, storage.bits, position, state);
             }
         }

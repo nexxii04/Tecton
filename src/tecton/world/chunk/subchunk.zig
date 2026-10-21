@@ -36,8 +36,11 @@ pub const SubChunk = struct {
     }
 
     pub fn getLayer(self: *SubChunk, layer: usize) !*BlockStorage {
+        if (layer >= std.math.maxInt(u8)) return error.InvalidLayer;
+        try self.layers.ensureTotalCapacityPrecise(self.allocator, layer + 1);
+
         while (self.layers.items.len <= layer) {
-            try self.layers.append(self.allocator, try BlockStorage.init(self.allocator));
+            self.layers.appendAssumeCapacity(try BlockStorage.init(self.allocator));
         }
         return &self.layers.items[layer];
     }
@@ -90,8 +93,10 @@ pub const SubChunk = struct {
             for (layers.items) |*layer| layer.deinit();
             layers.deinit(allocator);
         }
+
+        try layers.ensureTotalCapacityPrecise(allocator, count);
         for (0..count) |_| {
-            try layers.append(allocator, try BlockStorage.deserialize(stream, allocator));
+            layers.appendAssumeCapacity(try BlockStorage.deserialize(stream, allocator));
         }
 
         return SubChunk{
