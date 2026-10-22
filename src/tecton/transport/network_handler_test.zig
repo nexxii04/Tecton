@@ -1,4 +1,5 @@
 const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
+const PayloadBuffers = @import("./payload_buffers.zig").PayloadBuffers;
 
 pub fn Suite(comptime scope: type) type {
     return struct {
@@ -41,6 +42,7 @@ pub fn Suite(comptime scope: type) type {
                 .decompress_pool = DecompressWorkPool.init(io, allocator, 16) catch unreachable,
                 .scratch = undefined,
                 .frame_buffers = null,
+                .payload_buffers = PayloadBuffers.init(allocator),
                 .connections = connections_mod.ConnectionRegistry.init(allocator),
             };
         }

@@ -110,6 +110,47 @@ pub fn Suite(comptime scope: type) type {
             ));
         }
 
+        pub fn case_006() !void {
+            const Raknet = scope.Raknet;
+            const allocator = std.testing.allocator;
+
+            var transport = try Raknet.Server.init(std.testing.io, .{
+                .allocator = allocator,
+                .address = "127.0.0.1",
+                .port = 0,
+                .output_slab_slots = 4,
+                .transient_slab_slots = 4,
+                .outbound_queue_slots = 8,
+            });
+            defer transport.deinit();
+
+            const conn = try allocator.create(Raknet.Connection);
+            defer allocator.destroy(conn);
+            conn.* = Raknet.Connection.init(&transport, .{ .ip4 = .{ .bytes = .{ 127, 0, 0, 1 }, .port = 7 } }, 1400, 7);
+            defer conn.deinit();
+            try conn.comm_data.output_frame_queue.ensureTotalCapacity(allocator, 4);
+
+            const packet = "chunk-packet-payload";
+            const owned = try allocator.dupe(u8, packet);
+            scope.sendOwnedChunkPacket(conn, allocator, owned);
+            try std.testing.expectEqual(@as(usize, 1), conn.comm_data.output_frame_queue.items.len);
+            try std.testing.expectEqual(@intFromPtr(owned.ptr), @intFromPtr(conn.comm_data.output_frame_queue.items[0].payload.ptr));
+            for (conn.comm_data.output_frame_queue.items) |*frame| frame.deinit();
+            conn.comm_data.output_frame_queue.clearRetainingCapacity();
+
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const arena_allocator = arena.allocator();
+            const copied = try arena_allocator.dupe(u8, packet);
+            scope.sendOwnedChunkPacket(conn, arena_allocator, copied);
+            try std.testing.expectEqual(@as(usize, 1), conn.comm_data.output_frame_queue.items.len);
+            const copied_frame = &conn.comm_data.output_frame_queue.items[0];
+            try std.testing.expect(@intFromPtr(copied_frame.payload.ptr) != @intFromPtr(copied.ptr));
+            try std.testing.expectEqualStrings(packet, copied_frame.payload);
+            for (conn.comm_data.output_frame_queue.items) |*frame| frame.deinit();
+            conn.comm_data.output_frame_queue.clearRetainingCapacity();
+        }
+
         fn containsBetween(source: []const u8, start_marker: []const u8, end_marker: []const u8, needle: []const u8) bool {
             const start = std.mem.indexOf(u8, source, start_marker) orelse return false;
             const end = std.mem.indexOfPos(u8, source, start + start_marker.len, end_marker) orelse return false;

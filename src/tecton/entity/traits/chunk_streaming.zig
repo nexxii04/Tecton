@@ -134,6 +134,17 @@ fn sendCachedChunkPacket(conn: *Raknet.Connection, cached: []const u8) void {
     conn.sendReliableMessage(cached, .Normal);
 }
 
+fn sendOwnedChunkPacket(conn: *Raknet.Connection, allocator: std.mem.Allocator, bytes: []const u8) void {
+    if (bytes.len == 0) return;
+    const transport_allocator = conn.server.options.allocator;
+    if (allocator.ptr == transport_allocator.ptr and allocator.vtable == transport_allocator.vtable) {
+        conn.sendReliableMessageOwned(bytes, .Normal);
+        return;
+    }
+    defer allocator.free(bytes);
+    conn.sendReliableMessage(bytes, .Normal);
+}
+
 fn onBatchComplete(ctx: *anyopaque) void {
     const work: *generation.ChunkBatchWork = @ptrCast(@alignCast(ctx));
     std.debug.assert(work.dimension.inflight_batches > 0);
@@ -233,8 +244,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
         for (0..work.count) |i| {
             const compressed = work.packets[i];
             if (compressed.len == 0) continue;
-            player.connection.sendReliableMessage(compressed, .Normal);
-            allocator.free(compressed);
+            sendOwnedChunkPacket(player.connection, work.allocator, compressed);
             work.packets[i] = &.{};
         }
 
@@ -748,10 +758,12 @@ fn ringCoord(cx: i32, cz: i32, ring: i32, idx: i32) [2]i32 {
 const test_owner = @This();
 const test_scope = struct {
     pub const std = test_owner.std;
+    pub const Raknet = test_owner.Raknet;
     pub const releaseCachedPackets = test_owner.releaseCachedPackets;
     pub const dropPendingHashes = test_owner.dropPendingHashes;
     pub const PacketAction = test_owner.PacketAction;
     pub const choosePacketAction = test_owner.choosePacketAction;
+    pub const sendOwnedChunkPacket = test_owner.sendOwnedChunkPacket;
 };
 
 test "two-tier chunk classification matches squared distance formula" {
@@ -776,4 +788,8 @@ test "a cached packet is served unless a simulation chunk still needs loading" {
 
 test "every completed batch releases its in-flight packet marks" {
     try @import("chunk_streaming_test.zig").Suite(test_scope).case_005();
+}
+
+test "an owned chunk packet reaches the transport without a copy" {
+    try @import("chunk_streaming_test.zig").Suite(test_scope).case_006();
 }

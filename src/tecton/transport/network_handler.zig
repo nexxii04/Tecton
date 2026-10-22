@@ -20,6 +20,7 @@ const InboundRing = @import("./inbound_ring.zig").InboundRing;
 const worker_buffers_mod = @import("./worker_buffers.zig");
 const WorkerBuffers = worker_buffers_mod.WorkerBuffers;
 const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
+const PayloadBuffers = @import("./payload_buffers.zig").PayloadBuffers;
 
 pub const QueuedPacket = queue.QueuedPacket;
 pub const PacketDrainResult = queue.PacketDrainResult;
@@ -69,6 +70,7 @@ pub const NetworkHandler = struct {
     dropped_packets: std.atomic.Value(usize) = .init(0),
     scratch: ScratchBuffer,
     frame_buffers: ?*FrameBuffers = null,
+    payload_buffers: PayloadBuffers,
     connections: connections_mod.ConnectionRegistry,
     inbound_ring: ?*InboundRing = null,
 
@@ -97,6 +99,7 @@ pub const NetworkHandler = struct {
             .packet_queue_mutex = .init,
             .decompress_pool = undefined,
             .scratch = undefined,
+            .payload_buffers = PayloadBuffers.init(allocator),
             .connections = connections_mod.ConnectionRegistry.init(allocator),
         };
         self.decompress_pool = try DecompressWorkPool.init(io, allocator, DECOMPRESS_POOL_CAPACITY);
@@ -241,6 +244,7 @@ pub const NetworkHandler = struct {
             self.allocator.destroy(buffers);
             self.frame_buffers = null;
         }
+        self.payload_buffers.deinit();
         self.allocator.destroy(self);
     }
 };

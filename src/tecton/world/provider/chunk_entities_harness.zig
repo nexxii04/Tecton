@@ -106,6 +106,7 @@ pub fn Harness(comptime Provider: type) type {
             self.network = undefined;
             self.network.allocator = allocator;
             self.network.options = .{ .compression_method = .Zlib, .compression_threshold = 255 };
+            self.network.payload_buffers = @import("../../transport/payload_buffers.zig").PayloadBuffers.init(allocator);
 
             self.provider = try Provider.init(testing.io, allocator, db_name);
             self.world = try World.init(self.host(), allocator, "load-world", self.provider.asProvider());
@@ -118,6 +119,7 @@ pub fn Harness(comptime Provider: type) type {
         pub fn deinit(self: *LoadHarness) void {
             self.dim.deinit();
             self.world.deinit();
+            self.network.payload_buffers.deinit();
             self.players.deinit();
             self.ecs.deinit();
             self.events.deinit();

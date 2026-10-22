@@ -310,7 +310,7 @@ pub const Player = struct {
             if (serialized) |data| {
                 if (self.entity.dimension) |dimension| {
                     if (SharedBroadcast.begin(
-                        self.network.allocator,
+                        &self.network.payload_buffers,
                         data,
                         self.network.options,
                     )) |begun| {
@@ -346,7 +346,7 @@ pub const Player = struct {
             const serialized = packet.serialize(&stream, allocator) catch null;
             if (serialized) |data| {
                 if (SharedBroadcast.begin(
-                    self.network.allocator,
+                    &self.network.payload_buffers,
                     data,
                     self.network.options,
                 )) |begun| {

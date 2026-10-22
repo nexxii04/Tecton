@@ -166,7 +166,7 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
     const serialized = try packet.serialize(&stream, temp_allocator);
 
     var broadcast = try SharedBroadcast.begin(
-        state.network.allocator,
+        &state.network.payload_buffers,
         serialized,
         state.network.options,
     );

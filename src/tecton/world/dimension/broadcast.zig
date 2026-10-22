@@ -13,7 +13,7 @@ pub const PARTICLE_BROADCAST_RADIUS: f32 = 64.0;
 pub fn broadcastToViewers(dim: *Dimension, data: []const u8) void {
     const tecton = dim.world.tecton;
     var broadcast = SharedBroadcast.begin(
-        tecton.network.allocator,
+        &tecton.network.payload_buffers,
         data,
         tecton.network.options,
     ) catch return;
@@ -30,7 +30,7 @@ pub fn broadcastToViewers(dim: *Dimension, data: []const u8) void {
 pub fn broadcastToEntityViewers(dim: *Dimension, entity: *const Entity, data: []const u8) void {
     const tecton = dim.world.tecton;
     var broadcast = SharedBroadcast.begin(
-        tecton.network.allocator,
+        &tecton.network.payload_buffers,
         data,
         tecton.network.options,
     ) catch return;
@@ -60,7 +60,7 @@ pub fn broadcastBlockUpdateToViewersExcept(dim: *Dimension, pos: Protocol.BlockP
 fn sendBlockUpdateToViewers(dim: *Dimension, pos: Protocol.BlockPosition, except: ?*Player, data: []const u8) void {
     const tecton = dim.world.tecton;
     var broadcast = SharedBroadcast.begin(
-        tecton.network.allocator,
+        &tecton.network.payload_buffers,
         data,
         tecton.network.options,
     ) catch return;
@@ -85,7 +85,7 @@ fn sendBlockUpdateToViewers(dim: *Dimension, pos: Protocol.BlockPosition, except
 pub fn broadcastToNearby(dim: *Dimension, pos: Protocol.Vector3f, radius: f32, data: []const u8) void {
     const tecton = dim.world.tecton;
     var broadcast = SharedBroadcast.begin(
-        tecton.network.allocator,
+        &tecton.network.payload_buffers,
         data,
         tecton.network.options,
     ) catch return;
