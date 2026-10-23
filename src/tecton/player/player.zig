@@ -49,10 +49,7 @@ pub fn playerDropSpawnPosition(pos: Protocol.Vector3f) Protocol.Vector3f {
 }
 
 pub fn damageable(gamemode: Protocol.GameMode) bool {
-    return switch (gamemode) {
-        .Creative, .Spectator, .CreativeSpectator, .SurvivalSpectator => false,
-        else => true,
-    };
+    return gamemode == .Survival;
 }
 
 pub const MAX_ATTACK_REACH: f32 = 8.0;
