@@ -74,6 +74,7 @@ pub const NameTag = struct {
 pub const ItemPickup = struct {
     stack: ItemStack,
     pickup_delay: u32 = 0,
+    pending_remove: bool = false,
 
     pub fn ecsDeinit(self: *ItemPickup, allocator: std.mem.Allocator) void {
         _ = allocator;

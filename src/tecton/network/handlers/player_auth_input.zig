@@ -312,14 +312,10 @@ fn handleBlockAction(
             if (player.gamemode != .Creative) {
                 if (break_event.getDrops().len > 0) {
                     const spawn_pos = centered(pos);
-                    var spawned = std.ArrayList(*@import("../../entity/entity.zig").Entity){ .items = &.{}, .capacity = 0 };
-                    defer spawned.deinit(network.allocator);
                     for (break_event.getDrops()) |drop| {
                         const drop_item_type = ItemType.get(drop.identifier) orelse continue;
-                        const entity = entities.spawnItemEntity(dimension, drop_item_type, drop.count, spawn_pos, 10, Protocol.Vector3f.init(0, 0.25, 0)) catch continue;
-                        spawned.append(network.allocator, entity) catch {};
+                        _ = entities.spawnItemEntity(dimension, drop_item_type, drop.count, spawn_pos, 10, Protocol.Vector3f.init(0, 0.25, 0)) catch continue;
                     }
-                    break_event.entities = spawned.items;
                 }
             }
 

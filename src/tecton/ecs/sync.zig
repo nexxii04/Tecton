@@ -27,12 +27,19 @@ pub const Ref = struct {
     position: Protocol.Vector3f,
 };
 
+pub const ViewerPacket = struct {
+    runtime: i64,
+    offset: u32,
+    len: u32,
+};
+
 pub const EntitySync = struct {
     stream: BinaryStream,
     adds: std.ArrayListUnmanaged(Ref) = .empty,
     removes: std.ArrayListUnmanaged(Ref) = .empty,
     moves: std.ArrayListUnmanaged(Ref) = .empty,
     metadata: std.ArrayListUnmanaged(Ref) = .empty,
+    viewer_packets: std.ArrayListUnmanaged(ViewerPacket) = .empty,
     overflow: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) EntitySync {
@@ -45,6 +52,7 @@ pub const EntitySync = struct {
         self.removes.deinit(allocator);
         self.moves.deinit(allocator);
         self.metadata.deinit(allocator);
+        self.viewer_packets.deinit(allocator);
     }
 
     fn append(
@@ -120,6 +128,29 @@ pub const EntitySync = struct {
         return packet.serialize(stream);
     }
 
+    pub fn queueViewerPacket(
+        self: *EntitySync,
+        allocator: std.mem.Allocator,
+        runtime: i64,
+        ctx: anytype,
+        comptime build: anytype,
+    ) void {
+        const start = self.stream.written;
+        build(ctx, &self.stream) catch {
+            self.stream.written = start;
+            self.overflow += 1;
+            return;
+        };
+        self.viewer_packets.append(allocator, .{
+            .runtime = runtime,
+            .offset = @intCast(start),
+            .len = @intCast(self.stream.written - start),
+        }) catch {
+            self.stream.written = start;
+            self.overflow += 1;
+        };
+    }
+
     pub fn collectMovement(self: *EntitySync, allocator: std.mem.Allocator, world: *GameWorld, interval_in: u8) void {
         const Ctx = struct {
             sync: *EntitySync,
@@ -173,6 +204,7 @@ pub const EntitySync = struct {
         self.removes.clearRetainingCapacity();
         self.moves.clearRetainingCapacity();
         self.metadata.clearRetainingCapacity();
+        self.viewer_packets.clearRetainingCapacity();
     }
 
     pub fn flush(self: *EntitySync, tecton: *Tecton, dimension: *Dimension) void {
@@ -203,6 +235,12 @@ pub const EntitySync = struct {
             for (self.metadata.items) |ref| {
                 if (!player.visible_entities.contains(ref.runtime)) continue;
                 tecton.network.sendPacket(player.connection, self.payloadSlice(ref)) catch {};
+            }
+
+            for (self.viewer_packets.items) |packet| {
+                if (!player.visible_entities.contains(packet.runtime)) continue;
+                const bytes = self.stream.payload[packet.offset .. packet.offset + packet.len];
+                tecton.network.sendPacket(player.connection, bytes) catch {};
             }
         }
         self.reset();

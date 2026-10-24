@@ -9,11 +9,11 @@ const EntityType = @import("../../entity/entity_type.zig").EntityType;
 const EntityTypeRegistry = @import("../../entity/entity_type_registry.zig").EntityTypeRegistry;
 const Entity = @import("../../entity/entity.zig").Entity;
 const Health = @import("../../entity/traits/health.zig");
-const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
-const ItemEntityTrait = @import("../../entity/traits/item_entity.zig").ItemEntityTrait;
 const ProjectileTrait = @import("../../entity/traits/projectile.zig").ProjectileTrait;
 const criticalTrailActive = @import("../../entity/traits/projectile.zig").criticalTrailActive;
 const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
+const ecs_items = @import("../../ecs/item_entities.zig");
+const ecs_entity_id = @import("../../ecs/entity_id.zig");
 const Bow = @import("../../items/bow.zig");
 const ItemStack = @import("../../items/item_stack.zig").ItemStack;
 const ItemType = @import("../../items/item_type.zig").ItemType;
@@ -21,13 +21,6 @@ const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("./dimension.zig").Dimension;
 const broadcast = @import("./broadcast.zig");
 const serialization = @import("../provider/serialization.zig");
-
-const item_entity_type = EntityType{
-    .identifier = "minecraft:item",
-    .network_id = 64,
-    .components = &.{},
-    .tags = &.{},
-};
 
 pub fn spawnEntity(dim: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f) !*Entity {
     return spawnEntityWithOptions(dim, entity_type, position, "", false);
@@ -78,45 +71,18 @@ pub fn flushPendingRemovals(dim: *Dimension) void {
     dim.pending_removals.clearRetainingCapacity();
 }
 
-pub fn spawnItemEntity(dim: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !*Entity {
+pub fn spawnItemEntity(dim: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !ecs_entity_id.EntityId {
     const stack = ItemStack.init(dim.allocator, item_type, .{ .stack_size = count });
     return spawnItemStackEntity(dim, stack, position, pickup_delay, velocity);
 }
 
-pub fn spawnItemStackEntity(dim: *Dimension, stack: ItemStack, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !*Entity {
-    const entity = try dim.allocator.create(Entity);
-    entity.* = Entity.init(dim.allocator, &item_entity_type, dim);
-    entity.position = position;
-    dim.world.tecton.registerEcsEntity(entity);
-
-    const gravity = try GravityTrait.create(dim.allocator, .{
-        .force = -0.04,
-        .drag = 0.02,
-        .apply_drag_before_gravity = true,
-        .falling_distance = 0,
-        .falling_ticks = 0,
-        .on_ground = false,
-    });
-    try entity.addTrait(gravity);
-
-    const pickup = try ItemEntityTrait.create(dim.allocator, .{
+pub fn spawnItemStackEntity(dim: *Dimension, stack: ItemStack, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !ecs_entity_id.EntityId {
+    return ecs_items.spawnItem(dim, .{
         .stack = stack,
+        .position = position,
         .pickup_delay = pickup_delay,
-        .lifetime = 0,
-        .pending_remove = false,
+        .velocity = velocity,
     });
-    try entity.addTrait(pickup);
-
-    entity.motion = velocity;
-    try dim.entities.put(entity.runtime_id, entity);
-    dim.entity_index.add(entity);
-
-    var stream = BinaryStream.init(dim.allocator, null, null);
-    defer stream.deinit();
-    const serialized = try serializeAddItemActor(dim, entity, &stream);
-    sendAddToViewers(dim, entity, serialized);
-
-    return entity;
 }
 
 pub const ArrowSpec = struct {
@@ -260,25 +226,10 @@ fn serializeAddEntity(dim: *Dimension, entity: *Entity, stream: *BinaryStream) !
     return try packet.serialize(stream);
 }
 
-fn serializeAddItemActor(dim: *Dimension, entity: *Entity, stream: *BinaryStream) ![]const u8 {
-    const item_state = entity.getTraitState(ItemEntityTrait) orelse return error.MissingItemEntityTrait;
-    const packet = Protocol.AddItemActorPacket{
-        .unique_entity_id = entity.unique_id,
-        .runtime_entity_id = @bitCast(entity.runtime_id),
-        .item = item_state.stack.toNetworkStack(),
-        .position = entity.position,
-        .velocity = entity.motion,
-    };
-    return try packet.serialize(stream, dim.allocator);
-}
-
 pub fn sendAddEntityToPlayer(dim: *Dimension, player: *Player, entity: *Entity) bool {
     var stream = BinaryStream.init(dim.allocator, null, null);
     defer stream.deinit();
-    const serialized = if (entity.getTraitState(ItemEntityTrait) != null)
-        serializeAddItemActor(dim, entity, &stream) catch return false
-    else
-        serializeAddEntity(dim, entity, &stream) catch return false;
+    const serialized = serializeAddEntity(dim, entity, &stream) catch return false;
     dim.world.tecton.network.sendPacket(player.connection, serialized) catch return false;
     return true;
 }

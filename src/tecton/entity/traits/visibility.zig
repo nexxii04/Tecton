@@ -135,6 +135,10 @@ fn updateTrackedEntities(player: *Player) void {
         }
     }
 
+    if (dimension.ecs) |state| {
+        trackEcsEntities(player, state, allocator, center_x, center_z, view);
+    }
+
     var stale = std.ArrayList(i64).empty;
     defer stale.deinit(allocator);
     var tracked_it = player.visible_entities.keyIterator();
@@ -152,6 +156,41 @@ fn updateTrackedEntities(player: *Player) void {
     }
     for (stale.items) |runtime_id| {
         _ = player.visible_entities.remove(runtime_id);
+    }
+}
+
+fn trackEcsEntities(
+    player: *Player,
+    state: *@import("../../ecs/resources.zig").DimensionEcs,
+    allocator: std.mem.Allocator,
+    center_x: i32,
+    center_z: i32,
+    view: i32,
+) void {
+    const ecs_components = @import("../../ecs/components.zig");
+    const ecs_protocol = @import("../../ecs/protocol.zig");
+    const world = &state.world;
+
+    var chunk_dx: i32 = -view;
+    while (chunk_dx <= view) : (chunk_dx += 1) {
+        var chunk_dz: i32 = -view;
+        while (chunk_dz <= view) : (chunk_dz += 1) {
+            if (chunk_dx * chunk_dx + chunk_dz * chunk_dz > view * view) continue;
+            const hash = @import("../../world/dimension/dimension.zig").chunkHash(center_x + chunk_dx, center_z + chunk_dz);
+            for (state.chunk_index.bucket(hash)) |id| {
+                const proto = world.get(id, ecs_components.ProtocolId) orelse continue;
+                if (player.visible_entities.contains(proto.runtime)) continue;
+                const transform = world.get(id, ecs_components.Transform) orelse continue;
+                const dx = player.entity.position.x - transform.position.x;
+                const dz = player.entity.position.z - transform.position.z;
+                if (!Dimension.withinViewDistance(dx, dz, view)) continue;
+                var stream = BinaryStream.init(allocator, null, null);
+                defer stream.deinit();
+                const serialized = ecs_protocol.buildAddPacket(allocator, world, id, &stream) catch continue;
+                player.network.sendPacket(player.connection, serialized) catch continue;
+                player.visible_entities.put(proto.runtime, proto.unique) catch {};
+            }
+        }
     }
 }
 

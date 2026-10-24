@@ -23,6 +23,9 @@ pub const pipeline = @import("pipeline.zig");
 pub const movement = @import("movement.zig");
 pub const sync = @import("sync.zig");
 pub const EntitySync = sync.EntitySync;
+pub const chunk_index = @import("chunk_index.zig");
+pub const EcsChunkIndex = chunk_index.EcsChunkIndex;
+pub const item_entities = @import("item_entities.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

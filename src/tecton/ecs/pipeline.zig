@@ -37,12 +37,37 @@ fn movementSystem(res: *Resources) void {
     @import("movement.zig").movementApply(&res.ecs.world, res.dimension);
 }
 
+fn pickupSystem(res: *Resources) void {
+    @import("item_entities.zig").pickupSystem(res);
+}
+
+fn mergeSystem(res: *Resources) void {
+    @import("item_entities.zig").mergeSystem(res);
+}
+
+fn reindexSystem(res: *Resources) void {
+    const entity_id_mod = @import("entity_id.zig");
+    const dimension_mod = @import("../world/dimension/dimension.zig");
+    const Ctx = struct { res: *Resources };
+    var ctx = Ctx{ .res = res };
+    query.each(&res.ecs.world, .{ components.Transform, ProtocolId }, &ctx, struct {
+        fn call(c: *Ctx, id: entity_id_mod.EntityId, transform: *components.Transform, _: *ProtocolId) void {
+            const cx = @as(i32, @intFromFloat(@floor(transform.position.x))) >> 4;
+            const cz = @as(i32, @intFromFloat(@floor(transform.position.z))) >> 4;
+            c.res.ecs.chunk_index.update(id, dimension_mod.chunkHash(cx, cz)) catch {};
+        }
+    }.call);
+}
+
 fn lifetimeSystem(res: *Resources) void {
     lifetimeApply(&res.ecs.world, &res.ecs.commands, res.allocator);
 }
 
 pub const simulation_stages = [_]Stage{
     .{ .name = "movement", .run = movementSystem },
+    .{ .name = "pickup", .run = pickupSystem },
+    .{ .name = "merge", .run = mergeSystem },
+    .{ .name = "reindex", .run = reindexSystem },
     .{ .name = "lifetime", .run = lifetimeSystem },
 };
 
@@ -60,6 +85,7 @@ pub fn flushEcs(state: *DimensionEcs, bus: *EventsRoot.Events, allocator: std.me
             _ = bus.emit(.EntityDespawn, &event);
         }
         state.runtime_index.unpublish(proto.runtime);
+        _ = state.chunk_index.remove(command.id);
     }
     state.commands.flush(&state.world);
 }
