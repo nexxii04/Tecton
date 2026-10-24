@@ -49,7 +49,7 @@ pub fn playerDropSpawnPosition(pos: Protocol.Vector3f) Protocol.Vector3f {
 }
 
 pub fn damageable(gamemode: Protocol.GameMode) bool {
-    return gamemode == .Survival;
+    return gamemode == .Survival or gamemode == .Adventure;
 }
 
 pub const MAX_ATTACK_REACH: f32 = 8.0;
