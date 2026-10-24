@@ -178,6 +178,7 @@ fn trackEcsEntities(
             if (chunk_dx * chunk_dx + chunk_dz * chunk_dz > view * view) continue;
             const hash = @import("../../world/dimension/dimension.zig").chunkHash(center_x + chunk_dx, center_z + chunk_dz);
             for (state.chunk_index.bucket(hash)) |id| {
+                if (id.kind == .player) continue;
                 const proto = world.get(id, ecs_components.ProtocolId) orelse continue;
                 if (player.visible_entities.contains(proto.runtime)) continue;
                 const transform = world.get(id, ecs_components.Transform) orelse continue;

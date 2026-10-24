@@ -38,7 +38,7 @@ pub fn writeChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: 
     if (dimension.ecs) |state| {
         const ecs_persistence = @import("../../ecs/persistence.zig");
         for (state.chunk_index.bucket(@import("../dimension/dimension.zig").chunkHash(chunk.x, chunk.z))) |id| {
-            if (id.kind == .item) continue;
+            if (id.kind != .mob) continue;
             var tag = (ecs_persistence.serializeEcsEntity(provider.allocator, &state.world, id) catch null) orelse continue;
             defer tag.deinit(provider.allocator);
             const data = serialization.encodeNbt(provider.allocator, &tag) catch continue;

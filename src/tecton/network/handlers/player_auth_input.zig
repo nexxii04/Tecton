@@ -218,14 +218,20 @@ fn handleItemUseTransaction(
     };
 
     var block = dimension.getBlock(pos);
-    if (!block.fireEvent(.Place, .{ &block, player })) return;
+    if (!block.fireEvent(.Place, .{ &block, player })) {
+        correctPlacement(network, player, dimension, pos);
+        return;
+    }
 
     var place_event = Events.BlockPlaceEvent{
         .player = player,
         .position = pos,
         .permutation = permutation,
     };
-    if (!tecton.events.emit(.BlockPlace, &place_event)) return;
+    if (!tecton.events.emit(.BlockPlace, &place_event)) {
+        correctPlacement(network, player, dimension, pos);
+        return;
+    }
 
     try dimension.setPermutation(pos, permutation, 0);
     try applyTraitsForBlock(player.entity.allocator, dimension, pos);
@@ -365,6 +371,11 @@ fn sendBlockCorrection(network: *NetworkHandler, player: *Player, pos: Protocol.
     };
     const serialized = update.serialize(scratch.stream()) catch return;
     network.sendPacket(player.connection, serialized) catch {};
+}
+
+fn correctPlacement(network: *NetworkHandler, player: *Player, dimension: *Dimension, pos: Protocol.BlockPosition) void {
+    const perm = dimension.getPermutation(pos, 0) catch return;
+    sendBlockCorrection(network, player, pos, @bitCast(perm.network_id));
 }
 
 fn broadcastLevelEvent(dimension: *Dimension, network: *NetworkHandler, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
