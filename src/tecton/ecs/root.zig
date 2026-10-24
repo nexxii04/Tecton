@@ -27,6 +27,7 @@ pub const chunk_index = @import("chunk_index.zig");
 pub const EcsChunkIndex = chunk_index.EcsChunkIndex;
 pub const item_entities = @import("item_entities.zig");
 pub const persistence = @import("persistence.zig");
+pub const mobs = @import("mobs.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

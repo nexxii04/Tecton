@@ -21,6 +21,9 @@ pub const DimensionEcs = struct {
     runtime_index: protocol_mod.RuntimeIndex,
     sync: EntitySync,
     chunk_index: EcsChunkIndex,
+    damage_queue: std.ArrayListUnmanaged(@import("mobs.zig").DamageRequest) = .empty,
+    damage_overflow: usize = 0,
+    unique_ids: std.AutoHashMapUnmanaged(i64, void) = .empty,
 
     pub fn create(allocator: std.mem.Allocator, capacity: usize) !*DimensionEcs {
         const state = try allocator.create(DimensionEcs);
@@ -35,6 +38,8 @@ pub const DimensionEcs = struct {
         state.sync = EntitySync.init(allocator);
         errdefer state.sync.deinit(allocator);
         state.chunk_index = EcsChunkIndex.init(allocator);
+        state.damage_queue = .empty;
+        state.unique_ids = .empty;
         return state;
     }
 
@@ -45,6 +50,8 @@ pub const DimensionEcs = struct {
         self.commands.deinit(allocator);
         self.world.deinit();
         self.runtime_index.deinit(allocator);
+        self.damage_queue.deinit(allocator);
+        self.unique_ids.deinit(allocator);
         allocator.destroy(self);
     }
 };
