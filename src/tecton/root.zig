@@ -17,6 +17,7 @@ pub const composition = @import("./server/root.zig").composition;
 pub const defaultOptions = @import("./server/root.zig").defaultOptions;
 pub const ServerProperties = @import("./core/config.zig").ServerProperties;
 pub const container = @import("./container/root.zig");
+pub const ecs = @import("./ecs/root.zig");
 pub const entity = @import("./entity/root.zig");
 pub const events = @import("./events/root.zig");
 pub const items = @import("./items/root.zig");
