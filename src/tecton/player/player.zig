@@ -358,6 +358,9 @@ pub const Player = struct {
             }
         }
 
+        if (self.entity.dimension) |dimension| {
+            @import("../ecs/players.zig").removePlayer(dimension, self.entity.runtime_id);
+        }
         self.tecton.removePlayer(self);
         self.tecton.unregisterEcsEntity(&self.entity);
         self.deinit();
@@ -406,7 +409,14 @@ pub const Player = struct {
             self.entity.dimension = dimension;
             self.entity.instance_id = dimension.instance_id;
             self.tecton.instances.assignDimension(self.entity.runtime_id, dimension) catch {};
-            self.entity.position = pos;
+            @import("../ecs/players.zig").writePlayerTransform(
+                dimension,
+                self.entity.runtime_id,
+                &self.entity,
+                pos,
+                self.entity.rotation,
+                self.entity.motion,
+            );
             self.tecton.setPlayerLocation(self.uuid, dimension.world.identifier, dimension.identifier);
 
             var stream = BinaryStream.init(self.entity.allocator, null, null);

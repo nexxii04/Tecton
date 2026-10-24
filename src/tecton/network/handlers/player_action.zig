@@ -31,13 +31,27 @@ pub fn handlePlayerAction(
             }
 
             const spawn = dim.spawn_position;
-            player.entity.position = Protocol.Vector3f.init(
+            const spawn_position = Protocol.Vector3f.init(
                 @as(f32, @floatFromInt(spawn.x)) + 0.5,
                 @as(f32, @floatFromInt(spawn.y)),
                 @as(f32, @floatFromInt(spawn.z)) + 0.5,
             );
+            const previous_dimension = player.entity.dimension;
             player.entity.dimension = dim;
             player.entity.instance_id = dim.instance_id;
+            @import("../../ecs/players.zig").writePlayerTransform(
+                dim,
+                player.entity.runtime_id,
+                &player.entity,
+                spawn_position,
+                player.entity.rotation,
+                player.entity.motion,
+            );
+            if (previous_dimension) |old_dim| {
+                if (old_dim != dim) {
+                    @import("../../ecs/players.zig").removePlayer(old_dim, player.entity.runtime_id);
+                }
+            }
             player.tecton.instances.assignDimension(player.entity.runtime_id, dim) catch {};
             player.pending_dimension = null;
             player.spawned = true;

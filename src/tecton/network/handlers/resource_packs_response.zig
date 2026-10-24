@@ -133,7 +133,6 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
             player.entity.dimension = dimension;
             player.entity.instance_id = dimension.instance_id;
             player.tecton.instances.assignDimension(player.entity.runtime_id, dimension) catch {};
-            player.tecton.registerEcsEntity(&player.entity);
 
             const loaded = player.loadPlayerData();
             state.spawn_pos = dimension.spawn_position;
@@ -145,6 +144,14 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
                     @floatFromInt(state.spawn_pos.z),
                 );
             }
+            @import("../../ecs/players.zig").writePlayerTransform(
+                dimension,
+                player.entity.runtime_id,
+                &player.entity,
+                player.entity.position,
+                player.entity.rotation,
+                player.entity.motion,
+            );
 
             state.stage = .send_pre_spawn_data;
             return false;

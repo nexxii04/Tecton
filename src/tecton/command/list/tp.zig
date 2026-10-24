@@ -135,7 +135,18 @@ fn handle(raw: *anyopaque) void {
 
 fn teleportPlayer(ctx: *CommandContext, player: *@import("../../player/player.zig").Player, pos: Protocol.Vector3f) void {
     const internal_pos = commandPositionToInternalPosition(pos);
-    player.entity.position = internal_pos;
+    if (player.entity.dimension) |dim| {
+        @import("../../ecs/players.zig").writePlayerTransform(
+            dim,
+            player.entity.runtime_id,
+            &player.entity,
+            internal_pos,
+            player.entity.rotation,
+            player.entity.motion,
+        );
+    } else {
+        player.entity.position = internal_pos;
+    }
 
     var stream = BinaryStream.init(ctx.allocator, null, null);
     defer stream.deinit();

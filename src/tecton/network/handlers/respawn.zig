@@ -35,8 +35,19 @@ pub fn respawnPlayer(network: *NetworkHandler, player: *Player) void {
         @as(f32, @floatFromInt(spawn.y)),
         @as(f32, @floatFromInt(spawn.z)) + 0.5,
     );
-    player.entity.position = position;
-    player.entity.motion = Protocol.Vector3f.init(0, 0, 0);
+    if (player.entity.dimension) |dim| {
+        @import("../../ecs/players.zig").writePlayerTransform(
+            dim,
+            player.entity.runtime_id,
+            &player.entity,
+            position,
+            player.entity.rotation,
+            Protocol.Vector3f.init(0, 0, 0),
+        );
+    } else {
+        player.entity.position = position;
+        player.entity.motion = Protocol.Vector3f.init(0, 0, 0);
+    }
 
     sendRespawnStates(network, player, position);
     sendMovePlayer(network, player, position);

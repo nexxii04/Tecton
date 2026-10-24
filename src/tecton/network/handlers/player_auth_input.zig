@@ -53,12 +53,22 @@ pub fn handlePlayerAuthInput(
         .to = packet.position,
     };
     if (!tecton.events.emit(.PlayerMove, &move_event)) return;
-    player.entity.position = move_event.to;
-    player.entity.rotation.x = packet.rotation.x;
-    player.entity.rotation.y = packet.rotation.y;
-    player.entity.motion = .{ .x = packet.motion.x, .y = 0, .z = packet.motion.y };
     player.entity.head_yaw = packet.rotation.z;
-    tecton.syncEcsEntity(&player.entity);
+    if (player.entity.dimension) |dim| {
+        @import("../../ecs/players.zig").writePlayerTransform(
+            dim,
+            player.entity.runtime_id,
+            &player.entity,
+            move_event.to,
+            Protocol.Vector2f.init(packet.rotation.x, packet.rotation.y),
+            Protocol.Vector3f.init(packet.motion.x, 0, packet.motion.y),
+        );
+    } else {
+        player.entity.position = move_event.to;
+        player.entity.rotation.x = packet.rotation.x;
+        player.entity.rotation.y = packet.rotation.y;
+        player.entity.motion = .{ .x = packet.motion.x, .y = 0, .z = packet.motion.y };
+    }
 
     applyFallDamage(tecton, player, previous_position.y, packet.input_data.hasFlag(.VerticalCollision));
 
