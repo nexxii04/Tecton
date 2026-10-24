@@ -144,6 +144,7 @@ fn updateTrackedEntities(player: *Player) void {
     var tracked_it = player.visible_entities.keyIterator();
     while (tracked_it.next()) |runtime_id| {
         const entity = dimension.entities.get(runtime_id.*) orelse {
+            if (isEcsEntityAlive(dimension, runtime_id.*)) continue;
             stale.append(allocator, runtime_id.*) catch {};
             continue;
         };
@@ -157,6 +158,12 @@ fn updateTrackedEntities(player: *Player) void {
     for (stale.items) |runtime_id| {
         _ = player.visible_entities.remove(runtime_id);
     }
+}
+
+fn isEcsEntityAlive(dimension: *Dimension, runtime_id: i64) bool {
+    const state = dimension.ecs orelse return false;
+    const id = state.runtime_index.resolve(runtime_id) orelse return false;
+    return state.world.isAlive(id);
 }
 
 fn trackEcsEntities(
