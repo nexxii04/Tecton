@@ -9,6 +9,10 @@ pub const WorldError = world.WorldError;
 pub const components = @import("components.zig");
 pub const GameWorld = components.GameWorld;
 pub const query = @import("query.zig");
+pub const commands = @import("commands.zig");
+pub const Commands = commands.Commands;
+pub const DropQueue = commands.DropQueue;
+pub const DropRequest = commands.DropRequest;
 
 test {
     @import("std").testing.refAllDecls(@This());

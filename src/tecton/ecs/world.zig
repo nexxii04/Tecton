@@ -144,6 +144,7 @@ pub fn World(comptime components: anytype) type {
         }
 
         pub fn add(self: *Self, id: EntityId, value: anytype) !void {
+            if (!self.isAlive(id)) return error.InvalidEntity;
             const C = @TypeOf(value);
             if (comptime @hasDecl(C, "ecsDeinit")) {
                 if (self.store(C).get(id)) |previous| previous.ecsDeinit(self.allocator);
@@ -152,6 +153,7 @@ pub fn World(comptime components: anytype) type {
         }
 
         pub fn remove(self: *Self, id: EntityId, comptime C: type) void {
+            if (!self.isAlive(id)) return;
             if (comptime @hasDecl(C, "ecsDeinit")) {
                 if (self.store(C).get(id)) |value| value.ecsDeinit(self.allocator);
             }
