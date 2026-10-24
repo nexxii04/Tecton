@@ -97,6 +97,35 @@ pub const LootSource = struct {
     table: u32 = 0,
 };
 
+pub const GoalSlot = struct {
+    kind: GoalKind = .none,
+    priority: u8 = 0,
+    cooldown: u16 = 0,
+};
+
+pub const GoalKind = enum(u8) {
+    none = 0,
+    panic = 1,
+    look_at_player = 2,
+    random_stroll = 3,
+    follow_owner = 4,
+    melee_attack = 5,
+    ranged_attack = 6,
+};
+
+pub const Brain = struct {
+    goals: [8]GoalSlot = @splat(.{}),
+    active: u8 = 0,
+    cooldown: u16 = 0,
+};
+
+pub const Navigation = struct {
+    target: Protocol.Vector3f = Protocol.Vector3f.init(0, 0, 0),
+    path_len: u16 = 0,
+    recalcs_due: u16 = 0,
+    has_target: bool = false,
+};
+
 pub const game_components = .{
     Transform,
     Physics,
@@ -110,6 +139,8 @@ pub const game_components = .{
     Lifetime,
     NetSync,
     LootSource,
+    Brain,
+    Navigation,
 };
 
 pub const GameWorld = world_mod.World(game_components);
@@ -121,6 +152,8 @@ test "hot components stay cache friendly" {
     try std.testing.expect(@sizeOf(Health) <= 24);
     try std.testing.expect(@sizeOf(ActorFlags) <= 32);
     try std.testing.expect(@sizeOf(Lifetime) <= 8);
+    try std.testing.expect(@sizeOf(Brain) <= 8 * @sizeOf(GoalSlot) + 4);
+    try std.testing.expect(@sizeOf(Navigation) <= 24);
 }
 
 test "destroying an entity releases owned component memory" {
