@@ -8,6 +8,7 @@ pub const World = world.World;
 pub const WorldError = world.WorldError;
 pub const components = @import("components.zig");
 pub const GameWorld = components.GameWorld;
+pub const query = @import("query.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
