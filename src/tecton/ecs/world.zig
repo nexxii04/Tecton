@@ -111,6 +111,9 @@ pub fn World(comptime components: anytype) type {
         pub fn destroy(self: *Self, id: EntityId) bool {
             if (!self.isAlive(id)) return false;
             inline for (0..components.len) |i| {
+                if (comptime @hasDecl(components[i], "ecsDeinit")) {
+                    if (self.stores[i].get(id)) |value| value.ecsDeinit(self.allocator);
+                }
                 self.stores[i].remove(id);
             }
             self.alive_words[id.index >> 6] &= ~(@as(u64, 1) << @intCast(id.index & 63));
@@ -141,10 +144,17 @@ pub fn World(comptime components: anytype) type {
         }
 
         pub fn add(self: *Self, id: EntityId, value: anytype) !void {
-            return self.store(@TypeOf(value)).add(id, value);
+            const C = @TypeOf(value);
+            if (comptime @hasDecl(C, "ecsDeinit")) {
+                if (self.store(C).get(id)) |previous| previous.ecsDeinit(self.allocator);
+            }
+            return self.store(C).add(id, value);
         }
 
         pub fn remove(self: *Self, id: EntityId, comptime C: type) void {
+            if (comptime @hasDecl(C, "ecsDeinit")) {
+                if (self.store(C).get(id)) |value| value.ecsDeinit(self.allocator);
+            }
             self.store(C).remove(id);
         }
     };

@@ -6,6 +6,8 @@ pub const DenseStore = store.DenseStore;
 pub const world = @import("world.zig");
 pub const World = world.World;
 pub const WorldError = world.WorldError;
+pub const components = @import("components.zig");
+pub const GameWorld = components.GameWorld;
 
 test {
     @import("std").testing.refAllDecls(@This());
