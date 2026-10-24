@@ -11,12 +11,14 @@ const EntityId = entity_id_mod.EntityId;
 const GameWorld = components.GameWorld;
 pub const GameCommands = commands_mod.Commands(components.game_components);
 const DropQueue = commands_mod.DropQueue;
+const EntitySync = @import("sync.zig").EntitySync;
 
 pub const DimensionEcs = struct {
     world: GameWorld,
     commands: GameCommands,
     drops: DropQueue,
     runtime_index: protocol_mod.RuntimeIndex,
+    sync: EntitySync,
 
     pub fn create(allocator: std.mem.Allocator, capacity: usize) !*DimensionEcs {
         const state = try allocator.create(DimensionEcs);
@@ -28,10 +30,13 @@ pub const DimensionEcs = struct {
         state.drops = try DropQueue.init(allocator, capacity);
         errdefer state.drops.deinit(allocator);
         state.runtime_index = .{};
+        state.sync = EntitySync.init(allocator);
+        errdefer state.sync.deinit(allocator);
         return state;
     }
 
     pub fn destroy(self: *DimensionEcs, allocator: std.mem.Allocator) void {
+        self.sync.deinit(allocator);
         self.drops.deinit(allocator);
         self.commands.deinit(allocator);
         self.world.deinit();

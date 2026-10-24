@@ -21,6 +21,8 @@ pub const Resources = resources.Resources;
 pub const GameCommands = resources.GameCommands;
 pub const pipeline = @import("pipeline.zig");
 pub const movement = @import("movement.zig");
+pub const sync = @import("sync.zig");
+pub const EntitySync = sync.EntitySync;
 
 test {
     @import("std").testing.refAllDecls(@This());

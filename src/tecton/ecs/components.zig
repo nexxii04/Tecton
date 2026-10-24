@@ -86,6 +86,12 @@ pub const Lifetime = struct {
     despawn_at: u32 = std.math.maxInt(u32),
 };
 
+pub const NetSync = struct {
+    last_sent: Protocol.Vector3f = Protocol.Vector3f.init(0, 0, 0),
+    cooldown: u8 = 0,
+    has_last: bool = false,
+};
+
 pub const LootSource = struct {
     table: u32 = 0,
 };
@@ -101,6 +107,7 @@ pub const game_components = .{
     NameTag,
     ItemPickup,
     Lifetime,
+    NetSync,
     LootSource,
 };
 

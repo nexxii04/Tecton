@@ -46,10 +46,11 @@ pub const simulation_stages = [_]Stage{
     .{ .name = "lifetime", .run = lifetimeSystem },
 };
 
-pub fn flushEcs(state: *DimensionEcs, bus: *EventsRoot.Events) void {
+pub fn flushEcs(state: *DimensionEcs, bus: *EventsRoot.Events, allocator: std.mem.Allocator) void {
     for (state.commands.despawns.items) |command| {
         if (!state.world.isAlive(command.id)) continue;
         const proto = state.world.get(command.id, ProtocolId) orelse continue;
+        state.sync.queueRemove(allocator, &state.world, command.id);
         if (bus.hasListeners(.EntityDespawn)) {
             var event = EventsRoot.types.EntityDespawnEvent{
                 .id = command.id,
@@ -78,9 +79,16 @@ pub fn runDimension(tecton: *Tecton, dim: *Dimension, tick: u64) void {
     for (simulation_stages) |stage| {
         stage.run(&res);
     }
-    flushEcs(state, &tecton.events);
+    state.sync.collectMetadata(dim.allocator, &state.world);
+    state.sync.collectMovement(dim.allocator, &state.world, tecton.mob_broadcast_interval);
+    flushEcs(state, &tecton.events, dim.allocator);
     const elapsed = start.durationTo(.now(tecton.io, .awake));
     tecton.profiler.record(.ecs_simulation, @intCast(@max(0, elapsed.nanoseconds)));
+
+    const sync_start = Timestamp.now(tecton.io, .awake);
+    state.sync.flush(tecton, dim);
+    const sync_elapsed = sync_start.durationTo(.now(tecton.io, .awake));
+    tecton.profiler.record(.ecs_sync, @intCast(@max(0, sync_elapsed.nanoseconds)));
 }
 
 test "lifetime system expires entities through commands" {
@@ -134,7 +142,7 @@ test "flush emits despawn events and unpublishes runtime ids" {
     try state.runtime_index.publish(allocator, 4242, id);
     try state.commands.despawn(allocator, id, .expired);
 
-    flushEcs(state, &bus);
+    flushEcs(state, &bus, allocator);
     try std_test.expect(!state.world.isAlive(id));
     try std_test.expect(state.runtime_index.resolve(4242) == null);
     try std_test.expectEqual(@as(i64, 4242), seen.runtime);
