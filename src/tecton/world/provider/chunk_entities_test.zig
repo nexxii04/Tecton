@@ -35,6 +35,7 @@ pub fn Suite(comptime scope: type) type {
             const stored_uid = mob.unique_id;
             const stored_runtime_id = mob.runtime_id;
             try harness.dim.entities.put(stored_runtime_id, mob);
+            harness.dim.entity_index.add(mob);
 
             try writeChunkEntities(harness.provider, harness.chunk, &harness.dim);
 
@@ -42,6 +43,7 @@ pub fn Suite(comptime scope: type) type {
             try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
 
             const removed = harness.dim.entities.fetchRemove(stored_runtime_id).?.value;
+            _ = harness.dim.entity_index.remove(stored_runtime_id);
             removed.deinit();
             allocator.destroy(removed);
 
@@ -109,10 +111,12 @@ pub fn Suite(comptime scope: type) type {
             const stored_uid = mob.unique_id;
             const stored_runtime_id = mob.runtime_id;
             try harness.dim.entities.put(stored_runtime_id, mob);
+            harness.dim.entity_index.add(mob);
 
             try writeChunkEntities(harness.provider, harness.chunk, &harness.dim);
 
             const removed = harness.dim.entities.fetchRemove(stored_runtime_id).?.value;
+            _ = harness.dim.entity_index.remove(stored_runtime_id);
             removed.deinit();
             allocator.destroy(removed);
 

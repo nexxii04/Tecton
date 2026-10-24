@@ -25,19 +25,28 @@ pub fn writeChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: 
     var entities_in_chunk = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
     defer entities_in_chunk.deinit(provider.allocator);
 
-    var ent_iter = dimension.entities.valueIterator();
-    while (ent_iter.next()) |entity_ptr| {
-        const entity = entity_ptr.*;
-        const ecx = @as(i32, @intFromFloat(@floor(entity.position.x))) >> 4;
-        const ecz = @as(i32, @intFromFloat(@floor(entity.position.z))) >> 4;
-        if (ecx == chunk.x and ecz == chunk.z) {
-            var tag = serialization.serializeEntity(provider.allocator, entity) catch continue;
+    for (dimension.entitiesInChunk(chunk.x, chunk.z)) |entity| {
+        var tag = serialization.serializeEntity(provider.allocator, entity) catch continue;
+        defer tag.deinit(provider.allocator);
+        const data = serialization.encodeNbt(provider.allocator, &tag) catch continue;
+        defer provider.allocator.free(data);
+        const actor_key = key_mod.actorKey(entity.unique_id);
+        try record.addPut(provider.allocator, actor_key.slice(), data);
+        try entities_in_chunk.append(provider.allocator, entity.unique_id);
+    }
+
+    if (dimension.ecs) |state| {
+        const ecs_persistence = @import("../../ecs/persistence.zig");
+        for (state.chunk_index.bucket(@import("../dimension/dimension.zig").chunkHash(chunk.x, chunk.z))) |id| {
+            if (id.kind == .item) continue;
+            var tag = (ecs_persistence.serializeEcsEntity(provider.allocator, &state.world, id) catch null) orelse continue;
             defer tag.deinit(provider.allocator);
             const data = serialization.encodeNbt(provider.allocator, &tag) catch continue;
             defer provider.allocator.free(data);
-            const actor_key = key_mod.actorKey(entity.unique_id);
+            const unique = state.world.get(id, @import("../../ecs/components.zig").ProtocolId).?.unique;
+            const actor_key = key_mod.actorKey(unique);
             try record.addPut(provider.allocator, actor_key.slice(), data);
-            try entities_in_chunk.append(provider.allocator, entity.unique_id);
+            try entities_in_chunk.append(provider.allocator, unique);
         }
     }
 
