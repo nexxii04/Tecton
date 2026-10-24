@@ -20,6 +20,7 @@ pub const DimensionEcs = resources.DimensionEcs;
 pub const Resources = resources.Resources;
 pub const GameCommands = resources.GameCommands;
 pub const pipeline = @import("pipeline.zig");
+pub const movement = @import("movement.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

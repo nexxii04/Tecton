@@ -33,11 +33,16 @@ pub const Stage = struct {
     run: *const fn (*Resources) void,
 };
 
+fn movementSystem(res: *Resources) void {
+    @import("movement.zig").movementApply(&res.ecs.world, res.dimension);
+}
+
 fn lifetimeSystem(res: *Resources) void {
     lifetimeApply(&res.ecs.world, &res.ecs.commands, res.allocator);
 }
 
 pub const simulation_stages = [_]Stage{
+    .{ .name = "movement", .run = movementSystem },
     .{ .name = "lifetime", .run = lifetimeSystem },
 };
 
