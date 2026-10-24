@@ -114,6 +114,7 @@ pub const Tecton = struct {
     serialized_item_registry: ?[]const u8,
     serialized_biome_definitions: ?[]const u8,
     tick_count: u64 = 0,
+    last_dropped_packets: usize = 0,
     counting_allocations: bool = false,
     last_tick_allocations: std.atomic.Value(usize) = .init(0),
     peak_tick_allocations: std.atomic.Value(usize) = .init(0),

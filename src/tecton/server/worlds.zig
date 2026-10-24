@@ -99,6 +99,7 @@ pub fn build(tecton: Host, worlds_dir: []const u8, name: []const u8) !*World {
         provider.deinit();
         return err;
     };
+    world.ecs_capacity = @max(@as(usize, 256), @as(usize, tecton.config.ecs_capacity));
     errdefer {
         world.deinit();
         tecton.allocator.destroy(world);

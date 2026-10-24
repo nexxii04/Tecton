@@ -32,6 +32,9 @@ pub const Counter = enum {
     movement_skipped,
     movement_updates,
     movement_batches,
+    ecs_entities,
+    ecs_despawns,
+    ecs_damage_overflow,
 };
 
 const COUNTER_COUNT = @typeInfo(Counter).@"enum".fields.len;

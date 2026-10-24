@@ -111,6 +111,9 @@ pub fn runDimension(tecton: *Tecton, dim: *Dimension, tick: u64) void {
         .tick = tick,
     };
 
+    tecton.profiler.count(.ecs_entities, state.world.count);
+    tecton.profiler.count(.ecs_despawns, state.commands.stats.despawned);
+
     const start = Timestamp.now(tecton.io, .awake);
     for (simulation_stages) |stage| {
         stage.run(&res);

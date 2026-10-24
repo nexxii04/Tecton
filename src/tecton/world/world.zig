@@ -17,6 +17,7 @@ pub const World = struct {
     identifier: []const u8,
     dimensions: std.StringHashMap(*Dimension),
     provider: WorldProvider,
+    ecs_capacity: usize = dimension_ecs_capacity,
 
     unloading: bool = false,
     weather: Weather = .clear,
@@ -57,7 +58,7 @@ pub const World = struct {
             self.allocator.destroy(dim);
         }
         dim.floating_texts = try FloatingTextManager.create(self.allocator, dim);
-        _ = try dim.ensureEcs(dimension_ecs_capacity);
+        _ = try dim.ensureEcs(self.ecs_capacity);
         if (load_spawn_chunks) try dim.loadSpawnChunks();
         try self.dimensions.put(identifier, dim);
         return dim;

@@ -56,8 +56,10 @@ pub fn onTick(context: ?*anyopaque) void {
     }
 
     const decompress_pending = tecton.network.decompress_pending.load(.monotonic);
-    const dropped_packets = tecton.network.dropped_packets.load(.monotonic);
+    const dropped_total = tecton.network.dropped_packets.load(.monotonic);
+    const dropped_packets = dropped_total - tecton.last_dropped_packets;
     if ((decompress_pending > 256 or dropped_packets > 0) and tecton.tick_count % target_tps_u64 == 0) {
+        tecton.last_dropped_packets = dropped_total;
         Raknet.Logger.WARN("Network packet backlog: pending={d} queued={d} dropped={d}", .{
             decompress_pending,
             tecton.network.queuedInputDepth(),

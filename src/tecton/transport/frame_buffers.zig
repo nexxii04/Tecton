@@ -10,6 +10,8 @@ pub const FrameBuffers = struct {
     in_use: []bool = &.{},
     free_len: usize = 0,
     locked: std.atomic.Value(bool) = .init(false),
+    fallback_allocs: std.atomic.Value(usize) = .init(0),
+    warned_fallback: std.atomic.Value(bool) = .init(false),
 
     pub fn init(parent: std.mem.Allocator) FrameBuffers {
         return .{ .parent = parent };
@@ -120,7 +122,13 @@ pub const FrameBuffers = struct {
         self.acquire();
         defer self.release();
 
-        const slot = self.claim() orelse return self.parent.vtable.alloc(self.parent.ptr, len, alignment, ra);
+        const slot = self.claim() orelse {
+            _ = self.fallback_allocs.fetchAdd(1, .monotonic);
+            if (!self.warned_fallback.swap(true, .monotonic)) {
+                std.log.warn("frame buffer pool exhausted; outgoing frames fall back to the heap", .{});
+            }
+            return self.parent.vtable.alloc(self.parent.ptr, len, alignment, ra);
+        };
         return self.memory[@as(usize, slot) * slot_size ..].ptr;
     }
 
