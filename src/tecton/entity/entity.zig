@@ -11,8 +11,7 @@ const Player = @import("../player/player.zig").Player;
 const Container = @import("../container/container.zig").Container;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const entities = @import("../world/dimension/entities.zig");
-
-var nextUniqueId: i64 = 1;
+const ecs_protocol = @import("../ecs/protocol.zig");
 
 test "a reserved unique id is never handed out again" {
     const loaded = Entity.nextRuntimeId();
@@ -43,13 +42,11 @@ pub const Entity = struct {
     nametag_always_visible: bool = false,
 
     pub fn nextRuntimeId() i64 {
-        return @atomicRmw(i64, &nextUniqueId, .Add, 1, .monotonic);
+        return ecs_protocol.nextRuntimeId();
     }
 
     pub fn reserveUniqueId(uid: i64) void {
-        if (uid < 0) return;
-        const next = std.math.add(i64, uid, 1) catch return;
-        _ = @atomicRmw(i64, &nextUniqueId, .Max, next, .monotonic);
+        ecs_protocol.reserveUniqueId(uid);
     }
 
     pub const NbtHooks = struct {

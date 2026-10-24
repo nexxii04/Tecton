@@ -13,6 +13,11 @@ pub const commands = @import("commands.zig");
 pub const Commands = commands.Commands;
 pub const DropQueue = commands.DropQueue;
 pub const DropRequest = commands.DropRequest;
+pub const protocol = @import("protocol.zig");
+pub const RuntimeIndex = protocol.RuntimeIndex;
+pub const resources = @import("resources.zig");
+pub const DimensionEcs = resources.DimensionEcs;
+pub const Resources = resources.Resources;
 
 test {
     @import("std").testing.refAllDecls(@This());

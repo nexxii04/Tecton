@@ -36,6 +36,11 @@ pub const ProtocolId = struct {
     unique: i64 = 0,
 };
 
+pub const TypeRef = struct {
+    identifier: []const u8,
+    network_id: i32,
+};
+
 pub const Health = struct {
     current: f32 = 20,
     max: f32 = 20,
@@ -89,6 +94,7 @@ pub const game_components = .{
     Transform,
     Physics,
     ProtocolId,
+    TypeRef,
     Health,
     ActorFlags,
     EntityAttributes,

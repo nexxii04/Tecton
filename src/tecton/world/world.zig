@@ -9,6 +9,8 @@ const FloatingTextManager = @import("../entity/floating_text.zig").FloatingTextM
 
 pub const Weather = enum { clear, rain, thunder };
 
+const dimension_ecs_capacity: usize = 512;
+
 pub const World = struct {
     tecton: Host,
     allocator: std.mem.Allocator,
@@ -55,6 +57,7 @@ pub const World = struct {
             self.allocator.destroy(dim);
         }
         dim.floating_texts = try FloatingTextManager.create(self.allocator, dim);
+        _ = try dim.ensureEcs(dimension_ecs_capacity);
         if (load_spawn_chunks) try dim.loadSpawnChunks();
         try self.dimensions.put(identifier, dim);
         return dim;

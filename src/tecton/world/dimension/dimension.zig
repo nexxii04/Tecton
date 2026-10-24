@@ -4,6 +4,8 @@ const Protocol = @import("protocol");
 
 const Entity = @import("../../entity/entity.zig").Entity;
 const FloatingTextManager = @import("../../entity/floating_text.zig").FloatingTextManager;
+const ecs_resources = @import("../../ecs/resources.zig");
+const ecs_entity_id = @import("../../ecs/entity_id.zig");
 const BlockPermutation = @import("../block/block_permutation.zig").BlockPermutation;
 const Block = @import("../block/block.zig").Block;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
@@ -43,6 +45,7 @@ pub const Dimension = struct {
     instance_id: u32 = 0,
     inflight_batches: usize = 0,
     floating_texts: ?*FloatingTextManager = null,
+    ecs: ?*ecs_resources.DimensionEcs = null,
 
     pub fn init(
         world: *World,
@@ -81,6 +84,7 @@ pub const Dimension = struct {
     pub fn deinit(self: *Dimension) void {
 
         if (self.floating_texts) |manager| manager.destroy();
+        if (self.ecs) |state| state.destroy(self.allocator);
 
         var bbc_iter = self.blocks_by_chunk.valueIterator();
         while (bbc_iter.next()) |list| {
@@ -356,6 +360,18 @@ pub const Dimension = struct {
                 _ = try self.getOrCreateChunk(cx, cz);
             }
         }
+    }
+
+    pub fn ensureEcs(self: *Dimension, capacity: usize) !*ecs_resources.DimensionEcs {
+        if (self.ecs) |state| return state;
+        const state = try ecs_resources.DimensionEcs.create(self.allocator, capacity);
+        self.ecs = state;
+        return state;
+    }
+
+    pub fn runtimeToEcs(self: *Dimension, runtime: i64) ?ecs_entity_id.EntityId {
+        const state = self.ecs orelse return null;
+        return state.runtime_index.resolve(runtime);
     }
 
     pub fn getEntity(self: *Dimension, runtime_id: i64) ?*Entity {
