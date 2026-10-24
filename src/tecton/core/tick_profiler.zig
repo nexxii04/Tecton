@@ -21,6 +21,7 @@ pub const Phase = enum {
     batch_send,
     batch_block_data,
     movement_broadcast,
+    ecs_simulation,
 };
 
 const PHASE_COUNT = @typeInfo(Phase).@"enum".fields.len;

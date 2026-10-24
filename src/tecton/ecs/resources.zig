@@ -9,7 +9,7 @@ const protocol_mod = @import("protocol.zig");
 
 const EntityId = entity_id_mod.EntityId;
 const GameWorld = components.GameWorld;
-const GameCommands = commands_mod.Commands(components.game_components);
+pub const GameCommands = commands_mod.Commands(components.game_components);
 const DropQueue = commands_mod.DropQueue;
 
 pub const DimensionEcs = struct {

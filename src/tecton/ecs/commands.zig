@@ -2,9 +2,15 @@ const std = @import("std");
 const Protocol = @import("protocol");
 const ItemStack = @import("../items/item_stack.zig").ItemStack;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
+const DespawnCause = @import("../events/types.zig").DespawnCause;
 const entity_id = @import("entity_id.zig");
 
 const EntityId = entity_id.EntityId;
+
+pub const DespawnCmd = struct {
+    id: EntityId,
+    cause: DespawnCause,
+};
 
 fn AddList(comptime C: type) type {
     return std.ArrayListUnmanaged(struct { id: EntityId, value: C });
@@ -72,6 +78,7 @@ pub const FlushStats = struct {
     despawned: usize = 0,
     stale_despawns: usize = 0,
     failed_adds: usize = 0,
+    enqueue_failures: usize = 0,
 };
 
 fn emptyAddTuple(comptime components: anytype) AddTuple(components) {
@@ -90,7 +97,7 @@ pub fn Commands(comptime components: anytype) type {
     return struct {
         const Self = @This();
 
-        despawns: std.ArrayListUnmanaged(EntityId) = .empty,
+        despawns: std.ArrayListUnmanaged(DespawnCmd) = .empty,
         adds: AddTuple(components) = emptyAddTuple(components),
         removes: RemoveTuple(components) = emptyRemoveTuple(components),
         stats: FlushStats = .{},
@@ -114,8 +121,11 @@ pub fn Commands(comptime components: anytype) type {
             }
         }
 
-        pub fn despawn(self: *Self, allocator: std.mem.Allocator, id: EntityId) !void {
-            try self.despawns.append(allocator, id);
+        pub fn despawn(self: *Self, allocator: std.mem.Allocator, id: EntityId, cause: DespawnCause) !void {
+            self.despawns.append(allocator, .{ .id = id, .cause = cause }) catch {
+                self.stats.enqueue_failures += 1;
+                return error.OutOfMemory;
+            };
         }
 
         pub fn addComponent(self: *Self, allocator: std.mem.Allocator, id: EntityId, value: anytype) !void {
@@ -153,8 +163,8 @@ pub fn Commands(comptime components: anytype) type {
                 }
                 self.removes[i].clearRetainingCapacity();
             }
-            for (self.despawns.items) |id| {
-                if (world.destroy(id)) {
+            for (self.despawns.items) |command| {
+                if (world.destroy(command.id)) {
                     self.stats.despawned += 1;
                 } else {
                     self.stats.stale_despawns += 1;
@@ -199,8 +209,8 @@ test "flush applies deferred adds removes and despawns in order" {
     try std.testing.expectEqual(@as(usize, 0), commands.pendingOperations());
 
     try commands.removeComponent(allocator, id, Shield);
-    try commands.despawn(allocator, id);
-    try commands.despawn(allocator, id);
+    try commands.despawn(allocator, id, .expired);
+    try commands.despawn(allocator, id, .expired);
     commands.flush(&world);
     try std.testing.expect(!world.isAlive(id));
     try std.testing.expect(world.get(id, Health) == null);
@@ -236,7 +246,7 @@ test "commands never allocate during flush after reservation" {
 
     const id = try world.create(.mob);
     try commands.addComponent(allocator, id, Health{ .current = 1 });
-    try commands.despawn(allocator, id);
+    try commands.despawn(allocator, id, .expired);
 
     const allocations = failing.alloc_index;
     failing.fail_index = allocations;

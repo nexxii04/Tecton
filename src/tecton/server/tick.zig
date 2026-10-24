@@ -3,6 +3,7 @@ const Timestamp = std.Io.Timestamp;
 
 const Tecton = @import("../tecton.zig").Tecton;
 const entities = @import("../world/dimension/entities.zig");
+const ecs_pipeline = @import("../ecs/pipeline.zig");
 const Events = @import("../events/root.zig");
 const alloc_counter = @import("../core/alloc_counter.zig");
 const Raknet = @import("Raknet");
@@ -95,6 +96,7 @@ pub fn onTick(context: ?*anyopaque) void {
                 dim.*.reindexEntity(entity.*);
             }
             entities.flushPendingRemovals(dim.*);
+            ecs_pipeline.runDimension(tecton, dim.*, tecton.tick_count);
         }
     }
     phase_end = phase_start.durationTo(.now(tecton.io, .awake));

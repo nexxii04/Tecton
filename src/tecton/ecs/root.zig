@@ -18,6 +18,8 @@ pub const RuntimeIndex = protocol.RuntimeIndex;
 pub const resources = @import("resources.zig");
 pub const DimensionEcs = resources.DimensionEcs;
 pub const Resources = resources.Resources;
+pub const GameCommands = resources.GameCommands;
+pub const pipeline = @import("pipeline.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
