@@ -181,6 +181,21 @@ pub fn Emitter() type {
             return !context.cancelled;
         }
 
+        pub fn hasListeners(self: *const Self, comptime event: Event) bool {
+            if (self.listenerListConst(event, .pre).items.len > 0) return true;
+            if (self.listenerListConst(event, .commit).items.len > 0) return true;
+            if (self.listenerListConst(event, .post).items.len > 0) return true;
+            return false;
+        }
+
+        fn listenerListConst(self: *const Self, comptime event: Event, phase: EventPhase) *const std.ArrayList(Listener(event)) {
+            return switch (phase) {
+                .pre => &@field(self.listeners, @tagName(event) ++ "_pre"),
+                .commit => &@field(self.listeners, @tagName(event) ++ "_commit"),
+                .post => &@field(self.listeners, @tagName(event) ++ "_post"),
+            };
+        }
+
         fn listenerList(self: *Self, comptime event: Event, phase: EventPhase) *std.ArrayList(Listener(event)) {
             return switch (phase) {
                 .pre => &@field(self.listeners, @tagName(event) ++ "_pre"),
@@ -222,4 +237,39 @@ test "event phases honor priority and cancellation" {
     try std.testing.expect(!bus.emitWithContext(.ServerStart, &event, &context));
     try std.testing.expectEqual(@as(u64, 11), context.tick);
     try std.testing.expect(context.cancelled);
+}
+
+test "entity events subscribe emit and report listener presence" {
+    const Bus = Emitter();
+    var bus = Bus.init(std.testing.allocator);
+    defer bus.deinit();
+
+    try std.testing.expect(!bus.hasListeners(.EntityDamage));
+    try std.testing.expect(!bus.hasListeners(.EntitySpawn));
+
+    const callbacks = struct {
+        var observed_amount: f32 = 0;
+
+        fn reduce(_: *EventContext, damage: *types.EntityDamageEvent) EventResult {
+            observed_amount = damage.amount;
+            damage.amount = 1;
+            return .continue_;
+        }
+    };
+
+    _ = try bus.subscribe(.EntityDamage, .pre, 0, 1, callbacks.reduce);
+    try std.testing.expect(bus.hasListeners(.EntityDamage));
+
+    var damage = types.EntityDamageEvent{
+        .target = @import("../ecs/entity_id.zig").EntityId{ .index = 3, .generation = 1, .kind = .mob },
+        .target_runtime = 55,
+        .amount = 5,
+        .cause = .entity_attack,
+    };
+    try std.testing.expect(bus.emit(.EntityDamage, &damage));
+    try std.testing.expectEqual(@as(f32, 5), callbacks.observed_amount);
+    try std.testing.expectEqual(@as(f32, 1), damage.amount);
+
+    var spawn = types.EntitySpawnEvent{ .id = .{ .index = 0, .generation = 1, .kind = .item }, .runtime_id = 60 };
+    try std.testing.expect(bus.emit(.EntitySpawn, &spawn));
 }

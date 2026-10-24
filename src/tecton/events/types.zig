@@ -1,6 +1,7 @@
 const Protocol = @import("protocol");
 
 const Entity = @import("../entity/entity.zig").Entity;
+const EntityId = @import("../ecs/entity_id.zig").EntityId;
 const Player = @import("../player/player.zig").Player;
 const BlockPermutation = @import("../world/block/block_permutation.zig").BlockPermutation;
 const ItemStack = @import("../items/item_stack.zig").ItemStack;
@@ -140,6 +141,48 @@ pub const EnchantmentRemoveEvent = struct {
     actor: ?*Player = null,
 };
 
+pub const DespawnCause = enum(u8) {
+    death = 0,
+    expired = 1,
+    unloaded = 2,
+    transferred = 3,
+    disconnected = 4,
+};
+
+pub const EntitySpawnEvent = struct {
+    id: EntityId,
+    runtime_id: i64,
+};
+
+pub const EntityDespawnEvent = struct {
+    id: EntityId,
+    runtime_id: i64,
+    cause: DespawnCause,
+};
+
+pub const EntityDamageEvent = struct {
+    target: EntityId,
+    target_runtime: i64,
+    amount: f32,
+    source: ?EntityId = null,
+    source_runtime: ?i64 = null,
+    cause: DamageCause,
+};
+
+pub const EntityDeathEvent = struct {
+    id: EntityId,
+    runtime_id: i64,
+    killer_runtime: ?i64 = null,
+    position: Protocol.Vector3f,
+};
+
+pub const EntityInteractEvent = struct {
+    target: EntityId,
+    target_runtime: i64,
+    player: *Player,
+    action: Protocol.InteractAction,
+};
+
 pub const Event = enum {
     ServerStart,
     ServerShutdown,
@@ -161,6 +204,11 @@ pub const Event = enum {
     TransactionAbort,
     EnchantmentApply,
     EnchantmentRemove,
+    EntitySpawn,
+    EntityDespawn,
+    EntityDamage,
+    EntityDeath,
+    EntityInteract,
 
     pub fn DataType(comptime event: Event) type {
         return switch (event) {
@@ -182,6 +230,11 @@ pub const Event = enum {
             .TransactionPrepare, .TransactionCommit, .TransactionAbort => TransactionEvent,
             .EnchantmentApply => EnchantmentApplyEvent,
             .EnchantmentRemove => EnchantmentRemoveEvent,
+            .EntitySpawn => EntitySpawnEvent,
+            .EntityDespawn => EntityDespawnEvent,
+            .EntityDamage => EntityDamageEvent,
+            .EntityDeath => EntityDeathEvent,
+            .EntityInteract => EntityInteractEvent,
         };
     }
 };
