@@ -82,6 +82,8 @@ pub fn handleInventoryTransaction(
                 const runtime_id: i64 = @bitCast(data.target_entity_runtime_id);
                 if (runtime_id == player.entity.runtime_id) return;
 
+                if (@import("../../ecs/combat.zig").attackEcsTarget(tecton, player, dimension, runtime_id)) return;
+
                 const victim = tecton.findPlayerByRuntimeId(runtime_id);
                 if (victim) |other| {
                     if (other.entity.dimension != dimension) return;
