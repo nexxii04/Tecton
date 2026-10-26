@@ -24,6 +24,7 @@ pub const DimensionEcs = struct {
     damage_queue: std.ArrayListUnmanaged(@import("mobs.zig").DamageRequest) = .empty,
     damage_overflow: usize = 0,
     unique_ids: std.AutoHashMapUnmanaged(i64, void) = .empty,
+    rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15),
 
     pub fn create(allocator: std.mem.Allocator, capacity: usize) !*DimensionEcs {
         const state = try allocator.create(DimensionEcs);

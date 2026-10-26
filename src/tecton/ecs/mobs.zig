@@ -52,6 +52,7 @@ pub const SpawnOptions = struct {
     rotation: Protocol.Vector2f = Protocol.Vector2f.init(0, 0),
     unique_id: ?i64 = null,
     name_tag: []const u8 = "",
+    persistent: bool = false,
 };
 
 pub fn spawnMob(dim: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f, opts: SpawnOptions) !EntityId {
@@ -66,16 +67,31 @@ pub fn spawnMob(dim: *Dimension, entity_type: *const EntityType, position: Proto
     try state.world.add(id, ProtocolId{ .runtime = runtime, .unique = opts.unique_id orelse runtime });
     try state.world.add(id, TypeRef{ .identifier = entity_type.identifier, .network_id = entity_type.network_id });
     try state.world.add(id, Transform{ .position = position, .rotation = opts.rotation });
+
     if (template.physics) {
         try state.world.add(id, Physics{ .profile = .mob });
+        try state.world.add(id, Lifetime{});
     }
     if (template.health) {
         try state.world.add(id, Health{});
     }
+
     try state.world.add(id, ActorFlags{});
     try state.world.add(id, NetSync{});
     if (opts.name_tag.len > 0) {
         try state.world.add(id, components.NameTag{ .text = opts.name_tag });
+    }
+
+    if (template.physics) {
+        try state.world.add(id, Lifetime{});
+    }
+
+    const loot_index = @import("loot.zig").tableIndexFor(entity_type.identifier);
+    if (loot_index != 0) {
+        try state.world.add(id, components.LootSource{ .table = loot_index });
+    }
+    if (opts.persistent) {
+        try state.world.add(id, components.Persistent{});
     }
 
     if (opts.unique_id) |unique| {
@@ -168,6 +184,7 @@ pub fn damageSystem(res: *Resources) void {
 
         health.current = applyDamage(health.current, amount);
         health.invulnerable_until = res.tick + INVULNERABILITY_TICKS;
+        health.last_damage_source = request.source_runtime orelse 0;
 
         if (res.ecs.world.get(request.target, ProtocolId)) |proto| {
             queueHurtAnimation(res, proto.runtime);
@@ -196,14 +213,58 @@ pub fn deathSystem(res: *Resources) void {
                 var event = EventsRoot.types.EntityDeathEvent{
                     .id = id,
                     .runtime_id = proto.runtime,
+                    .killer_runtime = if (health.last_damage_source == 0) null else health.last_damage_source,
                     .position = transform.position,
                 };
                 _ = c.res.bus.emit(.EntityDeath, &event);
             }
             queueDeathAnimation(c.res, proto.runtime);
+            enqueueLoot(c.res, id, proto.runtime, health.last_damage_source, transform.position);
             c.res.ecs.commands.despawn(c.res.allocator, id, .death) catch {};
         }
     }.call);
+}
+
+fn enqueueLoot(res: *Resources, id: EntityId, source_runtime: i64, killer: i64, position: Protocol.Vector3f) void {
+    const loot_source = res.ecs.world.get(id, components.LootSource) orelse return;
+    const loot_mod = @import("loot.zig");
+    const table = loot_mod.tableAt(loot_source.table) orelse return;
+
+    var buffer = loot_mod.RollBuffer{};
+    loot_mod.rollTable(table, res.ecs.rng.random(), &buffer);
+    for (buffer.slice()) |entry| {
+        const stack = loot_mod.stackOf(res.allocator, entry) orelse continue;
+        res.ecs.drops.enqueue(res.allocator, .{
+            .dimension = res.dimension,
+            .source_runtime = source_runtime,
+            .killer_runtime = if (killer == 0) null else killer,
+            .position = position,
+            .item = stack,
+            .pickup_delay = 10,
+        }) catch {
+            var owned = stack;
+            owned.deinit();
+            return;
+        };
+    }
+}
+
+pub fn dropsSystem(res: *Resources) void {
+    const item_entities = @import("item_entities.zig");
+    const requests = res.ecs.drops.drain();
+    for (requests) |request| {
+        _ = item_entities.spawnItem(res.dimension, .{
+            .stack = request.item,
+            .position = request.position,
+            .pickup_delay = request.pickup_delay,
+            .velocity = Protocol.Vector3f.init(0, 0.15, 0),
+        }) catch {
+            var owned = request.item;
+            owned.deinit();
+            continue;
+        };
+    }
+    res.ecs.drops.clearDelivered(requests.len);
 }
 
 test "template derivation follows vanilla components" {
