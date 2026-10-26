@@ -59,6 +59,7 @@ pub fn Fixture(comptime scope: type) type {
             tecton.network = network;
             tecton.network_initialized = true;
             tecton.mob_broadcast_interval = 2;
+            tecton.events = Events.init(allocator);
             tecton.fixAddress();
         }
 

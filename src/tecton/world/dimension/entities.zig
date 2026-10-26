@@ -129,7 +129,7 @@ pub fn spawnArrow(
     return entity;
 }
 
-pub fn spawnStoredEntity(dim: *Dimension, tag: *const CompoundTag) !?*Entity {
+pub fn spawnStoredEntity(dim: *Dimension, tag: *const CompoundTag) !?ecs_entity_id.EntityId {
     const identifier = stringField(tag, "identifier") orelse return null;
     if (std.mem.eql(u8, identifier, "minecraft:item") or
         std.mem.eql(u8, identifier, "minecraft:player")) return null;
@@ -139,30 +139,41 @@ pub fn spawnStoredEntity(dim: *Dimension, tag: *const CompoundTag) !?*Entity {
         if (stored_health <= 0) return null;
     }
 
-    if (longField(tag, "UniqueID")) |stored_uid| {
-        if (findByUniqueId(dim, stored_uid) != null) return null;
+    const state = try dim.ensureEcs(512);
+    const stored_uid = longField(tag, "UniqueID");
+    if (stored_uid) |uid| {
+        if (state.unique_ids.contains(uid)) return null;
     }
 
-    const entity = try dim.allocator.create(Entity);
-    errdefer dim.allocator.destroy(entity);
-    entity.* = Entity.init(dim.allocator, entity_type, dim);
-    errdefer entity.deinit();
-    entity.instance_id = dim.instance_id;
-    try applyGlobalTraits(dim.allocator, entity);
-    serialization.deserializeEntity(dim.allocator, entity, tag);
-    if (entity.getTraitState(Health.HealthTrait)) |health_state| Health.syncAttributes(health_state, entity);
-    dim.world.tecton.registerEcsEntity(entity);
-    try dim.entities.put(entity.runtime_id, entity);
-    dim.entity_index.add(entity);
-    return entity;
-}
-
-fn findByUniqueId(dim: *Dimension, unique_id: i64) ?*Entity {
-    var it = dim.entities.valueIterator();
-    while (it.next()) |entry| {
-        if (entry.*.unique_id == unique_id) return entry.*;
+    var position = Protocol.Vector3f.init(0, 0, 0);
+    if (tag.get("Pos")) |pos| {
+        switch (pos) {
+            .List => |list| {
+                if (list.value.len >= 3) {
+                    const sanitize = @import("../provider/sanitize.zig");
+                    position = Protocol.Vector3f.init(
+                        sanitize.sane(sanitize.getFloat(&list.value[0]), sanitize.world_border),
+                        sanitize.sane(sanitize.getFloat(&list.value[1]), sanitize.world_border),
+                        sanitize.sane(sanitize.getFloat(&list.value[2]), sanitize.world_border),
+                    );
+                }
+            },
+            else => {},
+        }
     }
-    return null;
+
+    const ecs_persistence = @import("../../ecs/persistence.zig");
+    const ecs_mobs = @import("../../ecs/mobs.zig");
+
+    const id = try ecs_mobs.spawnMob(dim, entity_type, position, .{
+        .unique_id = stored_uid,
+    });
+    errdefer _ = state.world.destroy(id);
+
+    ecs_persistence.applyStoredTransform(&state.world, id, tag);
+    ecs_persistence.applyStoredHealth(&state.world, id, tag);
+    ecs_persistence.applyStoredFire(&state.world, id, tag);
+    return id;
 }
 
 fn stringField(tag: *const CompoundTag, key: []const u8) ?[]const u8 {

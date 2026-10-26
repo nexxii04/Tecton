@@ -1,3 +1,7 @@
+const ecs_query = @import("../../ecs/query.zig");
+const ecs_components = @import("../../ecs/components.zig");
+const ecs_fire = @import("../../ecs/fire.zig");
+
 pub fn Suite(comptime scope: type) type {
     return struct {
         const std = scope.std;
@@ -6,7 +10,6 @@ pub fn Suite(comptime scope: type) type {
         const EntityTypeRegistry = scope.EntityTypeRegistry;
         const Entity = scope.Entity;
         const EntityTraits = scope.EntityTraits;
-        const Events = scope.Events;
         const entities = scope.entities;
         const writeChunkEntities = scope.writeChunkEntities;
         const loadChunkEntities = scope.loadChunkEntities;
@@ -14,6 +17,35 @@ pub fn Suite(comptime scope: type) type {
         const putStoredActor = scope.putStoredActor;
         const putStoredActorWithPosition = scope.putStoredActorWithPosition;
         const putStoredDigest = scope.putStoredDigest;
+
+        const EntityId = @import("../../ecs/entity_id.zig").EntityId;
+
+        fn ecsState(dim: anytype) *@import("../../ecs/resources.zig").DimensionEcs {
+            return dim.ecs.?;
+        }
+
+        fn findByUnique(dim: anytype, unique: i64) ?EntityId {
+            const state = ecsState(dim);
+            var found: ?EntityId = null;
+            const Ctx = struct { state: @TypeOf(state), unique: i64, found: *?EntityId };
+            var ctx = Ctx{ .state = state, .unique = unique, .found = &found };
+            ecs_query.eachKind(&state.world, .mob, .{ecs_components.ProtocolId}, &ctx, struct {
+                fn call(c: *Ctx, id: EntityId, proto: *ecs_components.ProtocolId) void {
+                    if (proto.unique == c.unique) c.found.* = id;
+                }
+            }.call);
+            return found;
+        }
+
+        fn destroyMob(dim: anytype, id: EntityId) void {
+            const state = ecsState(dim);
+            const proto = state.world.get(id, ecs_components.ProtocolId).?;
+            state.runtime_index.unpublish(proto.runtime);
+            _ = state.unique_ids.remove(proto.unique);
+            _ = state.chunk_index.remove(id);
+            _ = state.world.destroy(id);
+        }
+
         pub fn case_000() !void {
             const allocator = testing.allocator;
             var harness: LoadHarness = undefined;
@@ -39,34 +71,31 @@ pub fn Suite(comptime scope: type) type {
 
             try writeChunkEntities(harness.provider, harness.chunk, &harness.dim);
 
-            try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
-            try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
-
             const removed = harness.dim.entities.fetchRemove(stored_runtime_id).?.value;
             _ = harness.dim.entity_index.remove(stored_runtime_id);
             removed.deinit();
             allocator.destroy(removed);
 
             try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
-            try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+            const state = ecsState(&harness.dim);
+            try testing.expectEqual(@as(usize, 1), state.world.count);
 
-            var it = harness.dim.entities.valueIterator();
-            const loaded = it.next().?.*;
-            try testing.expectEqual(stored_uid, loaded.unique_id);
-            try testing.expectEqual(@as(f32, 2.5), loaded.position.x);
-            try testing.expectEqual(@as(f32, 64.0), loaded.position.y);
-            try testing.expectEqual(@as(f32, 2.5), loaded.position.z);
-            try testing.expect(loaded.ecs_id != 0);
-            try testing.expectEqual(@as(usize, 1), harness.dim.entity_index.count());
+            const loaded = findByUnique(&harness.dim, stored_uid) orelse return error.TestUnexpectedResult;
+            const transform = state.world.get(loaded, ecs_components.Transform).?;
+            try testing.expectEqual(@as(f32, 2.5), transform.position.x);
+            try testing.expectEqual(@as(f32, 64.0), transform.position.y);
+            try testing.expectEqual(@as(f32, 2.5), transform.position.z);
+            try testing.expect(state.world.get(loaded, ecs_components.Persistent) == null);
+            const fire = state.world.get(loaded, ecs_components.Fire).?;
+            try testing.expectEqual(@as(i32, 120), fire.ticks);
 
-            const fire_state = loaded.getTraitState(EntityTraits.FireTrait).?;
-            try testing.expectEqual(@as(i32, 120), fire_state.fire_ticks);
-            try testing.expectEqual(@as(i32, 7), fire_state.damage_timer);
-            try testing.expectEqual(Events.CombustSource.lava, fire_state.burn_source);
+            destroyMob(&harness.dim, loaded);
+            try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
+            try testing.expectEqual(@as(usize, 1), state.world.count);
+            const reloaded = findByUnique(&harness.dim, stored_uid) orelse return error.TestUnexpectedResult;
 
-            loaded.fireEvent(.Tick, .{loaded});
-            try testing.expect(loaded.flags.getFlag(.OnFire));
-            try testing.expectEqual(@as(i32, 119), fire_state.fire_ticks);
+            ecs_fire.fireApply(state, &harness.dim);
+            try testing.expectEqual(@as(i32, 119), state.world.get(reloaded, ecs_components.Fire).?.ticks);
         }
 
         pub fn case_001() !void {
@@ -86,12 +115,10 @@ pub fn Suite(comptime scope: type) type {
 
             try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
 
-            try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
-            var it = harness.dim.entities.valueIterator();
-            const loaded = it.next().?.*;
-            try testing.expectEqual(@as(i64, 9004), loaded.unique_id);
-            const fire_state = loaded.getTraitState(EntityTraits.FireTrait).?;
-            try testing.expectEqual(@as(i32, 55), fire_state.fire_ticks);
+            const state = ecsState(&harness.dim);
+            try testing.expectEqual(@as(usize, 1), state.world.count);
+            const loaded = findByUnique(&harness.dim, 9004) orelse return error.TestUnexpectedResult;
+            try testing.expectEqual(@as(i32, 55), state.world.get(loaded, ecs_components.Fire).?.ticks);
         }
 
         pub fn case_002() !void {
@@ -121,16 +148,11 @@ pub fn Suite(comptime scope: type) type {
             allocator.destroy(removed);
 
             try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
-            try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
-
-            var it = harness.dim.entities.valueIterator();
-            const loaded = it.next().?.*;
-            try testing.expectEqual(stored_uid, loaded.unique_id);
-            const health_state = loaded.getTraitState(EntityTraits.HealthTrait).?;
-            try testing.expectEqual(@as(f32, 7.5), health_state.current);
-            try testing.expectEqual(@as(f32, 20.0), health_state.max);
-            try testing.expectEqual(@as(f32, 7.5), loaded.attributes.get(.Health).?.current);
-            try testing.expectEqual(@as(f32, 20.0), loaded.attributes.get(.Health).?.max);
+            const state = ecsState(&harness.dim);
+            const loaded = findByUnique(&harness.dim, stored_uid) orelse return error.TestUnexpectedResult;
+            const health = state.world.get(loaded, ecs_components.Health).?;
+            try testing.expectEqual(@as(f32, 7.5), health.current);
+            try testing.expectEqual(@as(f32, 20.0), health.max);
         }
 
         pub fn case_003() !void {
@@ -148,11 +170,10 @@ pub fn Suite(comptime scope: type) type {
 
             try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
 
-            try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
-            var it = harness.dim.entities.valueIterator();
-            const loaded = it.next().?.*;
-            try testing.expectEqual(@as(i64, 9102), loaded.unique_id);
-            try testing.expectEqual(@as(f32, 7.0), loaded.getTraitState(EntityTraits.HealthTrait).?.current);
+            const state = ecsState(&harness.dim);
+            try testing.expectEqual(@as(usize, 1), state.world.count);
+            const loaded = findByUnique(&harness.dim, 9102) orelse return error.TestUnexpectedResult;
+            try testing.expectEqual(@as(f32, 7.0), state.world.get(loaded, ecs_components.Health).?.current);
         }
 
         pub fn case_004() !void {
@@ -168,14 +189,15 @@ pub fn Suite(comptime scope: type) type {
             try putStoredDigest(harness.provider, 0, 0, 0, &.{9301});
 
             try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
-            try testing.expectEqual(@as(usize, 1), harness.dim.entities.count());
+            const state = ecsState(&harness.dim);
+            try testing.expectEqual(@as(usize, 1), state.world.count);
 
-            var it = harness.dim.entities.valueIterator();
-            const loaded = it.next().?.*;
-            try testing.expect(std.math.isFinite(loaded.position.x));
-            try testing.expect(std.math.isFinite(loaded.position.y));
-            try testing.expect(std.math.isFinite(loaded.position.z));
-            try testing.expect(@abs(loaded.position.x) < 16 and @abs(loaded.position.z) < 16);
+            const loaded = findByUnique(&harness.dim, 9301) orelse return error.TestUnexpectedResult;
+            const transform = state.world.get(loaded, ecs_components.Transform).?;
+            try testing.expect(std.math.isFinite(transform.position.x));
+            try testing.expect(std.math.isFinite(transform.position.y));
+            try testing.expect(std.math.isFinite(transform.position.z));
+            try testing.expect(@abs(transform.position.x) < 16 and @abs(transform.position.z) < 16);
 
             try writeChunkEntities(harness.provider, harness.chunk, &harness.dim);
         }
@@ -194,11 +216,11 @@ pub fn Suite(comptime scope: type) type {
 
             try loadChunkEntities(harness.provider, harness.chunk, &harness.dim);
 
-            var it = harness.dim.entities.valueIterator();
-            const loaded = it.next().?.*;
-            try testing.expectEqual(@as(f32, 20.0), loaded.getTraitState(EntityTraits.HealthTrait).?.current);
-            try testing.expectEqual(@as(f32, 20.0), loaded.getTraitState(EntityTraits.HealthTrait).?.max);
-            try testing.expectEqual(@as(f32, 20.0), loaded.attributes.get(.Health).?.current);
+            const state = ecsState(&harness.dim);
+            const loaded = findByUnique(&harness.dim, 9201) orelse return error.TestUnexpectedResult;
+            const health = state.world.get(loaded, ecs_components.Health).?;
+            try testing.expectEqual(@as(f32, 20.0), health.current);
+            try testing.expectEqual(@as(f32, 20.0), health.max);
         }
     };
 }

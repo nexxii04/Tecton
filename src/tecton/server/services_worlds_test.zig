@@ -345,12 +345,25 @@ pub fn Suite(comptime scope: type) type {
                 defer tecton.worlds.destroy(world);
                 const dim = world.getDimension("overworld").?;
 
-                try testing.expectEqual(@as(usize, 1), dim.entities.count());
-                var entity_iter = dim.entities.valueIterator();
-                const loaded_mob = entity_iter.next().?.*;
-                try testing.expectEqual(stored_unique_id, loaded_mob.unique_id);
-                try testing.expectEqual(mob_position.x, loaded_mob.position.x);
-                try testing.expectEqual(@as(f32, 7.5), loaded_mob.getTraitState(entity_root.traits.HealthTrait).?.current);
+                const ecs_query = @import("../ecs/query.zig");
+                const ecs_components = @import("../ecs/components.zig");
+                const ecs_entity_id = @import("../ecs/entity_id.zig");
+                const ecs_state = dim.ecs.?;
+                try testing.expectEqual(@as(usize, 1), ecs_state.world.count);
+
+                var loaded_id: ?ecs_entity_id.EntityId = null;
+                const Finder = struct { unique: i64, found: *?ecs_entity_id.EntityId };
+                var finder = Finder{ .unique = stored_unique_id, .found = &loaded_id };
+                ecs_query.eachKind(&ecs_state.world, .mob, .{ecs_components.ProtocolId}, &finder, struct {
+                    fn call(c: *Finder, id: ecs_entity_id.EntityId, proto: *ecs_components.ProtocolId) void {
+                        if (proto.unique == c.unique) c.found.* = id;
+                    }
+                }.call);
+                const loaded_mob = loaded_id orelse return error.TestUnexpectedResult;
+
+                const transform = ecs_state.world.get(loaded_mob, ecs_components.Transform).?;
+                try testing.expectEqual(mob_position.x, transform.position.x);
+                try testing.expectEqual(@as(f32, 7.5), ecs_state.world.get(loaded_mob, ecs_components.Health).?.current);
 
                 try testing.expectEqualStrings("minecraft:chest", (try dim.getPermutation(chest_position, 0)).identifier);
                 const chest_state = dim.getBlockPtr(chest_position).?.getTraitState(chest_trait.ChestTrait).?;
