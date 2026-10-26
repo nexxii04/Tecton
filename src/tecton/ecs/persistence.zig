@@ -5,6 +5,7 @@ const CompoundTag = NBT.CompoundTag;
 const ListTag = NBT.ListTag;
 const Tag = NBT.Tag;
 const FloatTag = NBT.FloatTag;
+const IntTag = NBT.IntTag;
 const LongTag = NBT.LongTag;
 const StringTag = NBT.StringTag;
 const Protocol = @import("protocol");
@@ -51,6 +52,12 @@ pub fn serializeEcsEntity(allocator: std.mem.Allocator, world: *GameWorld, id: E
     if (world.get(id, Health)) |health| {
         try tag.set("Health", .{ .Float = FloatTag.init(health.current, null) });
         try tag.set("MaxHealth", .{ .Float = FloatTag.init(health.max, null) });
+    }
+
+    if (world.get(id, components.Fire)) |fire| {
+        if (fire.ticks > 0) {
+            try tag.set("FireTicks", .{ .Int = IntTag.init(fire.ticks, null) });
+        }
     }
 
     return tag;
@@ -122,6 +129,20 @@ pub fn applyStoredHealth(world: *GameWorld, id: EntityId, tag: *const CompoundTa
             },
             else => {},
         }
+    }
+}
+
+pub fn applyStoredFire(world: *GameWorld, id: EntityId, tag: *const CompoundTag) void {
+    const fire_ticks = tag.get("FireTicks") orelse return;
+    const ticks = switch (fire_ticks) {
+        .Int => |value| value.value,
+        else => return,
+    };
+    if (ticks <= 0) return;
+    if (world.get(id, components.Fire)) |fire| {
+        fire.ticks = ticks;
+    } else {
+        world.add(id, components.Fire{ .ticks = ticks }) catch {};
     }
 }
 
