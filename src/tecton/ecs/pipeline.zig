@@ -41,8 +41,20 @@ fn deathSystem(res: *Resources) void {
     @import("mobs.zig").deathSystem(res);
 }
 
+fn fireSystem(res: *Resources) void {
+    @import("fire.zig").fireApply(res.ecs, res.dimension);
+}
+
 fn movementSystem(res: *Resources) void {
     @import("movement.zig").movementApply(&res.ecs.world, res.dimension);
+}
+
+fn dropsSystem(res: *Resources) void {
+    @import("mobs.zig").dropsSystem(res);
+}
+
+fn despawnSystem(res: *Resources) void {
+    @import("despawn.zig").despawnSystem(res);
 }
 
 fn pickupSystem(res: *Resources) void {
@@ -74,10 +86,13 @@ fn lifetimeSystem(res: *Resources) void {
 pub const simulation_stages = [_]Stage{
     .{ .name = "damage_queue", .run = damageSystem },
     .{ .name = "death", .run = deathSystem },
+    .{ .name = "fire", .run = fireSystem },
     .{ .name = "movement", .run = movementSystem },
     .{ .name = "pickup", .run = pickupSystem },
     .{ .name = "merge", .run = mergeSystem },
     .{ .name = "reindex", .run = reindexSystem },
+    .{ .name = "drops", .run = dropsSystem },
+    .{ .name = "despawn", .run = despawnSystem },
     .{ .name = "lifetime", .run = lifetimeSystem },
 };
 
@@ -95,6 +110,9 @@ pub fn flushEcs(state: *DimensionEcs, bus: *EventsRoot.Events, allocator: std.me
             _ = bus.emit(.EntityDespawn, &event);
         }
         state.runtime_index.unpublish(proto.runtime);
+        if (proto.unique != proto.runtime) {
+            _ = state.unique_ids.remove(proto.unique);
+        }
         _ = state.chunk_index.remove(command.id);
     }
     state.commands.flush(&state.world);
