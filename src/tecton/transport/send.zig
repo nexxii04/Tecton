@@ -1,4 +1,7 @@
-const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
+/// Smallest frames (control replies, keepalives) are built in this per-thread scratch,
+/// so the common send never touches the pool and never contends for a slot.
+const inline_frame_size: usize = 4096;
+threadlocal var tl_frame: [inline_frame_size]u8 = undefined;
 
 pub fn Methods(comptime scope: type) type {
     return struct {
@@ -48,6 +51,16 @@ pub fn Methods(comptime scope: type) type {
         /// Delivers bytes that are already one Bedrock frame, as the chunk cache keeps them.
         pub fn sendFramed(self: *NetworkHandler, conn: *Connection, framed: []const u8, priority: SendPriority) !void {
             const port = self.port orelse return error.Closed;
+            if (framed.len == 0) return;
+
+            const max_payload = port.maxPayload(conn);
+            if (max_payload == 0) return error.Closed;
+            // A single frame cannot be split without breaking its own framing.
+            if (framed.len > max_payload) {
+                _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                scope.log.debug("dropping a {d}-byte frame for connection {d}: the transport allows {d}", .{ framed.len, conn.id, max_payload });
+                return error.PayloadTooLarge;
+            }
             return port.sendBytes(conn, framed, priority);
         }
 
@@ -59,23 +72,53 @@ pub fn Methods(comptime scope: type) type {
             priority: SendPriority,
         ) !void {
             const port = self.port orelse return error.Closed;
-            const capacity = Compression.frameCapacity(packets, options);
+            const max_payload = port.maxPayload(conn);
+            if (max_payload == 0) return error.Closed;
 
-            if (self.frame_buffers) |frame_buffers| {
-                if (capacity <= FrameBuffers.slot_size) {
-                    const buffers = frame_buffers.allocator();
-                    const buffer = try buffers.alloc(u8, capacity);
-                    const framed = Compression.compressInto(packets, options, buffer) catch |err| {
-                        buffers.free(buffer);
-                        return err;
+            // `frameCapacity` is an upper bound, so a frame that fits by it fits for real.
+            const capacity = Compression.frameCapacity(packets, options);
+            if (capacity <= max_payload) {
+                if (capacity <= inline_frame_size) {
+                    return sendFrame(self, port, conn, packets, options, priority, &tl_frame);
+                }
+                if (capacity <= self.send_buffers.slotSize()) {
+                    const buffer = self.send_buffers.acquire() orelse {
+                        _ = self.backpressure_sends.fetchAdd(1, .monotonic);
+                        return error.Backpressure;
                     };
-                    defer buffers.free(buffer);
-                    return port.sendBytes(conn, framed, priority);
+                    defer self.send_buffers.release(buffer);
+                    return sendFrame(self, port, conn, packets, options, priority, buffer);
                 }
             }
 
-            const framed = try Compression.compress(packets, options, self.allocator);
-            defer self.allocator.free(framed);
+            // Halving keeps the order and bounds the recursion: each half is sent before the
+            // next one, so the client sees the same packet sequence.
+            if (packets.len < 2) {
+                _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                scope.log.debug("dropping a {d}-byte message for connection {d}: the transport allows {d}", .{ capacity, conn.id, max_payload });
+                return error.PayloadTooLarge;
+            }
+            const half = packets.len / 2;
+            try sendPacketsFramed(self, conn, packets[0..half], options, priority);
+            try sendPacketsFramed(self, conn, packets[half..], options, priority);
+        }
+
+        fn sendFrame(
+            self: *NetworkHandler,
+            port: scope.Port,
+            conn: *Connection,
+            packets: []const []const u8,
+            options: CompressionOptions,
+            priority: SendPriority,
+            buffer: []u8,
+        ) !void {
+            const framed = Compression.compressInto(packets, options, buffer) catch |err| switch (err) {
+                error.CompressionBufferTooSmall => {
+                    _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                    return error.PayloadTooLarge;
+                },
+                else => return err,
+            };
             return port.sendBytes(conn, framed, priority);
         }
     };

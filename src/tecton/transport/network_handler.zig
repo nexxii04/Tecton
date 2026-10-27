@@ -21,7 +21,7 @@ const host_mod = @import("./host.zig");
 const InboundRing = @import("./inbound_ring.zig").InboundRing;
 const worker_buffers_mod = @import("./worker_buffers.zig");
 const WorkerBuffers = worker_buffers_mod.WorkerBuffers;
-const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
+const SendBuffers = @import("./send_buffers.zig").SendBuffers;
 const PayloadBuffers = @import("./payload_buffers.zig").PayloadBuffers;
 
 pub const QueuedPacket = queue.QueuedPacket;
@@ -71,8 +71,10 @@ pub const NetworkHandler = struct {
     decompress_pending: std.atomic.Value(usize) = .init(0),
     dropped_packets: std.atomic.Value(usize) = .init(0),
     scratch: ScratchBuffer,
-    frame_buffers: ?*FrameBuffers = null,
+    send_buffers: SendBuffers = .empty,
     payload_buffers: PayloadBuffers,
+    oversize_sends: std.atomic.Value(usize) = .init(0),
+    backpressure_sends: std.atomic.Value(usize) = .init(0),
     port: ?port_mod.Port = null,
     events: events_mod.Queue,
     connections: connection_mod.ConnectionRegistry,
@@ -104,21 +106,40 @@ pub const NetworkHandler = struct {
             .packet_queue_mutex = .init,
             .decompress_pool = undefined,
             .scratch = undefined,
+            .send_buffers = try SendBuffers.init(allocator, SendBuffers.default_slot_size, SendBuffers.default_slot_count),
             .payload_buffers = PayloadBuffers.init(allocator),
             .events = events_mod.Queue.init(io, allocator),
             .connections = connection_mod.ConnectionRegistry.init(allocator, io, &self.events),
         };
+        errdefer self.send_buffers.deinit();
 
         self.decompress_pool = try DecompressWorkPool.init(io, allocator, DECOMPRESS_POOL_CAPACITY);
         errdefer self.decompress_pool.deinit(allocator);
         self.scratch = ScratchBuffer.init(allocator);
         errdefer self.scratch.deinit();
         if (self.scratch.stream.capacity() == 0) return error.OutOfMemory;
-        const frame_buffers = try allocator.create(FrameBuffers);
-        errdefer allocator.destroy(frame_buffers);
-        frame_buffers.* = FrameBuffers.init(allocator);
-        self.frame_buffers = frame_buffers;
         return self;
+    }
+
+    /// A frame is built inside one slot, so the pool must hold the transport's largest
+    /// message: a batch that fits the wire would otherwise be rejected for lack of room.
+    pub fn configureSendBuffers(self: *NetworkHandler, slot_size: usize, slot_count: usize) !void {
+        var resized = try SendBuffers.init(self.allocator, slot_size, slot_count);
+        errdefer resized.deinit();
+        self.send_buffers.deinit();
+        self.send_buffers = resized;
+    }
+
+    pub fn oversizeSendCount(self: *const NetworkHandler) usize {
+        return self.oversize_sends.load(.monotonic);
+    }
+
+    pub fn backpressureSendCount(self: *const NetworkHandler) usize {
+        return self.backpressure_sends.load(.monotonic);
+    }
+
+    pub fn droppedPacketCount(self: *const NetworkHandler) usize {
+        return self.dropped_packets.load(.monotonic);
     }
 
     /// The transport is attached once, after the handler that owns the registry and the pool exists.
@@ -268,11 +289,7 @@ pub const NetworkHandler = struct {
         self.connections.deinit();
         self.events.deinit();
 
-        if (self.frame_buffers) |buffers| {
-            buffers.deinit();
-            self.allocator.destroy(buffers);
-            self.frame_buffers = null;
-        }
+        self.send_buffers.deinit();
         self.payload_buffers.deinit();
         self.allocator.destroy(self);
     }
@@ -314,7 +331,7 @@ const test_scope = struct {
     pub const NetworkHandler = test_owner.NetworkHandler;
     pub const TestDispatchState = test_owner.TestDispatchState;
     pub const Compression = test_owner.Compression;
-    pub const FrameBuffers = test_owner.FrameBuffers;
+    pub const SendBuffers = test_owner.SendBuffers;
     pub const PayloadBuffers = test_owner.PayloadBuffers;
     pub const TransportFake = @import("./fake_port.zig").TransportFake;
 };
@@ -335,12 +352,26 @@ test "steady state sends one compressed frame per packet through the port" {
     try @import("network_handler_test.zig").Suite(test_scope).case_004();
 }
 
-test "a batch larger than the port payload is refused instead of silently split" {
+test "a batch larger than the port payload is split into ordered frames that fit" {
     try @import("network_handler_test.zig").Suite(test_scope).case_005();
+}
+
+test "a single packet over the port limit is refused and counted" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_006();
+}
+
+test "an exhausted send pool reports backpressure instead of allocating" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_007();
+}
+
+test "a split compressed batch round-trips in order" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_008();
 }
 
 const helper_owner = @This();
 const helper_scope = struct {
+    pub const log = @import("../core/log.zig");
+    pub const Port = helper_owner.port_mod.Port;
     pub const Connection = helper_owner.Connection;
     pub const CompressionOptions = helper_owner.CompressionOptions;
     pub const SendPriority = helper_owner.SendPriority;
@@ -354,7 +385,7 @@ const helper_scope = struct {
     pub const WorkerBuffers = helper_owner.WorkerBuffers;
     pub const threaded_tasks = helper_owner.threaded_tasks;
     pub const Compression = helper_owner.Compression;
-    pub const FrameBuffers = helper_owner.FrameBuffers;
+    pub const SendBuffers = helper_owner.SendBuffers;
     pub const ringDecompressTask = helper_owner.NetworkHandler.ringDecompressTask;
     pub const decompressTask = helper_owner.NetworkHandler.decompressTask;
     pub const decompressCallback = helper_owner.NetworkHandler.decompressCallback;

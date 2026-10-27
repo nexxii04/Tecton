@@ -537,6 +537,11 @@ pub const Tecton = struct {
             .players = .{ .ctx = self, .count = countOnlinePlayers },
         });
         errdefer adapter.deinit();
+
+        // Every frame is compressed into a pool slot, so the slot must hold the largest
+        // message the session negotiates.
+        const send_slots = @max(@as(usize, 8), @min(@as(usize, 32), @as(usize, self.config.worker_threads) + 2));
+        try self.network.configureSendBuffers(self.config.max_message_size, send_slots);
         self.nethernet = adapter;
         self.network.attachPort(adapter.port());
     }
@@ -552,10 +557,8 @@ pub const Tecton = struct {
     }
 
     fn attachRaknetPort(self: *Tecton) !void {
-        const frame_buffers = self.network.frame_buffers orelse return error.FramePoolUnavailable;
         const raknet_port = try RaknetPort.init(self.allocator, self.io, .{
             .registry = &self.network.connections,
-            .frame_buffers = frame_buffers,
             .sink = .{ .ctx = self.network, .packet = NetworkHandler.onPacket },
         });
         self.raknet_port = raknet_port;

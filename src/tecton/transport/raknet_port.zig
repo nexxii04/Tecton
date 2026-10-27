@@ -23,14 +23,13 @@ pub const RaknetPort = struct {
 
     pub const Options = struct {
         registry: *connection_mod.ConnectionRegistry,
-        frame_buffers: *FrameBuffers,
         sink: Sink,
     };
 
     allocator: std.mem.Allocator,
     io: std.Io,
     registry: *connection_mod.ConnectionRegistry,
-    frame_buffers: *FrameBuffers,
+    frame_buffers: FrameBuffers,
     sink: Sink,
     mutex: std.Io.Mutex = .init,
     by_backend: std.AutoHashMap(usize, *Connection),
@@ -41,7 +40,7 @@ pub const RaknetPort = struct {
             .allocator = allocator,
             .io = io,
             .registry = options.registry,
-            .frame_buffers = options.frame_buffers,
+            .frame_buffers = FrameBuffers.init(allocator),
             .sink = options.sink,
             .by_backend = std.AutoHashMap(usize, *Connection).init(allocator),
         };
@@ -49,6 +48,7 @@ pub const RaknetPort = struct {
     }
 
     pub fn deinit(self: *RaknetPort) void {
+        self.frame_buffers.deinit();
         self.by_backend.deinit();
         self.allocator.destroy(self);
     }
@@ -195,16 +195,12 @@ test "connect, packet and disconnect are routed through the port" {
     var registry = connection_mod.ConnectionRegistry.init(testing.allocator, testing.io, &events);
     defer registry.deinit();
 
-    var pool = FrameBuffers.init(testing.allocator);
-    defer pool.deinit();
-
     var transport = try testTransport(testing.allocator);
     defer transport.deinit();
 
     var probe = Probe{};
     const port = try RaknetPort.init(testing.allocator, testing.io, .{
         .registry = &registry,
-        .frame_buffers = &pool,
         .sink = .{ .ctx = &probe, .packet = Probe.deliver },
     });
     defer port.deinit();
@@ -251,16 +247,12 @@ test "a payload that cannot fit the pool is handed to the transport instead of t
     var registry = connection_mod.ConnectionRegistry.init(testing.allocator, testing.io, &events);
     defer registry.deinit();
 
-    var pool = FrameBuffers.init(testing.allocator);
-    defer pool.deinit();
-
     var transport = try testTransport(testing.allocator);
     defer transport.deinit();
 
     var probe = Probe{};
     const port = try RaknetPort.init(testing.allocator, testing.io, .{
         .registry = &registry,
-        .frame_buffers = &pool,
         .sink = .{ .ctx = &probe, .packet = Probe.deliver },
     });
     defer port.deinit();
@@ -281,7 +273,7 @@ test "a payload that cannot fit the pool is handed to the transport instead of t
     try testing.expect(backend.comm_data.output_frame_queue.items.len > 1);
     for (backend.comm_data.output_frame_queue.items) |*frame| frame.deinit();
     backend.comm_data.output_frame_queue.clearRetainingCapacity();
-    try testing.expectEqual(@as(usize, 0), pool.mappedBytes());
+    try testing.expectEqual(@as(usize, 0), port.frame_buffers.mappedBytes());
 }
 
 test "sending on a closed session reports Closed and never touches the transport" {
@@ -291,16 +283,12 @@ test "sending on a closed session reports Closed and never touches the transport
     var registry = connection_mod.ConnectionRegistry.init(testing.allocator, testing.io, &events);
     defer registry.deinit();
 
-    var pool = FrameBuffers.init(testing.allocator);
-    defer pool.deinit();
-
     var transport = try testTransport(testing.allocator);
     defer transport.deinit();
 
     var probe = Probe{};
     const port = try RaknetPort.init(testing.allocator, testing.io, .{
         .registry = &registry,
-        .frame_buffers = &pool,
         .sink = .{ .ctx = &probe, .packet = Probe.deliver },
     });
     defer port.deinit();

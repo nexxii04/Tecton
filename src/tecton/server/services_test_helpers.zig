@@ -38,7 +38,7 @@ pub fn Fixture(comptime scope: type) type {
         pub fn stubNetwork() NetworkHandler {
             var stub: NetworkHandler = undefined;
             stub.allocator = allocator;
-            stub.frame_buffers = null;
+            stub.send_buffers = .empty;
             stub.port = null;
             stub.options = .{ .compression_method = .Zlib, .compression_threshold = 0 };
             return stub;
@@ -47,7 +47,7 @@ pub fn Fixture(comptime scope: type) type {
         pub fn plainNetwork() NetworkHandler {
             var stub: NetworkHandler = undefined;
             stub.allocator = allocator;
-            stub.frame_buffers = null;
+            stub.send_buffers = .empty;
             stub.port = null;
             stub.options = .{ .compression_method = .NotPresent, .compression_threshold = 255 };
             return stub;

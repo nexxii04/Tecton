@@ -1,4 +1,5 @@
 pub const NetworkHandler = @import("network_handler.zig").NetworkHandler;
+pub const SendBuffers = @import("send_buffers.zig").SendBuffers;
 pub const FrameBuffers = @import("frame_buffers.zig").FrameBuffers;
 pub const PayloadBuffers = @import("payload_buffers.zig").PayloadBuffers;
 pub const Host = @import("host.zig").Host;
