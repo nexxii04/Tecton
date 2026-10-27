@@ -62,7 +62,7 @@ pub fn handleResourcePack(
         },
         .Refused => {
             if (tecton.getPlayerByConnection(connection)) |player| {
-                try player.disconnect(null);
+                player.disconnect(null);
             }
         },
         .None => {},

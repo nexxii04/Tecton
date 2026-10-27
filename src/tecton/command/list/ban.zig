@@ -1,7 +1,5 @@
 const std = @import("std");
 const log = @import("../../core/log.zig");
-const BinaryStream = @import("BinaryStream").BinaryStream;
-const Protocol = @import("protocol");
 const Command = @import("../command.zig").Command;
 const SubCommand = @import("../command.zig").SubCommand;
 const CommandContext = @import("../context.zig").CommandContext;
@@ -70,19 +68,7 @@ fn handleBan(raw: *anyopaque) void {
             return;
         };
         log.info("{s} banned {s}: {s}", .{ source, player.username, reason });
-
-        var stream = BinaryStream.init(ctx.allocator, null, null);
-        defer stream.deinit();
-        var disconnect = Protocol.DisconnectPacket{
-            .reason = .Kicked,
-            .messages = .{
-                .message = reason,
-                .filtered_message = reason,
-            },
-        };
-        const serialized = disconnect.serialize(&stream) catch return;
-        ctx.network.sendImmediate(player.connection, serialized) catch {};
-        ctx.network.closeConnection(player.connection, .flush);
+        player.disconnect(reason);
     } else {
         ban_mgr.ban("", target_name, source, reason) catch {
             ctx.sendOutput(false, "Failed to ban player");

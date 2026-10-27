@@ -229,6 +229,68 @@ test "closing emits one event, removes the mapping and drops the transport refer
     conn.release();
 }
 
+test "two threads closing at once emit one event and drop one reference" {
+    var queue = events_mod.Queue.init(testing.io, testing.allocator);
+    defer queue.deinit();
+
+    var registry = ConnectionRegistry.init(testing.allocator, testing.io, &queue);
+    defer registry.deinit();
+
+    var backend: u128 = 0;
+    const conn = try registry.create(&backend);
+    // Stands in for the player reference; the test releases it at the end.
+    conn.retain();
+
+    const Closer = struct {
+        fn run(reg: *ConnectionRegistry, target: *Connection) void {
+            reg.closeAndRelease(target);
+        }
+    };
+
+    var threads: [2]std.Thread = undefined;
+    for (&threads) |*thread| thread.* = try std.Thread.spawn(.{}, Closer.run, .{ &registry, conn });
+    for (threads) |thread| thread.join();
+
+    try testing.expect(!conn.isOpen());
+    try testing.expectEqual(@as(u32, 1), conn.refs.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), registry.count());
+
+    var drained: std.ArrayList(events_mod.Event) = .empty;
+    defer drained.deinit(testing.allocator);
+    queue.drain(&drained);
+    try testing.expectEqual(@as(usize, 2), drained.items.len);
+    try testing.expectEqual(conn.id, drained.items[0].opened);
+    try testing.expectEqual(conn.id, drained.items[1].closed);
+
+    conn.release();
+}
+
+test "a reconnect gets a new id and the old close drains before the new open" {
+    var queue = events_mod.Queue.init(testing.io, testing.allocator);
+    defer queue.deinit();
+
+    var registry = ConnectionRegistry.init(testing.allocator, testing.io, &queue);
+    defer registry.deinit();
+
+    var first_backend: u128 = 0;
+    const first = try registry.createWithId(10, &first_backend);
+    registry.closeAndRelease(first);
+
+    var second_backend: u128 = 0;
+    const second = try registry.createWithId(11, &second_backend);
+    try testing.expectEqual(@as(?*Connection, null), registry.get(10));
+    try testing.expectEqual(second, registry.get(11).?);
+    try testing.expect(second.isOpen());
+
+    var drained: std.ArrayList(events_mod.Event) = .empty;
+    defer drained.deinit(testing.allocator);
+    queue.drain(&drained);
+    try testing.expectEqual(@as(usize, 3), drained.items.len);
+    try testing.expectEqual(@as(u64, 10), drained.items[0].opened);
+    try testing.expectEqual(@as(u64, 10), drained.items[1].closed);
+    try testing.expectEqual(@as(u64, 11), drained.items[2].opened);
+}
+
 test "the registry frees connections the transport never closed" {
     var queue = events_mod.Queue.init(testing.io, testing.allocator);
     defer queue.deinit();

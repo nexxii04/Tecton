@@ -70,6 +70,7 @@ pub fn onTick(context: ?*anyopaque) void {
 
     // Transport callbacks only publish ids; opening and closing sessions happens here.
     tecton.drainTransportEvents();
+    tecton.reconcileClosedConnections();
     tecton.drainPendingPlayerRemovals();
     tecton.rebuildPlayerSnapshot();
 

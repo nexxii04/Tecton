@@ -24,5 +24,5 @@ fn handle(raw: *anyopaque) void {
         log.info("Server stop requested by Console", .{});
     }
     const view = ctx.views.shutdown;
-    view.shutdown(view.ctx) catch {};
+    view.shutdown(view.ctx) catch |err| log.err("Server shutdown failed: {s}", .{@errorName(err)});
 }

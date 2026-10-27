@@ -9,9 +9,10 @@ const Raknet = @import("Raknet");
 const connection_mod = @import("./transport/connection.zig");
 const Connection = connection_mod.Connection;
 const events_mod = @import("./transport/events.zig");
+const port_mod = @import("./transport/port.zig");
 
 /// Longest a shutdown waits for queued disconnects to leave the transport.
-const shutdown_flush_ms: i64 = 1_000;
+const shutdown_flush_ms: i64 = 500;
 const RaknetPort = @import("./transport/raknet_port.zig").RaknetPort;
 const NetherNetAdapter = @import("./transport/nethernet.zig").Adapter;
 
@@ -34,7 +35,8 @@ const PermissionManager = @import("./player/permission_manager.zig").PermissionM
 const PlayerLocations = @import("./player/player_locations.zig").PlayerLocations;
 const PlayerLocation = @import("./player/player_locations.zig").Location;
 const PlayerSnapshot = @import("./player/player_snapshot.zig").PlayerSnapshot;
-const Player = @import("./player/player.zig").Player;
+const player_mod = @import("./player/player.zig");
+const Player = player_mod.Player;
 const ShutdownSignal = @import("./server/shutdown_signal.zig");
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 const threaded_tasks = @import("./tasks/threaded_tasks.zig");
@@ -52,7 +54,8 @@ const EcsWorld = @import("entity/ecs.zig").EcsWorld;
 const Events = @import("events/root.zig");
 const PluginRuntime = @import("plugins/runtime.zig").PluginRuntime;
 const GameInstanceRegistry = @import("world/game_instance.zig").GameInstanceRegistry;
-const PlayerRegistry = @import("server/players.zig").PlayerRegistry;
+const players_mod = @import("server/players.zig");
+const PlayerRegistry = players_mod.PlayerRegistry;
 const options_mod = @import("server/options.zig");
 const SaveScheduler = @import("server/save.zig").SaveScheduler;
 const tick_mod = @import("server/tick.zig");
@@ -113,6 +116,7 @@ pub const Tecton = struct {
     nethernet: ?*NetherNetAdapter = null,
     transport_clock: ?tick_loop.Clock = null,
     transport_events: std.ArrayList(events_mod.Event) = .empty,
+    reconcile_batch: std.ArrayList(*Player) = .empty,
     game_clock: ?tick_loop.Clock = null,
     running: std.atomic.Value(bool) = .init(false),
     shutdown_event: std.Io.Event = .unset,
@@ -597,23 +601,23 @@ pub const Tecton = struct {
         var event = Events.types.ServerShutdownEvent{};
         _ = self.events.emit(.ServerShutdown, &event);
 
-        for (self.players.list()) |player| {
-            if (!self.network_initialized) break;
-            var str = BinaryStream.init(self.allocator, null, null);
-            defer str.deinit();
-            var disconnect = Protocol.DisconnectPacket{
-                .reason = .Disconnected,
-                .messages = .{
-                    .message = "Server shutdown.",
-                    .filtered_message = "Server shutdown.",
-                },
-            };
-            const serialized = try disconnect.serialize(&str);
-            try self.network.sendImmediate(player.connection, serialized);
-            self.network.closeConnection(player.connection, .flush);
+        // Include a player that logged in after this tick's snapshot, then copy: closing a
+        // player republishes the snapshot this loop would otherwise walk.
+        self.players.rebuild();
+        const closing = try self.allocator.dupe(*Player, self.players.list());
+        defer self.allocator.free(closing);
+        for (closing) |player| {
+            self.closePlayer(player, .flush, .{ .message = "Server shutdown." });
         }
 
         self.shutdownTransport();
+    }
+
+    /// Server-initiated close; runs only on the game tick. The player is freed later,
+    /// in `drainPendingPlayerRemovals`, once the transport has flushed.
+    pub fn closePlayer(self: *Tecton, player: *Player, mode: port_mod.CloseMode, reason: player_mod.CloseReason) void {
+        if (self.stopped) return;
+        player.close(mode, reason);
     }
 
     /// Stops the transport last: the disconnects above only leave while it still ticks.
@@ -621,6 +625,8 @@ pub const Tecton = struct {
         const adapter = self.nethernet orelse return;
         if (self.transport_clock) |*clock| clock.stop();
 
+        // The clock is stopped, so this thread is the only one ticking and a peer that never
+        // drains cannot hold the process open past the deadline.
         const deadline = std.Io.Clock.Timestamp.fromNow(self.io, .{
             .clock = .awake,
             .raw = .fromMilliseconds(shutdown_flush_ms),
@@ -628,6 +634,9 @@ pub const Tecton = struct {
         while (adapter.sessionCount() > 0 and std.Io.Clock.Timestamp.now(self.io, .awake).compare(.lt, deadline)) {
             adapter.tick();
             self.io.sleep(.fromMilliseconds(2), .awake) catch break;
+        }
+        if (adapter.sessionCount() > 0) {
+            log.warn("Shutdown deadline reached with {d} transport sessions still open", .{adapter.sessionCount()});
         }
         adapter.stop();
     }
@@ -644,6 +653,7 @@ pub const Tecton = struct {
     pub fn drainTransportEvents(self: *Tecton) void {
         self.network.drainEvents(&self.transport_events);
         for (self.transport_events.items) |event| switch (event) {
+            // A session becomes a player only when its login packet arrives.
             .opened => {},
             .closed => |id| {
                 const player = self.players.byConnectionId(id) orelse continue;
@@ -651,6 +661,17 @@ pub const Tecton = struct {
                 player.disconnectFromNetwork();
             },
         };
+    }
+
+    /// A `closed` event can be dropped; the transport state is the backstop. The batch is reused
+    /// because closing a player republishes the snapshot the registry would otherwise hand out.
+    pub fn reconcileClosedConnections(self: *Tecton) void {
+        self.reconcile_batch.clearRetainingCapacity();
+        self.reconcile_batch.appendSlice(self.allocator, self.players.list()) catch |err| {
+            log.warn("Could not reconcile closed connections this tick: {s}", .{@errorName(err)});
+            return;
+        };
+        _ = players_mod.reconcileClosedConnections(self.reconcile_batch.items);
     }
 
     pub fn addPlayer(self: *Tecton, player: *Player) !void {
@@ -904,6 +925,9 @@ pub const Tecton = struct {
     }
 
     pub fn deinit(self: *Tecton) void {
+        if (!self.stopped and self.started) {
+            self.stop() catch |err| log.err("Shutdown before deinit failed: {s}", .{@errorName(err)});
+        }
         self.running.store(false, .release);
         if (self.game_clock) |*clock| clock.stop();
         self.stopRaknetTickThread();
@@ -944,6 +968,7 @@ pub const Tecton = struct {
         }
 
         self.transport_events.deinit(self.allocator);
+        self.reconcile_batch.deinit(self.allocator);
         if (self.raknet_port) |port| {
             port.deinit();
             self.raknet_port = null;

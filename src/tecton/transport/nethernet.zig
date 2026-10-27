@@ -168,12 +168,16 @@ pub const Adapter = struct {
 
     fn onClose(raw: *anyopaque, session: *nethernet.web_rtc.PeerHandle) void {
         const self: *Adapter = @ptrCast(@alignCast(raw));
+        const conn = connectionOf(session);
+        // The session is gone either way; only a live adapter may touch the game's registry.
+        session.user_data = null;
         if (!self.alive.load(.acquire)) return;
 
-        const conn = connectionOf(session) orelse return;
-        session.user_data = null;
-        self.deps.registry.closeAndRelease(conn);
-        log.info("NetherNet session {d} closed", .{conn.id});
+        const closed = conn orelse return;
+        // The release can destroy the connection when no player holds it.
+        const id = closed.id;
+        self.deps.registry.closeAndRelease(closed);
+        log.info("NetherNet session {d} closed", .{id});
     }
 
     fn connectionOf(session: *nethernet.web_rtc.PeerHandle) ?*Connection {
@@ -183,6 +187,7 @@ pub const Adapter = struct {
 
     fn sendBytes(raw: *anyopaque, conn: *Connection, bytes: []const u8, priority: SendPriority) port_mod.SendError!void {
         const self: *Adapter = @ptrCast(@alignCast(raw));
+        if (!self.alive.load(.acquire)) return error.Closed;
         if (!conn.isOpen()) return error.Closed;
         // NetherNet has no priority knob: the outbox is ordered per session.
         _ = priority;
@@ -196,6 +201,7 @@ pub const Adapter = struct {
 
     fn closeConn(raw: *anyopaque, conn: *Connection, mode: port_mod.CloseMode) void {
         const self: *Adapter = @ptrCast(@alignCast(raw));
+        if (!self.alive.load(.acquire)) return;
         switch (mode) {
             .flush => self.host.closeSession(conn.id),
             .abort => self.host.abortSession(conn.id),
@@ -204,6 +210,7 @@ pub const Adapter = struct {
 
     fn maxPayload(raw: *anyopaque, conn: *Connection) usize {
         const self: *Adapter = @ptrCast(@alignCast(raw));
+        if (!self.alive.load(.acquire)) return 0;
         return self.host.sessionMaxMessageSize(conn.id) orelse 0;
     }
 
@@ -397,4 +404,44 @@ test "spectator is advertised as adventure" {
 test "a player count past the protocol field is clamped, not wrapped" {
     const data = serverData(.{ .max_players = std.math.maxInt(u32) });
     try testing.expectEqual(@as(i32, std.math.maxInt(i32)), data.max_player_count);
+}
+
+test "a transport close after the adapter is down never touches the registry" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var key_buffer: [256]u8 = undefined;
+    const key_path = try std.fmt.bufPrint(&key_buffer, ".zig-cache/tmp/{s}/server.key", .{tmp.sub_path});
+
+    const fixture = try Fixture.create(key_path);
+    defer fixture.destroy();
+
+    var backend: u128 = 0;
+    const conn = try fixture.registry.createWithId(7, &backend);
+    // Stands in for the player reference: the object must outlive the transport close.
+    conn.retain();
+    defer conn.release();
+
+    var handle = nethernet.web_rtc.PeerHandle{ .id = 7, .peer = undefined, .user_data = conn };
+
+    fixture.adapter.alive.store(false, .release);
+    Adapter.onClose(fixture.adapter, &handle);
+    try testing.expect(handle.user_data == null);
+    try testing.expect(fixture.registry.get(7).? == conn);
+    try testing.expect(conn.isOpen());
+
+    fixture.adapter.alive.store(true, .release);
+    handle.user_data = conn;
+    Adapter.onClose(fixture.adapter, &handle);
+    try testing.expect(!conn.isOpen());
+    try testing.expect(fixture.registry.get(7) == null);
+
+    handle.user_data = conn;
+    Adapter.onClose(fixture.adapter, &handle);
+
+    var drained: std.ArrayList(events_mod.Event) = .empty;
+    defer drained.deinit(testing.allocator);
+    fixture.events.drain(&drained);
+    try testing.expectEqual(@as(usize, 2), drained.items.len);
+    try testing.expectEqual(@as(u64, 7), drained.items[0].opened);
+    try testing.expectEqual(@as(u64, 7), drained.items[1].closed);
 }

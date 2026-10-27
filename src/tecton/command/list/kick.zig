@@ -40,7 +40,7 @@ fn handle(raw: *anyopaque) void {
     const source = if (ctx.player) |p| p.username else "Console";
     for (targets) |player| {
         log.info("{s} kicked {s}: {s}", .{ source, player.username, reason });
-        player.disconnect(reason) catch {};
+        player.disconnect(reason);
     }
 
     var buf: [128]u8 = undefined;

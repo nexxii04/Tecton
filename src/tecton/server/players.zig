@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const Connection = @import("../transport/connection.zig").Connection;
+const connection_mod = @import("../transport/connection.zig");
+const Connection = connection_mod.Connection;
 
 const Player = @import("../player/player.zig").Player;
 const PlayerSnapshot = @import("../player/player_snapshot.zig").PlayerSnapshot;
@@ -155,6 +156,85 @@ pub const PlayerRegistry = struct {
         return pending;
     }
 };
+
+/// Marks every player whose transport session is gone without a `closed` event reaching the
+/// tick. The hand-off queue is bounded, so a dropped event is possible; the session state is
+/// the backstop. It only marks and enqueues: the removal drain still frees the player.
+pub fn reconcileClosedConnections(players: []const *Player) usize {
+    var reconciled: usize = 0;
+    for (players) |player| {
+        if (player.pending_removal.load(.acquire)) continue;
+        if (player.connection.isOpen()) continue;
+        player.disconnectFromNetwork();
+        reconciled += 1;
+    }
+    return reconciled;
+}
+
+const testing = std.testing;
+const player_mod = @import("../player/player.zig");
+
+const ReconcileProbe = struct {
+    removals: usize = 0,
+    mappings: usize = 0,
+
+    fn removeConnectionMapping(ctx: *anyopaque, _: *anyopaque) void {
+        const self: *ReconcileProbe = @ptrCast(@alignCast(ctx));
+        self.mappings += 1;
+    }
+
+    fn enqueueRemoval(ctx: *anyopaque, _: *Player) void {
+        const self: *ReconcileProbe = @ptrCast(@alignCast(ctx));
+        self.removals += 1;
+    }
+};
+
+fn fakeConnection(allocator: std.mem.Allocator, id: u64) !*Connection {
+    const conn = try allocator.create(Connection);
+    conn.* = .{
+        .id = id,
+        .backend = undefined,
+        .allocator = allocator,
+        .refs = std.atomic.Value(u32).init(1),
+        .state = std.atomic.Value(connection_mod.State).init(.open),
+    };
+    return conn;
+}
+
+test "reconciliation marks only players whose session closed without an event" {
+    const allocator = std.testing.allocator;
+    var probe = ReconcileProbe{};
+    var host: player_mod.Host = undefined;
+    host.ctx = &probe;
+    host.remove_connection_mapping = ReconcileProbe.removeConnectionMapping;
+    host.enqueue_player_removal = ReconcileProbe.enqueueRemoval;
+
+    const open_conn = try fakeConnection(allocator, 1);
+    defer open_conn.release();
+    const closed_conn = try fakeConnection(allocator, 2);
+    defer closed_conn.release();
+    closed_conn.markClosed();
+
+    var open_player: Player = undefined;
+    open_player.connection = open_conn;
+    open_player.tecton = host;
+    open_player.pending_removal = .init(false);
+
+    var closed_player: Player = undefined;
+    closed_player.connection = closed_conn;
+    closed_player.tecton = host;
+    closed_player.pending_removal = .init(false);
+
+    const players = [_]*Player{ &open_player, &closed_player };
+    try testing.expectEqual(@as(usize, 1), reconcileClosedConnections(&players));
+    try testing.expect(!open_player.pending_removal.load(.acquire));
+    try testing.expect(closed_player.pending_removal.load(.acquire));
+    try testing.expectEqual(@as(usize, 1), probe.removals);
+    try testing.expectEqual(@as(usize, 1), probe.mappings);
+
+    try testing.expectEqual(@as(usize, 0), reconcileClosedConnections(&players));
+    try testing.expectEqual(@as(usize, 1), probe.removals);
+}
 
 test "every `by_runtime_id` mutation refreshes the atomic count" {
     const source = @embedFile("players.zig");
