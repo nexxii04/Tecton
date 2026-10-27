@@ -15,4 +15,6 @@ pub const SendError = @import("port.zig").SendError;
 pub const TransportEvent = @import("events.zig").Event;
 pub const TransportEvents = @import("events.zig").Queue;
 pub const RaknetPort = @import("raknet_port.zig").RaknetPort;
+pub const NetherNet = @import("nethernet.zig");
+pub const NetherNetAdapter = NetherNet.Adapter;
 pub const TransportFake = @import("fake_port.zig").TransportFake;

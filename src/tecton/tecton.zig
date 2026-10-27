@@ -9,7 +9,11 @@ const Raknet = @import("Raknet");
 const connection_mod = @import("./transport/connection.zig");
 const Connection = connection_mod.Connection;
 const events_mod = @import("./transport/events.zig");
+
+/// Longest a shutdown waits for queued disconnects to leave the transport.
+const shutdown_flush_ms: i64 = 1_000;
 const RaknetPort = @import("./transport/raknet_port.zig").RaknetPort;
+const NetherNetAdapter = @import("./transport/nethernet.zig").Adapter;
 
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
 const ServerProperties = @import("./core/config.zig").ServerProperties;
@@ -106,6 +110,8 @@ pub const Tecton = struct {
     events: Events.Events,
     raknet: Raknet.Server,
     raknet_port: ?*RaknetPort = null,
+    nethernet: ?*NetherNetAdapter = null,
+    transport_clock: ?tick_loop.Clock = null,
     transport_events: std.ArrayList(events_mod.Event) = .empty,
     game_clock: ?tick_loop.Clock = null,
     running: std.atomic.Value(bool) = .init(false),
@@ -407,7 +413,10 @@ pub const Tecton = struct {
             .dispatch = self.composition.dispatch,
         });
         self.network_initialized = true;
-        try self.attachRaknetPort();
+        switch (self.config.transport) {
+            .nethernet => try self.attachNetherNetPort(),
+            .raknet => try self.attachRaknetPort(),
+        }
         try self.prepare();
         self.tick_thread_id.store(0, .release);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
@@ -479,7 +488,19 @@ pub const Tecton = struct {
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
-        try self.raknet.start();
+        switch (self.config.transport) {
+            .nethernet => if (self.nethernet) |adapter| {
+                try adapter.start();
+                self.transport_clock = tick_loop.Clock.init(
+                    self.io,
+                    @as(u64, @max(1, self.config.transport_tick_ms)) * std.time.ns_per_ms,
+                    netherNetTick,
+                    self,
+                );
+                if (self.transport_clock) |*clock| try clock.start();
+            },
+            .raknet => try self.raknet.start(),
+        }
         self.running.store(true, .release);
         self.shutdown_event.reset();
         self.game_clock = tick_loop.Clock.init(self.io, std.time.ns_per_s / @max(1, @as(u64, self.config.max_tps)), tick_mod.onTick, self);
@@ -492,6 +513,42 @@ pub const Tecton = struct {
         }
         self.started = true;
         if (self.start_callback) |callback| callback(self.lifecycle_userdata);
+    }
+
+    fn attachNetherNetPort(self: *Tecton) !void {
+        const adapter = try NetherNetAdapter.init(self.io, self.allocator, .{
+            .address = self.config.address,
+            .port = self.config.port,
+            .motd = self.config.motd,
+            .level_name = self.config.level_name,
+            .gamemode = self.config.gameMode(),
+            .max_players = self.config.max_players,
+            .online_mode = self.config.online_mode,
+            .identity_key = self.config.identity_key,
+            .lan_discovery = self.config.lan_discovery,
+            .lan_port = self.config.lan_port,
+            .max_message_size = self.config.max_message_size,
+            .transport_tick_ms = self.config.transport_tick_ms,
+            .outbox_slots = self.config.outbox_slots,
+        }, .{
+            .registry = &self.network.connections,
+            .events = &self.network.events,
+            .publish = .{ .ctx = self.network, .packet = NetworkHandler.onPacket },
+            .players = .{ .ctx = self, .count = countOnlinePlayers },
+        });
+        errdefer adapter.deinit();
+        self.nethernet = adapter;
+        self.network.attachPort(adapter.port());
+    }
+
+    fn netherNetTick(context: ?*anyopaque) void {
+        const self: *Tecton = @ptrCast(@alignCast(context.?));
+        if (self.nethernet) |adapter| adapter.tick();
+    }
+
+    fn countOnlinePlayers(context: *anyopaque) usize {
+        const self: *Tecton = @ptrCast(@alignCast(context));
+        return self.players.count();
     }
 
     fn attachRaknetPort(self: *Tecton) !void {
@@ -552,6 +609,24 @@ pub const Tecton = struct {
             try self.network.sendImmediate(player.connection, serialized);
             self.network.closeConnection(player.connection, .flush);
         }
+
+        self.shutdownTransport();
+    }
+
+    /// Stops the transport last: the disconnects above only leave while it still ticks.
+    fn shutdownTransport(self: *Tecton) void {
+        const adapter = self.nethernet orelse return;
+        if (self.transport_clock) |*clock| clock.stop();
+
+        const deadline = std.Io.Clock.Timestamp.fromNow(self.io, .{
+            .clock = .awake,
+            .raw = .fromMilliseconds(shutdown_flush_ms),
+        });
+        while (adapter.sessionCount() > 0 and std.Io.Clock.Timestamp.now(self.io, .awake).compare(.lt, deadline)) {
+            adapter.tick();
+            self.io.sleep(.fromMilliseconds(2), .awake) catch break;
+        }
+        adapter.stop();
     }
 
     pub fn shutdown(self: *Tecton) !void {
@@ -857,6 +932,12 @@ pub const Tecton = struct {
                 stats.chunks,
                 stats.live,
             });
+        }
+
+        if (self.transport_clock) |*clock| clock.stop();
+        if (self.nethernet) |adapter| {
+            adapter.deinit();
+            self.nethernet = null;
         }
 
         self.transport_events.deinit(self.allocator);

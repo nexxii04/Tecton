@@ -96,6 +96,32 @@ pub const ConnectionRegistry = struct {
         return conn;
     }
 
+    /// Adopts an id a transport already assigned, so the game's ids and the transport's
+    /// ids name the same session. A repeated id is refused instead of aliased.
+    pub fn createWithId(self: *ConnectionRegistry, id: u64, backend: *anyopaque) !*Connection {
+        if (id == 0) return error.InvalidConnectionId;
+
+        const conn = try self.allocator.create(Connection);
+        errdefer self.allocator.destroy(conn);
+
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
+
+        const entry = try self.by_id.getOrPut(id);
+        if (entry.found_existing) return error.ConnectionIdInUse;
+
+        conn.* = .{
+            .id = id,
+            .backend = backend,
+            .allocator = self.allocator,
+            .refs = std.atomic.Value(u32).init(1),
+            .state = std.atomic.Value(State).init(.open),
+        };
+        entry.value_ptr.* = conn;
+        self.events.push(.{ .opened = id });
+        return conn;
+    }
+
     pub fn get(self: *ConnectionRegistry, id: u64) ?*Connection {
         self.mutex.lock(self.io) catch return null;
         defer self.mutex.unlock(self.io);
@@ -148,6 +174,29 @@ test "ids are unique, monotonic and never zero" {
     try testing.expect(ids[0] < ids[1]);
     try testing.expect(ids[1] < ids[2]);
     try testing.expectEqual(@as(usize, 3), registry.count());
+}
+
+test "an adopted id keeps the transport's name and refuses a duplicate" {
+    var queue = events_mod.Queue.init(testing.io, testing.allocator);
+    defer queue.deinit();
+
+    var registry = ConnectionRegistry.init(testing.allocator, testing.io, &queue);
+    defer registry.deinit();
+
+    var backend: u128 = 0;
+    const conn = try registry.createWithId(42, &backend);
+    try testing.expectEqual(@as(u64, 42), conn.id);
+    try testing.expect(conn.isOpen());
+    try testing.expectEqual(conn, registry.get(42).?);
+
+    try testing.expectError(error.ConnectionIdInUse, registry.createWithId(42, &backend));
+    try testing.expectError(error.InvalidConnectionId, registry.createWithId(0, &backend));
+
+    var drained: std.ArrayList(events_mod.Event) = .empty;
+    defer drained.deinit(testing.allocator);
+    queue.drain(&drained);
+    try testing.expectEqual(@as(usize, 1), drained.items.len);
+    try testing.expectEqual(@as(u64, 42), drained.items[0].opened);
 }
 
 test "closing emits one event, removes the mapping and drops the transport reference" {

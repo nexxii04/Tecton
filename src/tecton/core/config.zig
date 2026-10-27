@@ -13,10 +13,20 @@ pub fn shouldEmitStartupLogs() bool {
     return shouldEmitVerboseStartupLogs(builtin.mode) and !builtin.is_test;
 }
 
+pub const TransportBackend = enum { raknet, nethernet };
+
 pub const ServerProperties = struct {
     address: []const u8 = "0.0.0.0",
     port: u16 = 19132,
     motd: []const u8 = "Tecton Server",
+    level_name: []const u8 = "Bedrock level",
+    transport: TransportBackend = .raknet,
+    lan_discovery: bool = true,
+    lan_port: u16 = 7551,
+    identity_key: []const u8 = "server.key",
+    max_message_size: u32 = 256 * 1024,
+    transport_tick_ms: u32 = 10,
+    outbox_slots: u32 = 512,
     gamemode: []const u8 = "survival",
     max_players: u32 = 120,
     online_mode: bool = false,
@@ -88,6 +98,14 @@ pub const ServerProperties = struct {
         .address = "What address should the server run on",
         .port = "What port should the server run on",
         .motd = "What motd should server display in the server list",
+        .level_name = "Level name shown to clients before they join",
+        .transport = "Transport backend: raknet (legacy) or nethernet",
+        .lan_discovery = "Answer LAN discovery pings on UDP (nethernet backend)",
+        .lan_port = "LAN discovery port (nethernet backend)",
+        .identity_key = "Path to the operator key that signs signaling answers (created on first start, keep it secret)",
+        .max_message_size = "Largest NetherNet message accepted from a client, in bytes",
+        .transport_tick_ms = "Milliseconds between NetherNet transport ticks (signaling, ICE and queued frames)",
+        .outbox_slots = "Per-session outbound message slots (nethernet backend)",
         .gamemode = "Default game mode: survival, creative, adventure or spectator",
         .max_players = "Max Player count on the server",
         .online_mode = "Verify logins against the Minecraft authorization service; an unverifiable login is refused (see online-mode-offline-fallback)",
