@@ -1,5 +1,5 @@
 const log = @import("../../core/log.zig");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const ServerProperties = @import("../../core/config.zig").ServerProperties;
@@ -9,7 +9,7 @@ const Protocol = @import("protocol");
 pub fn handleRequestChunkRadius(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const packet = try Protocol.RequestChunkRadiusPacket.deserialize(stream);

@@ -3,7 +3,7 @@ const log = @import("../../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const inventory = @import("../../entity/traits/inventory.zig");
 const InventoryTrait = inventory.InventoryTrait;
@@ -29,7 +29,7 @@ const Tecton = @import("../../tecton.zig").Tecton;
 pub fn handleInventoryTransaction(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;

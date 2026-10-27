@@ -17,7 +17,7 @@ pub fn Fixture(comptime scope: type) type {
         pub const NetworkHandler = scope.NetworkHandler;
         pub const Dimension = scope.Dimension;
         pub const World = scope.World;
-        pub const Raknet = scope.Raknet;
+        pub const Connection = scope.Connection;
         pub const Protocol = scope.Protocol;
         pub const block_root = scope.block_root;
 
@@ -39,6 +39,7 @@ pub fn Fixture(comptime scope: type) type {
             var stub: NetworkHandler = undefined;
             stub.allocator = allocator;
             stub.frame_buffers = null;
+            stub.port = null;
             stub.options = .{ .compression_method = .Zlib, .compression_threshold = 0 };
             return stub;
         }
@@ -47,6 +48,7 @@ pub fn Fixture(comptime scope: type) type {
             var stub: NetworkHandler = undefined;
             stub.allocator = allocator;
             stub.frame_buffers = null;
+            stub.port = null;
             stub.options = .{ .compression_method = .NotPresent, .compression_threshold = 255 };
             return stub;
         }
@@ -63,7 +65,7 @@ pub fn Fixture(comptime scope: type) type {
             tecton.fixAddress();
         }
 
-        pub fn fakePlayer(runtime_id: i64, connection: *Raknet.Connection) Player {
+        pub fn fakePlayer(runtime_id: i64, connection: *Connection) Player {
             var player: Player = undefined;
             player.entity.runtime_id = runtime_id;
             player.connection = connection;
@@ -81,8 +83,10 @@ pub fn Fixture(comptime scope: type) type {
             return entity;
         }
 
-        pub fn fakeConnection(storage: *u128) *Raknet.Connection {
-            return @ptrCast(storage);
+        /// A pointer-shaped connection with a stable id and no transport behind it.
+        pub fn fakeConnection(storage: *u128, id: u64) *Connection {
+            storage.* = @intCast(id);
+            return @ptrCast(@alignCast(storage));
         }
 
         pub fn registerAir() !void {

@@ -1,11 +1,14 @@
 pub fn Suite(comptime scope: type) type {
     return struct {
         const std = scope.std;
-        const Raknet = scope.Raknet;
         const SharedBroadcast = scope.SharedBroadcast;
+        const NetworkHandler = scope.NetworkHandler;
         const PayloadBuffers = scope.PayloadBuffers;
         const Compression = scope.Compression;
-        const maxFramePayload = scope.maxFramePayload;
+        const TransportFake = scope.TransportFake;
+        const Connection = scope.Connection;
+        const ConnectionRegistry = scope.ConnectionRegistry;
+        const events_mod = scope.events_mod;
         const CompressionOptions = @import("./compression/options.zig").CompressionOptions;
 
         const zlib_options: CompressionOptions = .{ .compression_method = .Zlib, .compression_threshold = 255 };
@@ -18,50 +21,46 @@ pub fn Suite(comptime scope: type) type {
             }
         }
 
-        fn buildTransport(allocator: std.mem.Allocator) !Raknet.Server {
-            return Raknet.Server.init(std.testing.io, .{
-                .allocator = allocator,
-                .address = "127.0.0.1",
-                .port = 0,
-                .output_slab_slots = 8,
-                .transient_slab_slots = 4,
-                .outbound_queue_slots = 8,
+        fn testHandler(tasks: *@import("../tasks/threaded_tasks.zig").ThreadedTaskQueue, port: ?@import("./port.zig").Port) !*NetworkHandler {
+            const handler = try NetworkHandler.init(std.testing.io, std.testing.allocator, tasks, .{
+                .ctx = undefined,
+                .dispatch = struct {
+                    fn run(_: *anyopaque, _: *Connection, _: []const []const u8) void {}
+                }.run,
             });
+            handler.port = port;
+            return handler;
         }
 
         pub fn case_000() !void {
-            const allocator = std.testing.allocator;
-            var buffers = PayloadBuffers.init(allocator);
-            defer buffers.deinit();
+            var tasks = @import("../tasks/threaded_tasks.zig").ThreadedTaskQueue.init(std.testing.io, std.testing.allocator, 1);
+            defer tasks.deinit();
+            const handler = try testHandler(&tasks, null);
+            defer handler.deinit();
 
-            const packet = "a packet that will be broadcast";
-            var broadcast = try SharedBroadcast.begin(&buffers, packet, .{
-                .compression_method = .Zlib,
-                .compression_threshold = 255,
-            });
-            try std.testing.expect(broadcast.bytes != null);
-            broadcast.deinit();
-            broadcast.deinit();
+            var broadcast = try SharedBroadcast.begin(handler, "a packet that will be broadcast");
+            defer broadcast.deinit();
+            const buffers = &handler.payload_buffers;
 
-            try poolCountsRestored(&buffers);
+            try std.testing.expect(broadcast.bytes().len > 0);
+            broadcast.deinit();
+            try poolCountsRestored(buffers);
         }
 
         pub fn case_001() !void {
-            const allocator = std.testing.allocator;
-            var buffers = PayloadBuffers.init(allocator);
-            defer buffers.deinit();
+            var tasks = @import("../tasks/threaded_tasks.zig").ThreadedTaskQueue.init(std.testing.io, std.testing.allocator, 1);
+            defer tasks.deinit();
+            const handler = try testHandler(&tasks, null);
+            defer handler.deinit();
 
             const packet = "broadcast payload that repeats across every recipient";
-            var broadcast = try SharedBroadcast.begin(&buffers, packet, .{
-                .compression_method = .Zlib,
-                .compression_threshold = 1,
-            });
+            var broadcast = try SharedBroadcast.begin(handler, packet);
             defer broadcast.deinit();
 
-            const decompressed = try Compression.decompress(broadcast.bytes.?, .{
+            const decompressed = try Compression.decompress(broadcast.bytes(), .{
                 .compression_method = .Zlib,
                 .compression_threshold = 255,
-            }, allocator);
+            }, std.testing.allocator);
             defer decompressed.deinit();
             try std.testing.expectEqual(@as(usize, 1), decompressed.packets.len);
             try std.testing.expectEqualStrings(packet, decompressed.packets[0]);
@@ -69,108 +68,62 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_002() !void {
             const allocator = std.testing.allocator;
-            var transport_failing = std.testing.FailingAllocator.init(allocator, .{});
-            var transport = try buildTransport(transport_failing.allocator());
-            defer transport.deinit();
+            var tasks = @import("../tasks/threaded_tasks.zig").ThreadedTaskQueue.init(std.testing.io, allocator, 1);
+            defer tasks.deinit();
 
-            var pool_failing = std.testing.FailingAllocator.init(allocator, .{});
-            var buffers = PayloadBuffers.init(pool_failing.allocator());
-            defer buffers.deinit();
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            const handler = try testHandler(&tasks, fake.port());
+            defer handler.deinit();
 
-            const first = try allocator.create(Raknet.Connection);
-            defer allocator.destroy(first);
-            first.* = Raknet.Connection.init(&transport, .{ .ip4 = .{ .bytes = .{ 127, 0, 0, 1 }, .port = 1 } }, 1400, 1);
-            defer first.deinit();
-            try first.comm_data.output_frame_queue.ensureTotalCapacity(transport_failing.allocator(), 4);
+            var events = events_mod.Queue.init(std.testing.io, allocator);
+            defer events.deinit();
+            var registry = ConnectionRegistry.init(allocator, std.testing.io, &events);
+            defer registry.deinit();
 
-            const second = try allocator.create(Raknet.Connection);
-            defer allocator.destroy(second);
-            second.* = Raknet.Connection.init(&transport, .{ .ip4 = .{ .bytes = .{ 127, 0, 0, 1 }, .port = 2 } }, 1400, 2);
-            defer second.deinit();
-            try second.comm_data.output_frame_queue.ensureTotalCapacity(transport_failing.allocator(), 4);
+            var backends: [2]u128 = .{ 0, 0 };
+            const first = try registry.create(&backends[0]);
+            const second = try registry.create(&backends[1]);
 
             const packet = "shared broadcast packet";
-            {
-                var warmup = try SharedBroadcast.begin(&buffers, packet, zlib_options);
-                warmup.deinit();
-            }
-
-            const transport_allocations = transport_failing.alloc_index;
-            const pool_allocations = pool_failing.alloc_index;
-            transport_failing.fail_index = transport_allocations;
-            pool_failing.fail_index = pool_allocations;
-
-            var broadcast = try SharedBroadcast.begin(&buffers, packet, zlib_options);
-            try std.testing.expect(broadcast.bytes.?.len <= maxFramePayload(first));
+            var broadcast = try SharedBroadcast.begin(handler, packet);
+            defer broadcast.deinit();
 
             broadcast.send(first, .normal);
             broadcast.send(second, .normal);
 
-            try std.testing.expectEqual(transport_allocations, transport_failing.alloc_index);
-            try std.testing.expectEqual(pool_allocations, pool_failing.alloc_index);
-            try std.testing.expect(!transport_failing.has_induced_failure);
-            try std.testing.expect(!pool_failing.has_induced_failure);
-
-            transport_failing.fail_index = std.math.maxInt(usize);
-            pool_failing.fail_index = std.math.maxInt(usize);
-
-            for ([_]*Raknet.Connection{ first, second }) |conn| {
-                try std.testing.expectEqual(@as(usize, 1), conn.comm_data.output_frame_queue.items.len);
-                const frame = &conn.comm_data.output_frame_queue.items[0];
-                try std.testing.expectEqual(broadcast.shared.?, frame.shared.?);
-                try std.testing.expectEqual(@intFromPtr(broadcast.bytes.?.ptr), @intFromPtr(frame.payload.ptr));
+            try std.testing.expectEqual(@as(usize, 2), fake.sent.items.len);
+            for (fake.sent.items) |entry| {
+                try std.testing.expectEqualSlices(u8, broadcast.bytes(), entry.bytes);
             }
-
-            const decompressed = try Compression.decompress(first.comm_data.output_frame_queue.items[0].payload, .{
-                .compression_method = .Zlib,
-                .compression_threshold = 255,
-            }, allocator);
-            defer decompressed.deinit();
-            try std.testing.expectEqualStrings(packet, decompressed.packets[0]);
 
             broadcast.deinit();
-            for ([_]*Raknet.Connection{ first, second }) |conn| {
-                for (conn.comm_data.output_frame_queue.items) |*frame| frame.deinit();
-                conn.comm_data.output_frame_queue.clearRetainingCapacity();
-            }
-            try poolCountsRestored(&buffers);
+            try poolCountsRestored(&handler.payload_buffers);
+
+            const decompressed = try Compression.decompress(fake.sent.items[0].bytes, zlib_options, allocator);
+            defer decompressed.deinit();
+            try std.testing.expectEqualStrings(packet, decompressed.packets[0]);
         }
 
         pub fn case_003() !void {
             const allocator = std.testing.allocator;
-            var transport_failing = std.testing.FailingAllocator.init(allocator, .{});
-            var transport = try buildTransport(transport_failing.allocator());
-            defer transport.deinit();
+            var tasks = @import("../tasks/threaded_tasks.zig").ThreadedTaskQueue.init(std.testing.io, allocator, 1);
+            defer tasks.deinit();
+            const handler = try testHandler(&tasks, null);
+            defer handler.deinit();
 
-            var buffers = PayloadBuffers.init(allocator);
-            defer buffers.deinit();
+            var events = events_mod.Queue.init(std.testing.io, allocator);
+            defer events.deinit();
+            var registry = ConnectionRegistry.init(allocator, std.testing.io, &events);
+            defer registry.deinit();
 
-            const conn = try allocator.create(Raknet.Connection);
-            defer allocator.destroy(conn);
-            conn.* = Raknet.Connection.init(&transport, .{ .ip4 = .{ .bytes = .{ 127, 0, 0, 1 }, .port = 3 } }, 1400, 3);
-            defer conn.deinit();
+            var backend: u128 = 0;
+            const conn = try registry.create(&backend);
 
-            var packet: [4096]u8 = undefined;
-            var state: u32 = 0x9e3779b9;
-            for (&packet) |*byte| {
-                state = state *% 1664525 +% 1013904223;
-                byte.* = @truncate(state >> 16);
-            }
-
-            var broadcast = try SharedBroadcast.begin(&buffers, &packet, zlib_options);
-            defer broadcast.deinit();
-
-            try std.testing.expect(broadcast.bytes.?.len > maxFramePayload(conn));
+            var broadcast = try SharedBroadcast.begin(handler, "no transport here");
             broadcast.send(conn, .normal);
-
-            const frames = conn.comm_data.output_frame_queue.items;
-            try std.testing.expect(frames.len > 1);
-            for (frames, 0..) |frame, index| {
-                try std.testing.expectEqual(@as(u32, @intCast(frames.len)), frame.split_size.?);
-                try std.testing.expectEqual(@as(u32, @intCast(index)), frame.split_frame_index.?);
-                try std.testing.expect(frame.shared != null);
-                try std.testing.expect(@intFromPtr(frame.payload.ptr) != @intFromPtr(broadcast.bytes.?.ptr));
-            }
+            broadcast.deinit();
+            try poolCountsRestored(&handler.payload_buffers);
         }
     };
 }

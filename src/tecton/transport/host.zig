@@ -1,7 +1,6 @@
-const Raknet = @import("Raknet");
+const connection = @import("connection.zig");
 
 pub const Host = struct {
     ctx: *anyopaque,
-    dispatch: *const fn (ctx: *anyopaque, conn: *Raknet.Connection, packets: []const []const u8) void,
-    disconnected: *const fn (ctx: *anyopaque, conn: *Raknet.Connection) void,
+    dispatch: *const fn (ctx: *anyopaque, conn: *connection.Connection, packets: []const []const u8) void,
 };

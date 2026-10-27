@@ -1,5 +1,6 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+
+const Connection = @import("../transport/connection.zig").Connection;
 
 const Player = @import("../player/player.zig").Player;
 const PlayerSnapshot = @import("../player/player_snapshot.zig").PlayerSnapshot;
@@ -9,7 +10,7 @@ pub const PlayerRegistry = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     by_runtime_id: std.AutoHashMap(i64, *Player),
-    by_connection: std.AutoHashMap(usize, *Player),
+    by_connection: std.AutoHashMap(u64, *Player),
     mutex: std.Io.Mutex = .init,
     online_count: std.atomic.Value(usize) = .init(0),
     snapshot: PlayerSnapshot,
@@ -27,7 +28,7 @@ pub const PlayerRegistry = struct {
             .allocator = allocator,
             .io = io,
             .by_runtime_id = std.AutoHashMap(i64, *Player).init(allocator),
-            .by_connection = std.AutoHashMap(usize, *Player).init(allocator),
+            .by_connection = std.AutoHashMap(u64, *Player).init(allocator),
             .snapshot = PlayerSnapshot.init(),
             .pending_removals = std.ArrayList(*Player).empty,
         };
@@ -58,7 +59,7 @@ pub const PlayerRegistry = struct {
         defer self.mutex.unlock(self.io);
         try self.by_runtime_id.put(player.entity.runtime_id, player);
         self.publishPlayerCountLocked();
-        try self.by_connection.put(@intFromPtr(player.connection), player);
+        try self.by_connection.put(player.connection.id, player);
     }
 
     pub fn remove(self: *PlayerRegistry, player: *Player) void {
@@ -69,27 +70,31 @@ pub const PlayerRegistry = struct {
         defer self.mutex.unlock(self.io);
         _ = self.by_runtime_id.remove(player.entity.runtime_id);
         self.publishPlayerCountLocked();
-        _ = self.by_connection.remove(@intFromPtr(player.connection));
+        _ = self.by_connection.remove(player.connection.id);
     }
 
-    pub fn removeConnection(self: *PlayerRegistry, connection: *Raknet.Connection) void {
+    pub fn removeConnection(self: *PlayerRegistry, connection: *Connection) void {
         self.mutex.lock(self.io) catch |err| {
             std.log.err("failed to acquire lock: {}", .{err});
             return;
         };
         defer self.mutex.unlock(self.io);
-        _ = self.by_connection.remove(@intFromPtr(connection));
+        _ = self.by_connection.remove(connection.id);
         self.publishPlayerCountLocked();
     }
 
-    pub fn byConnection(self: *PlayerRegistry, connection: *Raknet.Connection) ?*Player {
+    pub fn byConnection(self: *PlayerRegistry, connection: *Connection) ?*Player {
+        return self.byConnectionId(connection.id);
+    }
+
+    pub fn byConnectionId(self: *PlayerRegistry, connection_id: u64) ?*Player {
         self.mutex.lock(self.io) catch |err| {
             std.log.err("failed to acquire lock: {}", .{err});
             return null;
         };
         defer self.mutex.unlock(self.io);
         if (self.by_connection.count() == 0) return null;
-        return self.by_connection.get(@intFromPtr(connection));
+        return self.by_connection.get(connection_id);
     }
 
     pub fn byRuntimeId(self: *PlayerRegistry, runtime_id: i64) ?*Player {
@@ -113,6 +118,7 @@ pub const PlayerRegistry = struct {
     pub fn destroyPlayers(self: *PlayerRegistry) void {
         var it = self.by_runtime_id.valueIterator();
         while (it.next()) |player| {
+            player.*.connection.release();
             player.*.deinit();
             self.allocator.destroy(player.*);
         }

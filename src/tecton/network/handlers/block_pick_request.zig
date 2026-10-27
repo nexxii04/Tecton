@@ -1,6 +1,6 @@
 const std = @import("std");
 const log = @import("../../core/log.zig");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const NBT = @import("nbt");
@@ -14,7 +14,7 @@ const Inventory = @import("../../entity/traits/inventory.zig");
 pub fn handleBlockPickRequest(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;

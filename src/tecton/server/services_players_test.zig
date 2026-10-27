@@ -29,7 +29,7 @@ pub fn Suite(comptime scope: type) type {
 
             const h = host(&tecton);
             try std.testing.expectEqual(@as(?*Player, null), h.players.byRuntimeId(7));
-            var player = fakePlayer(7, fakeConnection(&conn_storage));
+            var player = fakePlayer(7, fakeConnection(&conn_storage, 1));
             try tecton.players.insert(&player);
             try std.testing.expectEqual(@as(?*Player, &player), h.players.byRuntimeId(7));
         }
@@ -44,7 +44,7 @@ pub fn Suite(comptime scope: type) type {
 
             const h = host(&tecton);
             try std.testing.expectEqual(@as(usize, 0), h.getPlayerCount());
-            var player = fakePlayer(7, fakeConnection(&conn_storage));
+            var player = fakePlayer(7, fakeConnection(&conn_storage, 1));
             try tecton.players.insert(&player);
             try std.testing.expectEqual(@as(usize, 1), h.getPlayerCount());
         }
@@ -59,7 +59,7 @@ pub fn Suite(comptime scope: type) type {
 
             const h = host(&tecton);
             try std.testing.expectEqual(@as(usize, 0), h.getPlayerSnapshots().len);
-            var player = fakePlayer(7, fakeConnection(&conn_storage));
+            var player = fakePlayer(7, fakeConnection(&conn_storage, 1));
             try tecton.players.insert(&player);
             const snapshots = h.getPlayerSnapshots();
             try std.testing.expectEqual(@as(usize, 1), snapshots.len);
@@ -76,7 +76,7 @@ pub fn Suite(comptime scope: type) type {
 
             const h = host(&tecton);
             try std.testing.expectEqual(@as(?*Player, null), h.findPlayerByRuntimeId(7));
-            var player = fakePlayer(7, fakeConnection(&conn_storage));
+            var player = fakePlayer(7, fakeConnection(&conn_storage, 1));
             try tecton.players.insert(&player);
             try std.testing.expectEqual(@as(?*Player, &player), h.findPlayerByRuntimeId(7));
         }
@@ -110,7 +110,7 @@ pub fn Suite(comptime scope: type) type {
             var conn_storage: u128 align(16) = 0;
 
             const h = host(&tecton);
-            var player = fakePlayer(7, fakeConnection(&conn_storage));
+            var player = fakePlayer(7, fakeConnection(&conn_storage, 1));
             h.enqueuePlayerRemoval(&player);
             var pending = tecton.players.takePendingRemovals();
             defer pending.deinit(allocator);
@@ -127,7 +127,7 @@ pub fn Suite(comptime scope: type) type {
             var conn_storage: u128 align(16) = 0;
 
             const h = host(&tecton);
-            var player = fakePlayer(7, fakeConnection(&conn_storage));
+            var player = fakePlayer(7, fakeConnection(&conn_storage, 1));
             try tecton.players.insert(&player);
             h.removePlayer(&player);
             try std.testing.expectEqual(@as(?*Player, null), tecton.players.byRuntimeId(7));
@@ -141,7 +141,7 @@ pub fn Suite(comptime scope: type) type {
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
             var conn_storage: u128 align(16) = 0;
-            const conn = fakeConnection(&conn_storage);
+            const conn = fakeConnection(&conn_storage, 1);
 
             const h = host(&tecton);
             var player = fakePlayer(7, conn);

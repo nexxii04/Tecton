@@ -1,6 +1,6 @@
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const BlockContainer = @import("../../container/block_container.zig").BlockContainer;
 const AnvilWindowTrait = @import("../../entity/traits/anvil_window.zig").AnvilWindowTrait;
@@ -17,7 +17,7 @@ const Tecton = @import("../../tecton.zig").Tecton;
 pub fn handleContainerClose(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;

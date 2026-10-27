@@ -14,7 +14,6 @@ pub fn Suite(comptime scope: type) type {
         const NetworkHandler = F.NetworkHandler;
         const Dimension = F.Dimension;
         const World = F.World;
-        const Raknet = F.Raknet;
         const EcsWorld = F.EcsWorld;
 
         const PlayerRegistry = F.PlayerRegistry;
@@ -76,35 +75,49 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_017() !void {
-            var server: Raknet.Server = undefined;
-            server.io = testing.io;
-            server.options = .{ .allocator = allocator };
-            const addr = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 19132);
-            var conn_a = Raknet.Connection.init(&server, addr, 1400, 1);
-            defer conn_a.deinit();
-            var conn_b = Raknet.Connection.init(&server, addr, 1400, 2);
-            defer conn_b.deinit();
+            const TransportFake = @import("../transport/fake_port.zig").TransportFake;
+            const ConnectionRegistry = @import("../transport/connection.zig").ConnectionRegistry;
+            const events_mod = @import("../transport/events.zig");
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            fake.payload_limit = 8192;
 
             var stub = stubNetwork();
             var plain = plainNetwork();
+            stub.port = fake.port();
+            plain.port = fake.port();
+
             var tecton: Tecton = undefined;
             baseTecton(&tecton, &stub);
             tecton.players = PlayerRegistry.init(testing.io, allocator);
             defer tecton.players.deinit();
 
+            var events = events_mod.Queue.init(testing.io, allocator);
+            defer events.deinit();
+            var registry = ConnectionRegistry.init(allocator, testing.io, &events);
+            defer registry.deinit();
+
+            var backend_a: u128 = 0;
+            var backend_b: u128 = 0;
+            const conn_a = try registry.create(&backend_a);
+            const conn_b = try registry.create(&backend_b);
+
             const h = host(&tecton);
             h.replyTo(7, "player", .{0} ** 16, "req", true, "hello");
-            try std.testing.expectEqual(@as(usize, 0), conn_a.comm_data.output_frame_queue.items.len);
+            try std.testing.expectEqual(@as(usize, 0), fake.sent.items.len);
 
-            var player_a = fakePlayer(7, &conn_a);
-            var player_b = fakePlayer(8, &conn_b);
+            var player_a = fakePlayer(7, conn_a);
+            var player_b = fakePlayer(8, conn_b);
             try tecton.players.insert(&player_a);
             try tecton.players.insert(&player_b);
+
             h.replyTo(7, "player", .{0} ** 16, "req", true, "hello");
-            try std.testing.expectEqual(@as(usize, 1), conn_a.comm_data.output_frame_queue.items.len);
-            try std.testing.expectEqual(@as(usize, 0), conn_b.comm_data.output_frame_queue.items.len);
+            try std.testing.expectEqual(@as(usize, 1), fake.sentTo(conn_a.id));
+            try std.testing.expectEqual(@as(usize, 0), fake.sentTo(conn_b.id));
+
             h.replyTo(8, "player", .{0} ** 16, "req", true, "hello");
-            try std.testing.expectEqual(@as(usize, 1), conn_b.comm_data.output_frame_queue.items.len);
+            try std.testing.expectEqual(@as(usize, 1), fake.sentTo(conn_b.id));
 
             var big: [2048]u8 = undefined;
             @memset(&big, 'x');
@@ -112,12 +125,11 @@ pub fn Suite(comptime scope: type) type {
             @memcpy(big[0..marker.len], marker);
             tecton.network = &plain;
             h.replyTo(7, "player", .{0} ** 16, "req", true, &big);
-            try std.testing.expectEqual(@as(usize, 3), conn_a.comm_data.output_frame_queue.items.len);
-            var marker_found = false;
-            for (conn_a.comm_data.output_frame_queue.items[1..]) |frame| {
-                if (std.mem.indexOf(u8, frame.payload, marker) != null) marker_found = true;
-            }
-            try std.testing.expect(marker_found);
+
+            try std.testing.expectEqual(@as(usize, 2), fake.sentTo(conn_a.id));
+            const last = fake.sent.items[fake.sent.items.len - 1];
+            try std.testing.expectEqual(conn_a.id, last.conn_id);
+            try std.testing.expect(std.mem.indexOf(u8, last.bytes, marker) != null);
         }
 
         pub fn case_022() !void {

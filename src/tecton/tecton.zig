@@ -6,6 +6,11 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const Raknet = @import("Raknet");
 
+const connection_mod = @import("./transport/connection.zig");
+const Connection = connection_mod.Connection;
+const events_mod = @import("./transport/events.zig");
+const RaknetPort = @import("./transport/raknet_port.zig").RaknetPort;
+
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
 const ServerProperties = @import("./core/config.zig").ServerProperties;
 const shouldEmitStartupLogs = @import("./core/config.zig").shouldEmitStartupLogs;
@@ -56,7 +61,7 @@ pub const CommandPermissionChecker = options_mod.CommandPermissionChecker;
 
 pub const Composition = struct {
     prepare: *const fn (*Tecton) anyerror!void,
-    dispatch: *const fn (*anyopaque, *Raknet.Connection, []const []const u8) void,
+    dispatch: *const fn (*anyopaque, *Connection, []const []const u8) void,
     command_views: ?*const fn (*Tecton) @import("./command/registry.zig").CommandViews = null,
 };
 
@@ -100,6 +105,8 @@ pub const Tecton = struct {
     composition: Composition,
     events: Events.Events,
     raknet: Raknet.Server,
+    raknet_port: ?*RaknetPort = null,
+    transport_events: std.ArrayList(events_mod.Event) = .empty,
     game_clock: ?tick_loop.Clock = null,
     running: std.atomic.Value(bool) = .init(false),
     shutdown_event: std.Io.Event = .unset,
@@ -398,11 +405,9 @@ pub const Tecton = struct {
         self.network = try NetworkHandler.init(self.io, self.allocator, &self.threaded_tasks, .{
             .ctx = self,
             .dispatch = self.composition.dispatch,
-            .disconnected = onNetworkDisconnect,
         });
         self.network_initialized = true;
-        self.raknet.setConnectCallback(NetworkHandler.onConnect, self.network);
-        self.raknet.setDisconnectCallback(NetworkHandler.onDisconnect, self.network);
+        try self.attachRaknetPort();
         try self.prepare();
         self.tick_thread_id.store(0, .release);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
@@ -489,6 +494,19 @@ pub const Tecton = struct {
         if (self.start_callback) |callback| callback(self.lifecycle_userdata);
     }
 
+    fn attachRaknetPort(self: *Tecton) !void {
+        const frame_buffers = self.network.frame_buffers orelse return error.FramePoolUnavailable;
+        const raknet_port = try RaknetPort.init(self.allocator, self.io, .{
+            .registry = &self.network.connections,
+            .frame_buffers = frame_buffers,
+            .sink = .{ .ctx = self.network, .packet = NetworkHandler.onPacket },
+        });
+        self.raknet_port = raknet_port;
+        self.network.attachPort(raknet_port.port());
+        self.raknet.setConnectCallback(RaknetPort.onConnect, raknet_port);
+        self.raknet.setDisconnectCallback(RaknetPort.onDisconnect, raknet_port);
+    }
+
     pub fn run(self: *Tecton) !void {
         while (self.running.load(.acquire)) {
             if (ShutdownSignal.isShutdownRequested()) {
@@ -532,7 +550,7 @@ pub const Tecton = struct {
             };
             const serialized = try disconnect.serialize(&str);
             try self.network.sendImmediate(player.connection, serialized);
-            player.connection.deactivate();
+            self.network.closeConnection(player.connection, .flush);
         }
     }
 
@@ -540,15 +558,21 @@ pub const Tecton = struct {
         try self.stop();
     }
 
-    pub fn getPlayerByConnection(self: *Tecton, connection: *Raknet.Connection) ?*Player {
+    pub fn getPlayerByConnection(self: *Tecton, connection: *Connection) ?*Player {
         return self.players.byConnection(connection);
     }
 
-    fn onNetworkDisconnect(ctx: *anyopaque, connection: *Raknet.Connection) void {
-        const self: *Tecton = @ptrCast(@alignCast(ctx));
-        const player = self.getPlayerByConnection(connection) orelse return;
-        PlayerLog.logDisconnect(player.username);
-        player.disconnectFromNetwork();
+    /// Consumes what transport callbacks published: the tick is the only place that touches a player.
+    pub fn drainTransportEvents(self: *Tecton) void {
+        self.network.drainEvents(&self.transport_events);
+        for (self.transport_events.items) |event| switch (event) {
+            .opened => {},
+            .closed => |id| {
+                const player = self.players.byConnectionId(id) orelse continue;
+                PlayerLog.logDisconnect(player.username);
+                player.disconnectFromNetwork();
+            },
+        };
     }
 
     pub fn addPlayer(self: *Tecton, player: *Player) !void {
@@ -561,7 +585,7 @@ pub const Tecton = struct {
         self.publishPlayerCount();
     }
 
-    pub fn removeConnectionMapping(self: *Tecton, connection: *Raknet.Connection) void {
+    pub fn removeConnectionMapping(self: *Tecton, connection: *Connection) void {
         self.players.removeConnection(connection);
         self.publishPlayerCount();
     }
@@ -833,6 +857,12 @@ pub const Tecton = struct {
                 stats.chunks,
                 stats.live,
             });
+        }
+
+        self.transport_events.deinit(self.allocator);
+        if (self.raknet_port) |port| {
+            port.deinit();
+            self.raknet_port = null;
         }
 
         self.players.silence();

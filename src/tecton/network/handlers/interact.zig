@@ -1,4 +1,4 @@
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -8,7 +8,7 @@ const inventory = @import("../../entity/traits/inventory.zig");
 pub fn handleInteract(
     tecton: *Tecton,
     _: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;

@@ -1,5 +1,5 @@
 const log = @import("../../core/log.zig");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -13,7 +13,7 @@ const Player = @import("../../player/player.zig").Player;
 pub fn handlePlayerAction(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;

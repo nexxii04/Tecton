@@ -2,7 +2,7 @@ const std = @import("std");
 const log = @import("../../core/log.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const Events = @import("../../events/root.zig");
 const Player = @import("../../player/player.zig").Player;
@@ -110,7 +110,7 @@ fn resolveIdentity(
 
 fn sendPlayStatus(
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     status: Protocol.PlayStatusEnum,
 ) void {
     var str = BinaryStream.init(network.allocator, null, null);
@@ -124,7 +124,7 @@ fn sendPlayStatus(
 pub fn handleLogin(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const login = try Protocol.LoginPacket.deserialize(stream);

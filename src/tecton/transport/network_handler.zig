@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const protocol = @import("protocol");
-const Raknet = @import("Raknet");
 
 const threaded_tasks = @import("../tasks/threaded_tasks.zig");
 const ThreadedTaskQueue = threaded_tasks.ThreadedTaskQueue;
@@ -10,10 +9,13 @@ const Compression = @import("./compression/root.zig").Compression;
 const DecompressResult = @import("./compression/root.zig").DecompressResult;
 const ArenaDecompressResult = @import("./compression/root.zig").ArenaDecompressResult;
 
+const connection_mod = @import("./connection.zig");
+const Connection = connection_mod.Connection;
+const events_mod = @import("./events.zig");
 const node_pool = @import("./node_pool.zig");
+const port_mod = @import("./port.zig");
 const queue = @import("./queue.zig");
 const scratch_mod = @import("./scratch.zig");
-const connections_mod = @import("./connections.zig");
 const priority_mod = @import("./priority.zig");
 const host_mod = @import("./host.zig");
 const InboundRing = @import("./inbound_ring.zig").InboundRing;
@@ -26,6 +28,7 @@ pub const QueuedPacket = queue.QueuedPacket;
 pub const PacketDrainResult = queue.PacketDrainResult;
 pub const ScratchBuffer = scratch_mod.ScratchBuffer;
 pub const SendPriority = priority_mod.SendPriority;
+pub const TransportEvent = events_mod.Event;
 
 const DECOMPRESS_POOL_CAPACITY: usize = 256;
 
@@ -41,8 +44,7 @@ const RingSlot = struct {
 };
 
 const DecompressWork = struct {
-    conn: *Raknet.Connection,
-    generation: u64,
+    conn: *Connection,
     raw: []const u8,
 
     raw_heap: ?[]u8 = null,
@@ -71,7 +73,9 @@ pub const NetworkHandler = struct {
     scratch: ScratchBuffer,
     frame_buffers: ?*FrameBuffers = null,
     payload_buffers: PayloadBuffers,
-    connections: connections_mod.ConnectionRegistry,
+    port: ?port_mod.Port = null,
+    events: events_mod.Queue,
+    connections: connection_mod.ConnectionRegistry,
     inbound_ring: ?*InboundRing = null,
 
     input_pump: ?std.Thread = null,
@@ -86,6 +90,7 @@ pub const NetworkHandler = struct {
     ) !*NetworkHandler {
         const self = try allocator.create(NetworkHandler);
         errdefer allocator.destroy(self);
+
         self.* = .{
             .host = host,
             .io = io,
@@ -100,8 +105,10 @@ pub const NetworkHandler = struct {
             .decompress_pool = undefined,
             .scratch = undefined,
             .payload_buffers = PayloadBuffers.init(allocator),
-            .connections = connections_mod.ConnectionRegistry.init(allocator),
+            .events = events_mod.Queue.init(io, allocator),
+            .connections = connection_mod.ConnectionRegistry.init(allocator, io, &self.events),
         };
+
         self.decompress_pool = try DecompressWorkPool.init(io, allocator, DECOMPRESS_POOL_CAPACITY);
         errdefer self.decompress_pool.deinit(allocator);
         self.scratch = ScratchBuffer.init(allocator);
@@ -112,6 +119,20 @@ pub const NetworkHandler = struct {
         frame_buffers.* = FrameBuffers.init(allocator);
         self.frame_buffers = frame_buffers;
         return self;
+    }
+
+    /// The transport is attached once, after the handler that owns the registry and the pool exists.
+    pub fn attachPort(self: *NetworkHandler, port: port_mod.Port) void {
+        self.port = port;
+    }
+
+    pub fn openConnections(self: *NetworkHandler) usize {
+        return self.connections.count();
+    }
+
+    /// Hands the ids the transport reported to the game tick, reusing `buffer` between ticks.
+    pub fn drainEvents(self: *NetworkHandler, buffer: *std.ArrayList(events_mod.Event)) void {
+        self.events.drain(buffer);
     }
 
     pub fn startInputPump(self: *NetworkHandler) !void {
@@ -167,19 +188,8 @@ pub const NetworkHandler = struct {
         self.inbound_ring = ring;
     }
 
-    pub fn onConnect(connection: *Raknet.Connection, context: ?*anyopaque) void {
-        const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
-        self.connections.register(self.io, connection);
-        connection.setGamePacketCallback(onPacket, self);
-    }
-
-    pub fn onDisconnect(connection: *Raknet.Connection, context: ?*anyopaque) void {
-        const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
-        self.connections.unregister(self.io, connection);
-        self.host.disconnected(self.host.ctx, connection);
-    }
-
-    pub fn onPacket(conn: *Raknet.Connection, payload: []const u8, context: ?*anyopaque) void {
+    /// Transport callback: copies into the ring and returns, so the transport never runs game code.
+    pub fn onPacket(context: *anyopaque, conn: *Connection, payload: []const u8) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
         if (self.inbound_ring) |ring| {
             self.publishToRing(ring, conn, payload);
@@ -201,7 +211,7 @@ pub const NetworkHandler = struct {
 
     const drainLegacy = @import("receive.zig").Methods(helper_scope).drainLegacy;
 
-    pub fn onGamePacket(self: *NetworkHandler, conn: *Raknet.Connection, payload: []const u8) !void {
+    pub fn onGamePacket(self: *NetworkHandler, conn: *Connection, payload: []const u8) !void {
         const decompressed = try Compression.decompress(payload, self.options, self.allocator);
         defer decompressed.deinit();
         self.host.dispatch(self.host.ctx, conn, decompressed.packets);
@@ -217,6 +227,7 @@ pub const NetworkHandler = struct {
 
     const decompressCleanup = @import("decompression.zig").Methods(helper_scope).decompressCleanup;
 
+    pub const sendFramed = @import("send.zig").Methods(helper_scope).sendFramed;
     pub const sendUncompressedPacket = @import("send.zig").Methods(helper_scope).sendUncompressedPacket;
     pub const sendPacket = @import("send.zig").Methods(helper_scope).sendPacket;
     pub const sendPacketWith = @import("send.zig").Methods(helper_scope).sendPacketWith;
@@ -226,19 +237,37 @@ pub const NetworkHandler = struct {
     pub const sendPacketsUncompressed = @import("send.zig").Methods(helper_scope).sendPacketsUncompressed;
     pub const sendPacketsUncompressedWith = @import("send.zig").Methods(helper_scope).sendPacketsUncompressedWith;
 
+    /// Closes a session through the port; the transport reports `closed` when it retires it.
+    pub fn closeConnection(self: *NetworkHandler, conn: *Connection, mode: port_mod.CloseMode) void {
+        // Without a transport there is no session to tear down and no reference to drop.
+        const port = self.port orelse return;
+        port.closeConn(conn, mode);
+    }
+
     pub fn deinit(self: *NetworkHandler) void {
         self.stopInputPump();
         Compression.deinitThreadLocal();
-        for (self.packet_queue.items) |entry| self.allocator.free(entry.payload);
+        for (self.packet_queue.items) |entry| {
+            entry.conn.release();
+            self.allocator.free(entry.payload);
+        }
         self.packet_queue.deinit(self.allocator);
         for (self.worker_buffers) |*buffers| buffers.deinit();
         if (self.worker_buffers.len > 0) self.allocator.free(self.worker_buffers);
         self.worker_buffers = &.{};
-        if (self.inbound_ring) |ring| ring.deinit();
+        if (self.inbound_ring) |ring| {
+            while (ring.pop()) |popped| {
+                popped.entry.conn.release();
+                ring.discard(popped);
+            }
+            ring.deinit();
+        }
         self.inbound_ring = null;
         self.decompress_pool.deinit(self.allocator);
         self.scratch.deinit();
         self.connections.deinit();
+        self.events.deinit();
+
         if (self.frame_buffers) |buffers| {
             buffers.deinit();
             self.allocator.destroy(buffers);
@@ -255,10 +284,7 @@ fn exerciseHandlerInit(allocator: std.mem.Allocator) !void {
     const handler = try NetworkHandler.init(std.testing.io, allocator, &tasks, .{
         .ctx = &tasks,
         .dispatch = struct {
-            fn run(_: *anyopaque, _: *Raknet.Connection, _: []const []const u8) void {}
-        }.run,
-        .disconnected = struct {
-            fn run(_: *anyopaque, _: *Raknet.Connection) void {}
+            fn run(_: *anyopaque, _: *Connection, _: []const []const u8) void {}
         }.run,
     });
     defer handler.deinit();
@@ -278,39 +304,44 @@ const TestDispatchState = struct {
 const test_owner = @This();
 const test_scope = struct {
     pub const std = test_owner.std;
-    pub const Raknet = test_owner.Raknet;
+    pub const Connection = test_owner.Connection;
     pub const ThreadedTaskQueue = test_owner.ThreadedTaskQueue;
     pub const queue = test_owner.queue;
-    pub const connections_mod = test_owner.connections_mod;
+    pub const port_mod = test_owner.port_mod;
+    pub const events_mod = test_owner.events_mod;
+    pub const connection_mod = test_owner.connection_mod;
     pub const DecompressWorkPool = test_owner.DecompressWorkPool;
     pub const NetworkHandler = test_owner.NetworkHandler;
     pub const TestDispatchState = test_owner.TestDispatchState;
     pub const Compression = test_owner.Compression;
+    pub const FrameBuffers = test_owner.FrameBuffers;
+    pub const PayloadBuffers = test_owner.PayloadBuffers;
+    pub const TransportFake = @import("./fake_port.zig").TransportFake;
 };
 
 test "drainPackets caps by queue bound and budget, and requeues the rest" {
     try @import("network_handler_test.zig").Suite(test_scope).case_000();
 }
 
-test "ring drainPackets processes in order, drops stale generations and honors the cap" {
+test "ring drainPackets processes in order, drops closed connections and honors the cap" {
     try @import("network_handler_test.zig").Suite(test_scope).case_001();
-}
-
-test "immediate batches borrow slab storage while normal sends retain their priority and allocator ownership" {
-    try @import("network_handler_test.zig").Suite(test_scope).case_003();
 }
 
 test "oversize ring payloads dispatch intact bytes from reserved overflow slots" {
     try @import("network_handler_test.zig").Suite(test_scope).case_002();
 }
 
-test "steady state sends frame packets without allocating" {
+test "steady state sends one compressed frame per packet through the port" {
     try @import("network_handler_test.zig").Suite(test_scope).case_004();
+}
+
+test "a batch larger than the port payload is refused instead of silently split" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_005();
 }
 
 const helper_owner = @This();
 const helper_scope = struct {
-    pub const Raknet = helper_owner.Raknet;
+    pub const Connection = helper_owner.Connection;
     pub const CompressionOptions = helper_owner.CompressionOptions;
     pub const SendPriority = helper_owner.SendPriority;
     pub const std = helper_owner.std;
@@ -323,6 +354,7 @@ const helper_scope = struct {
     pub const WorkerBuffers = helper_owner.WorkerBuffers;
     pub const threaded_tasks = helper_owner.threaded_tasks;
     pub const Compression = helper_owner.Compression;
+    pub const FrameBuffers = helper_owner.FrameBuffers;
     pub const ringDecompressTask = helper_owner.NetworkHandler.ringDecompressTask;
     pub const decompressTask = helper_owner.NetworkHandler.decompressTask;
     pub const decompressCallback = helper_owner.NetworkHandler.decompressCallback;

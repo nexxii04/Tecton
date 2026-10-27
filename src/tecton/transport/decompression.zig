@@ -63,16 +63,30 @@ pub fn Methods(comptime scope: type) type {
                 null;
 
             if (packets) |entries| {
-                if (work.handler.connections.isCurrent(work.handler.io, work.conn, work.generation)) {
+                if (work.conn.isOpen()) {
                     work.handler.host.dispatch(work.handler.host.ctx, work.conn, entries);
                 }
             }
+            releaseWork(work);
+        }
+
+        pub fn decompressCleanup(ctx: *anyopaque) void {
+            const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
+            releaseWork(work);
+        }
+
+        /// Frees everything the work item owns, including the connection reference the ring handed over.
+        fn releaseWork(work: *DecompressWork) void {
             if (work.decompressed) |result| result.deinit();
             work.decompressed = null;
 
             if (work.raw_heap) |heap| {
                 work.ring.?.ring.releaseOverflow(heap);
                 work.raw_heap = null;
+            }
+            if (work.raw.len > 0 and work.raw_heap == null and work.ring == null) {
+                work.allocator.free(work.raw);
+                work.raw = &.{};
             }
 
             if (work.ring) |ring_slot| ring_slot.ring.release(ring_slot.slot);
@@ -85,30 +99,7 @@ pub fn Methods(comptime scope: type) type {
 
             const previous = work.handler.decompress_pending.fetchSub(1, .monotonic);
             std.debug.assert(previous > 0);
-            work.handler.decompress_pool.release(work);
-        }
-
-        pub fn decompressCleanup(ctx: *anyopaque) void {
-            const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
-            if (work.decompressed) |result| result.deinit();
-            work.decompressed = null;
-            if (work.raw_heap) |heap| {
-                work.ring.?.ring.releaseOverflow(heap);
-                work.raw_heap = null;
-            }
-            if (work.raw.len > 0 and work.raw_heap == null and work.ring == null) {
-                work.allocator.free(work.raw);
-                work.raw = &.{};
-            }
-            if (work.ring) |ring_slot| ring_slot.ring.release(ring_slot.slot);
-            work.ring = null;
-            if (work.arena_outstanding) |outstanding| {
-                _ = outstanding.fetchSub(1, .acq_rel);
-            }
-            work.arena_outstanding = null;
-
-            const pending_before = work.handler.decompress_pending.fetchSub(1, .monotonic);
-            std.debug.assert(pending_before > 0);
+            work.conn.release();
             work.handler.decompress_pool.release(work);
         }
     };

@@ -1,6 +1,6 @@
 const std = @import("std");
 const log = @import("../../core/log.zig");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
@@ -35,7 +35,7 @@ const JOIN_STAGE_DELAY_TICKS: u8 = 20;
 pub fn handleResourcePack(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const response = try Protocol.ResourcePackResponsePacket.deserialize(stream, network.allocator);
@@ -107,7 +107,7 @@ fn runJoinStartupTask(ctx: *anyopaque) bool {
 
 fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
     const player = state.player;
-    if (!player.connection.isActive() or state.tecton.getPlayerByConnection(player.connection) == null) {
+    if (!player.connection.isOpen() or state.tecton.getPlayerByConnection(player.connection) == null) {
         player.join_startup_started = false;
         return true;
     }

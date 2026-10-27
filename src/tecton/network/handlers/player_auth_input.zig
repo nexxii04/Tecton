@@ -2,7 +2,7 @@ const std = @import("std");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const inventory = @import("../../entity/traits/inventory.zig");
 const InventoryTrait = inventory.InventoryTrait;
@@ -39,7 +39,7 @@ pub fn handlePlayerBlockAction(
 pub fn handlePlayerAuthInput(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;

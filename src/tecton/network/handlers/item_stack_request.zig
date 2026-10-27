@@ -9,7 +9,7 @@ const StackResponseSlotInfo = Protocol.StackResponseSlotInfo;
 const FullContainerName = Protocol.FullContainerName;
 const StackRequestAction = Protocol.StackRequestAction;
 const StackRequestSlotInfo = Protocol.StackRequestSlotInfo;
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const Container = @import("../../container/container.zig").Container;
 const AnvilWindowTrait = @import("../../entity/traits/anvil_window.zig").AnvilWindowTrait;
@@ -396,7 +396,7 @@ fn buildResponse(
     };
 }
 
-fn sendItemStackResponse(network: *NetworkHandler, connection: *Raknet.Connection, responses: []const ItemStackResponse) void {
+fn sendItemStackResponse(network: *NetworkHandler, connection: *transport.Connection, responses: []const ItemStackResponse) void {
     const allocator = network.allocator;
     var out = BinaryStream.init(allocator, null, null);
     defer out.deinit();
@@ -408,7 +408,7 @@ fn sendItemStackResponse(network: *NetworkHandler, connection: *Raknet.Connectio
 pub fn processItemStackRequest(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     request: Protocol.ItemStackRequest,
 ) !void {
     const allocator = network.allocator;
@@ -673,7 +673,7 @@ pub fn processItemStackRequest(
 pub fn handleItemStackRequest(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const allocator = network.allocator;

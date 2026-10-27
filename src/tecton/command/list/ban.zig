@@ -82,7 +82,7 @@ fn handleBan(raw: *anyopaque) void {
         };
         const serialized = disconnect.serialize(&stream) catch return;
         ctx.network.sendImmediate(player.connection, serialized) catch {};
-        player.connection.deactivate();
+        ctx.network.closeConnection(player.connection, .flush);
     } else {
         ban_mgr.ban("", target_name, source, reason) catch {
             ctx.sendOutput(false, "Failed to ban player");

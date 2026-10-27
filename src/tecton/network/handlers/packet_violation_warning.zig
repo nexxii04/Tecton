@@ -1,5 +1,5 @@
 const log = @import("../../core/log.zig");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -8,7 +8,7 @@ const Protocol = @import("protocol");
 pub fn handlePacketViolationWarning(
     tecton: *Tecton,
     _: *NetworkHandler,
-    _: *Raknet.Connection,
+    _: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     _ = tecton;

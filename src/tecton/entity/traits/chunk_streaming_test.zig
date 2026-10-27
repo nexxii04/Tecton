@@ -111,44 +111,45 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_006() !void {
-            const Raknet = scope.Raknet;
             const allocator = std.testing.allocator;
+            const NetworkHandler = scope.NetworkHandler;
+            const Connection = scope.Connection;
+            const TransportFake = @import("../../transport/fake_port.zig").TransportFake;
+            const ThreadedTaskQueue = @import("../../tasks/threaded_tasks.zig").ThreadedTaskQueue;
 
-            var transport = try Raknet.Server.init(std.testing.io, .{
-                .allocator = allocator,
-                .address = "127.0.0.1",
-                .port = 0,
-                .output_slab_slots = 4,
-                .transient_slab_slots = 4,
-                .outbound_queue_slots = 8,
+            var tasks = ThreadedTaskQueue.init(std.testing.io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+
+            const handler = try NetworkHandler.init(std.testing.io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = struct {
+                    fn run(_: *anyopaque, _: *Connection, _: []const []const u8) void {}
+                }.run,
             });
-            defer transport.deinit();
+            defer handler.deinit();
+            handler.port = fake.port();
 
-            const conn = try allocator.create(Raknet.Connection);
-            defer allocator.destroy(conn);
-            conn.* = Raknet.Connection.init(&transport, .{ .ip4 = .{ .bytes = .{ 127, 0, 0, 1 }, .port = 7 } }, 1400, 7);
-            defer conn.deinit();
-            try conn.comm_data.output_frame_queue.ensureTotalCapacity(allocator, 4);
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
 
             const packet = "chunk-packet-payload";
             const owned = try allocator.dupe(u8, packet);
-            scope.sendOwnedChunkPacket(conn, allocator, owned);
-            try std.testing.expectEqual(@as(usize, 1), conn.comm_data.output_frame_queue.items.len);
-            try std.testing.expectEqual(@intFromPtr(owned.ptr), @intFromPtr(conn.comm_data.output_frame_queue.items[0].payload.ptr));
-            for (conn.comm_data.output_frame_queue.items) |*frame| frame.deinit();
-            conn.comm_data.output_frame_queue.clearRetainingCapacity();
+            scope.sendOwnedChunkPacket(handler, conn, allocator, owned);
+            try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
+            try std.testing.expectEqualStrings(packet, fake.sent.items[0].bytes);
 
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
             const arena_allocator = arena.allocator();
             const copied = try arena_allocator.dupe(u8, packet);
-            scope.sendOwnedChunkPacket(conn, arena_allocator, copied);
-            try std.testing.expectEqual(@as(usize, 1), conn.comm_data.output_frame_queue.items.len);
-            const copied_frame = &conn.comm_data.output_frame_queue.items[0];
-            try std.testing.expect(@intFromPtr(copied_frame.payload.ptr) != @intFromPtr(copied.ptr));
-            try std.testing.expectEqualStrings(packet, copied_frame.payload);
-            for (conn.comm_data.output_frame_queue.items) |*frame| frame.deinit();
-            conn.comm_data.output_frame_queue.clearRetainingCapacity();
+            scope.sendOwnedChunkPacket(handler, conn, arena_allocator, copied);
+            try std.testing.expectEqual(@as(usize, 2), fake.sent.items.len);
+            try std.testing.expectEqualStrings(packet, fake.sent.items[1].bytes);
+
+            handler.connections.closeAndRelease(conn);
         }
 
         fn containsBetween(source: []const u8, start_marker: []const u8, end_marker: []const u8, needle: []const u8) bool {

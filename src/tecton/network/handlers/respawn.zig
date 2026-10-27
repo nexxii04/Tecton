@@ -1,4 +1,4 @@
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 
@@ -16,7 +16,7 @@ pub const State = enum(u8) {
     _,
 };
 
-pub fn handleRespawn(tecton: *Tecton, network: *NetworkHandler, connection: *Raknet.Connection, stream: *BinaryStream) !void {
+pub fn handleRespawn(tecton: *Tecton, network: *NetworkHandler, connection: *transport.Connection, stream: *BinaryStream) !void {
     _ = stream;
 
     const player = tecton.getPlayerByConnection(connection) orelse return;

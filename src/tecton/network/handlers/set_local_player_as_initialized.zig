@@ -1,6 +1,6 @@
 const std = @import("std");
 const log = @import("../../core/log.zig");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -27,7 +27,7 @@ const PlayerInitTask = struct {
 pub fn handleSetLocalPlayerAsInitialized(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     _: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;
@@ -70,7 +70,7 @@ fn runPlayerInitTask(ctx: *anyopaque) bool {
 
 fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
     const player = state.player;
-    if (!player.connection.isActive() or state.tecton.getPlayerByConnection(player.connection) == null) {
+    if (!player.connection.isOpen() or state.tecton.getPlayerByConnection(player.connection) == null) {
         return true;
     }
 
@@ -166,11 +166,7 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
     };
     const serialized = try packet.serialize(&stream, temp_allocator);
 
-    var broadcast = try SharedBroadcast.begin(
-        &state.network.payload_buffers,
-        serialized,
-        state.network.options,
-    );
+    var broadcast = try SharedBroadcast.begin(state.network, serialized);
     defer broadcast.deinit();
 
     for (snapshots) |other| {

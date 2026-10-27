@@ -4,7 +4,7 @@ const log = @import("../core/log.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const LoginData = Protocol.Login.Decoder.LoginData;
-const Raknet = @import("Raknet");
+const Connection = @import("../transport/connection.zig").Connection;
 
 const Container = @import("../container/container.zig").Container;
 const AnvilWindowTrait = @import("../entity/traits/anvil_window.zig").AnvilWindowTrait;
@@ -94,7 +94,7 @@ pub fn playerDropVelocity(rotation: Protocol.Vector2f) Protocol.Vector3f {
 
 pub const Player = struct {
     entity: Entity,
-    connection: *Raknet.Connection,
+    connection: *Connection,
     network: *NetworkHandler,
     tecton: Host,
     login_data: LoginData,
@@ -155,7 +155,7 @@ pub const Player = struct {
     pub fn init(
         self: *Player,
         allocator: std.mem.Allocator,
-        connection: *Raknet.Connection,
+        connection: *Connection,
         network: *NetworkHandler,
         tecton: Host,
         loginData: LoginData,
@@ -236,6 +236,9 @@ pub const Player = struct {
             .initialized = false,
         });
         try self.entity.addTrait(anvil_window);
+
+        // The player owns a reference for its whole life; a failed init must not take one.
+        self.connection.retain();
     }
 
     pub fn deinit(self: *Player) void {
@@ -267,6 +270,7 @@ pub const Player = struct {
         }
 
         if (!self.beginRemoval()) return;
+        self.network.closeConnection(self.connection, .flush);
         self.finalizeRemoval();
     }
 
@@ -278,7 +282,6 @@ pub const Player = struct {
 
     fn beginRemoval(self: *Player) bool {
         if (self.pending_removal.swap(true, .acq_rel)) return false;
-        self.connection.deactivate();
         self.tecton.removeConnectionMapping(self.connection);
         return true;
     }
@@ -307,11 +310,7 @@ pub const Player = struct {
             const serialized = remove.serialize(&stream) catch null;
             if (serialized) |data| {
                 if (self.entity.dimension) |dimension| {
-                    if (SharedBroadcast.begin(
-                        &self.network.payload_buffers,
-                        data,
-                        self.network.options,
-                    )) |begun| {
+                    if (SharedBroadcast.begin(self.network, data)) |begun| {
                         var broadcast = begun;
                         defer broadcast.deinit();
                         for (snapshots) |other| {
@@ -343,11 +342,7 @@ pub const Player = struct {
             };
             const serialized = packet.serialize(&stream, allocator) catch null;
             if (serialized) |data| {
-                if (SharedBroadcast.begin(
-                    &self.network.payload_buffers,
-                    data,
-                    self.network.options,
-                )) |begun| {
+                if (SharedBroadcast.begin(self.network, data)) |begun| {
                     var broadcast = begun;
                     defer broadcast.deinit();
                     for (snapshots) |other| {
@@ -364,6 +359,7 @@ pub const Player = struct {
         }
         self.tecton.removePlayer(self);
         self.tecton.unregisterEcsEntity(&self.entity);
+        self.connection.release();
         self.deinit();
         self.entity.allocator.destroy(self);
     }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const Connection = @import("../transport/connection.zig").Connection;
 
 const contracts = @import("../core/contracts.zig");
 const CommandContext = @import("../command/context.zig").CommandContext;
@@ -184,7 +184,7 @@ const test_scope = struct {
     pub const NetworkHandler = test_owner.NetworkHandler;
     pub const Dimension = test_owner.Dimension;
     pub const World = test_owner.World;
-    pub const Raknet = test_owner.Raknet;
+    pub const Connection = test_owner.Connection;
     pub const Protocol = test_owner.Protocol;
     pub const block_root = test_owner.tecton_mod.block_root;
 };

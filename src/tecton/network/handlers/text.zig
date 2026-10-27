@@ -1,6 +1,6 @@
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const Events = @import("../../events/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
@@ -10,7 +10,7 @@ const PlayerLog = @import("../player_log.zig");
 pub fn handleTextPacket(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const text = try Protocol.TextPacket.deserialize(stream);
