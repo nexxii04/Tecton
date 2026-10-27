@@ -39,9 +39,10 @@ pub fn onTick(context: ?*anyopaque) void {
     _ = tecton.events.emit(.ServerTick, &tick_event);
     tecton.ecs.tick();
 
-    const raknet_ns: u64 = @intCast(@max(0, tecton.raknet.last_connection_tick_ns.nanoseconds));
-    tecton.raknet_time_accumulator += raknet_ns;
-    tecton.profiler.record(.raknet_tick, raknet_ns);
+    // The transport ticks on its own thread; this is a snapshot, not work done by this tick.
+    const transport_ns: u64 = @intCast(@max(0, tecton.raknet.last_connection_tick_ns.nanoseconds));
+    tecton.raknet_time_accumulator += transport_ns;
+    tecton.profiler.record(.raknet_tick, transport_ns);
 
     // Fallback for the shared layout and the pump-less tick: four waves per tick bound the gap between drains to roughly a quarter of the tick.
     const tick_drains_input = !tecton.network.inputPumpActive();
@@ -145,7 +146,7 @@ pub fn onTick(context: ?*anyopaque) void {
 
     const work_end = work_start.durationTo(.now(tecton.io, .awake));
     const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
-    const total_tick_ns = raknet_ns + work_ns;
+    const total_tick_ns = work_ns;
     tecton.work_time_accumulator += work_ns;
     tecton.profiler.recordTick(total_tick_ns);
 

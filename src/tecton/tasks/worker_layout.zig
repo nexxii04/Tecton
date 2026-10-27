@@ -23,7 +23,7 @@ pub fn computeWorkerCount(configured_count: usize) usize {
 }
 
 pub fn totalServerThreadCount(worker_count: usize) usize {
-    return 1 + 2 + worker_count;
+    return 1 + 3 + worker_count;
 }
 
 pub fn resolveWorkerCount(configured_count: usize) WorkerCountResolution {

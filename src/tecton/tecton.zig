@@ -47,6 +47,7 @@ const PlayerRegistry = @import("server/players.zig").PlayerRegistry;
 const options_mod = @import("server/options.zig");
 const SaveScheduler = @import("server/save.zig").SaveScheduler;
 const tick_mod = @import("server/tick.zig");
+const tick_loop = @import("server/tick_loop.zig");
 const movement_mod = @import("server/movement.zig");
 const worlds_mod = @import("server/worlds.zig");
 
@@ -99,6 +100,9 @@ pub const Tecton = struct {
     composition: Composition,
     events: Events.Events,
     raknet: Raknet.Server,
+    game_clock: ?tick_loop.Clock = null,
+    running: std.atomic.Value(bool) = .init(false),
+    shutdown_event: std.Io.Event = .unset,
     network: *NetworkHandler,
     network_initialized: bool = false,
     address_stamp: usize = 0,
@@ -401,7 +405,6 @@ pub const Tecton = struct {
         self.raknet.setDisconnectCallback(NetworkHandler.onDisconnect, self.network);
         try self.prepare();
         self.tick_thread_id.store(0, .release);
-        self.raknet.setTickCallback(tick_mod.onTick, self);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
         self.threaded_tasks.setLayout(self.config.worker_layout);
         try self.threaded_tasks.start();
@@ -472,6 +475,10 @@ pub const Tecton = struct {
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
         try self.raknet.start();
+        self.running.store(true, .release);
+        self.shutdown_event.reset();
+        self.game_clock = tick_loop.Clock.init(self.io, std.time.ns_per_s / @max(1, @as(u64, self.config.max_tps)), tick_mod.onTick, self);
+        if (self.game_clock) |*clock| try clock.start();
         self.plugin_runtime.setServerState(1);
 
         if (self.enable_console) {
@@ -483,20 +490,28 @@ pub const Tecton = struct {
     }
 
     pub fn run(self: *Tecton) !void {
-        while (self.raknet.running.load(.acquire)) {
+        while (self.running.load(.acquire)) {
             if (ShutdownSignal.isShutdownRequested()) {
                 self.stop() catch {};
                 return;
             }
-            try self.io.sleep(.fromNanoseconds(std.time.ns_per_s / 20), .awake);
+            self.shutdown_event.waitTimeout(self.io, .{
+                .duration = .{ .raw = .fromNanoseconds(std.time.ns_per_s / 20), .clock = .awake },
+            }) catch |err| switch (err) {
+                error.Timeout => {},
+                error.Canceled => return,
+            };
         }
     }
 
     pub fn stop(self: *Tecton) !void {
         if (self.stopped) return;
+        self.running.store(false, .release);
+        if (self.game_clock) |*clock| clock.stop();
         defer {
             self.stopped = true;
             self.started = false;
+            self.shutdown_event.set(self.io);
             self.raknet.running.store(false, .release);
             if (self.shutdown_callback) |callback| callback(self.lifecycle_userdata);
         }
@@ -671,7 +686,7 @@ pub const Tecton = struct {
 
         self.current_game_mspt = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000.0;
         self.current_raknet_mspt = @as(f64, @floatFromInt(avg_raknet_ns)) / 1_000_000.0;
-        self.current_mspt = @as(f64, @floatFromInt(avg_work_ns + avg_raknet_ns)) / 1_000_000.0;
+        self.current_mspt = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000.0;
 
         if (avg_interval_ns > 0) {
             const interval_s = @as(f64, @floatFromInt(avg_interval_ns)) / 1_000_000_000.0;
@@ -787,6 +802,8 @@ pub const Tecton = struct {
     }
 
     pub fn deinit(self: *Tecton) void {
+        self.running.store(false, .release);
+        if (self.game_clock) |*clock| clock.stop();
         self.stopRaknetTickThread();
 
         if (self.network_initialized) self.network.stopInputPump();
