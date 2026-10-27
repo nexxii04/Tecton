@@ -10,7 +10,6 @@ const BlockContainer = @import("../../../container/block_container.zig").BlockCo
 const trait_mod = @import("./trait.zig");
 const CompoundTag = @import("nbt").CompoundTag;
 const serialization = @import("../../provider/serialization.zig");
-const Logger = @import("Raknet").Logger;
 
 pub const State = struct {
     container: ?BlockContainer = null,

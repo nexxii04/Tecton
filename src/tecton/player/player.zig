@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
@@ -370,7 +371,7 @@ pub const Player = struct {
     pub fn savePlayerData(self: *Player) void {
         const dimension = self.entity.dimension orelse return;
         dimension.world.provider.writePlayer(self.uuid, self) catch |err| {
-            Raknet.Logger.ERROR("Failed to save player {s}: {any}", .{ self.username, err });
+            log.err("Failed to save player {s}: {any}", .{ self.username, err });
         };
     }
 
@@ -381,7 +382,7 @@ pub const Player = struct {
 
     pub fn transferToDimension(self: *Player, dimension: *Dimension) void {
         if (self.pending_dimension != null) {
-            Raknet.Logger.WARN("Player {s} already has a pending dimension transfer", .{self.username});
+            log.warn("Player {s} already has a pending dimension transfer", .{self.username});
             return;
         }
 
@@ -495,7 +496,7 @@ pub const Player = struct {
     }
 
     pub fn onSpawn(self: *Player) !void {
-        Raknet.Logger.DEBUG("Player {s} has spawned.", .{self.username});
+        log.debug("Player {s} has spawned.", .{self.username});
 
         self.last_broadcast.reset();
 

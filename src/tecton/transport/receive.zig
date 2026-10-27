@@ -1,3 +1,4 @@
+const log = @import("../core/log.zig");
 pub fn Methods(comptime scope: type) type {
     return struct {
         const std = scope.std;
@@ -133,7 +134,7 @@ pub fn Methods(comptime scope: type) type {
                     .shard_key = entry.generation,
                     .kind = .input,
                 }) catch {
-                    std.debug.print("[net-drain] threaded_tasks enqueue FAILED\n", .{});
+                    log.err("threaded_tasks enqueue FAILED", .{});
                     _ = self.decompress_pending.fetchSub(1, .monotonic);
                     self.allocator.free(entry.payload);
                     entry.payload = &.{};

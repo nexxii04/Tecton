@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("log.zig");
 
 pub const Phase = enum {
     raknet_tick,
@@ -97,7 +98,7 @@ pub const TickProfiler = struct {
         };
 
         const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch |err| {
-            std.debug.print("failed to create file: {}\n", .{err});
+            log.err("failed to create file: {}", .{err});
             return;
         };
 

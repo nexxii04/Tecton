@@ -1,8 +1,8 @@
 const std = @import("std");
+const logger = @import("../core/log.zig");
 const builtin = @import("builtin");
 
 const Tecton = @import("../tecton.zig").Tecton;
-const Raknet = @import("Raknet");
 const Events = @import("../events/root.zig");
 const World = @import("../world/world.zig").World;
 const abi = @import("abi.zig");
@@ -166,7 +166,7 @@ pub const PluginRuntime = struct {
     pub fn discover(self: *PluginRuntime, io: std.Io, protocol: u32, directory_path: []const u8) void {
         const directory = std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true }) catch |err| {
             std.Io.Dir.cwd().createDir(io, directory_path, .default_dir) catch {};
-            if (err != error.FileNotFound) Raknet.Logger.WARN("Unable to open plugins directory: {s}", .{@errorName(err)});
+            if (err != error.FileNotFound) logger.warn("Unable to open plugins directory: {s}", .{@errorName(err)});
             return;
         };
         var plugins_dir = directory;
@@ -182,12 +182,12 @@ pub const PluginRuntime = struct {
         while (iterator.next(io) catch null) |entry| {
             if (entry.kind != .file or !isPluginFile(entry.name)) continue;
             const name = self.allocator.dupe(u8, entry.name) catch {
-                Raknet.Logger.ERROR("Unable to allocate plugin name for {s}", .{entry.name});
+                logger.err("Unable to allocate plugin name for {s}", .{entry.name});
                 continue;
             };
             names.append(self.allocator, name) catch {
                 self.allocator.free(name);
-                Raknet.Logger.ERROR("Unable to register plugin name for {s}", .{entry.name});
+                logger.err("Unable to register plugin name for {s}", .{entry.name});
             };
         }
 
@@ -199,7 +199,7 @@ pub const PluginRuntime = struct {
 
         for (names.items) |name| {
             const path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ directory_path, name }) catch {
-                Raknet.Logger.ERROR("Unable to allocate plugin path for {s}", .{name});
+                logger.err("Unable to allocate plugin path for {s}", .{name});
                 continue;
             };
             defer self.allocator.free(path);
@@ -242,7 +242,7 @@ pub const PluginRuntime = struct {
         const plugin_id = self.next_id;
         var plugin = NativePlugin.open(self.allocator, path, &self.host, plugin_id, protocol) catch |err| {
             self.discovery_error_count += 1;
-            Raknet.Logger.ERROR("Unable to load plugin {s}: {s}", .{ path, @errorName(err) });
+            logger.err("Unable to load plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
 
@@ -250,7 +250,7 @@ pub const PluginRuntime = struct {
         const label = self.allocator.dupe(u8, abi.metadataName(plugin.descriptor)) catch {
             self.discovery_error_count += 1;
             plugin.deinit();
-            Raknet.Logger.ERROR("Unable to allocate plugin label for {s}", .{path});
+            logger.err("Unable to allocate plugin label for {s}", .{path});
             return;
         };
 
@@ -258,20 +258,20 @@ pub const PluginRuntime = struct {
             self.allocator.free(label);
             self.discovery_error_count += 1;
             plugin.deinit();
-            Raknet.Logger.ERROR("Unable to register plugin label for {s}", .{path});
+            logger.err("Unable to register plugin label for {s}", .{path});
             return;
         };
 
-        Raknet.Logger.INFO("Loading native plugin: {s}", .{path});
+        logger.info("Loading native plugin: {s}", .{path});
         plugin.start() catch |err| {
             plugin.deinit();
-            Raknet.Logger.ERROR("Unable to start plugin {s}: {s}", .{ path, @errorName(err) });
+            logger.err("Unable to start plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
 
         self.plugins.append(self.allocator, plugin) catch |err| {
             plugin.deinit();
-            Raknet.Logger.ERROR("Unable to register plugin {s}: {s}", .{ path, @errorName(err) });
+            logger.err("Unable to register plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
     }
@@ -613,13 +613,13 @@ pub const PluginRuntime = struct {
         } else "unknown";
         const value = text[0..message.length];
         if (std.mem.eql(u8, level, "DEBUG")) {
-            Raknet.Logger.DEBUG("[plugin:{s}] {s}", .{ name, value });
+            logger.debug("[plugin:{s}] {s}", .{ name, value });
         } else if (std.mem.eql(u8, level, "INFO")) {
-            Raknet.Logger.INFO("[plugin:{s}] {s}", .{ name, value });
+            logger.info("[plugin:{s}] {s}", .{ name, value });
         } else if (std.mem.eql(u8, level, "WARN")) {
-            Raknet.Logger.WARN("[plugin:{s}] {s}", .{ name, value });
+            logger.warn("[plugin:{s}] {s}", .{ name, value });
         } else {
-            Raknet.Logger.ERROR("[plugin:{s}] {s}", .{ name, value });
+            logger.err("[plugin:{s}] {s}", .{ name, value });
         }
     }
 

@@ -1,6 +1,6 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 const builtin = @import("builtin");
-const Raknet = @import("Raknet");
 const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
 
 const WinFileAttrs = if (builtin.os.tag == .windows) struct {
@@ -126,7 +126,7 @@ pub const PermissionManager = struct {
             "*",
         }) catch {};
         self.save() catch |err| {
-            std.debug.print("Failed to save permissions {s}: {s}\n", .{ self.path, @errorName(err) });
+            log.err("failed to save permissions {s}: {s}", .{ self.path, @errorName(err) });
         };
     }
 
@@ -205,7 +205,7 @@ pub const PermissionManager = struct {
         }
 
         if (shouldEmitStartupLogs()) {
-            Raknet.Logger.INFO("Loaded {d} permission groups, {d} player assignments", .{ self.groups.count(), self.player_groups.count() });
+            log.info("Loaded {d} permission groups, {d} player assignments", .{ self.groups.count(), self.player_groups.count() });
         }
     }
 

@@ -1,4 +1,4 @@
-const Raknet = @import("Raknet");
+const log = @import("../../core/log.zig");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
@@ -19,9 +19,9 @@ fn handle(raw: *anyopaque) void {
     const ctx: *CommandContext = @ptrCast(@alignCast(raw));
     if (ctx.player) |p| {
         ctx.sendOutput(true, "\xc2\xa7cStopping server...");
-        Raknet.Logger.INFO("Server stop requested by {s}", .{p.username});
+        log.info("Server stop requested by {s}", .{p.username});
     } else {
-        Raknet.Logger.INFO("Server stop requested by Console", .{});
+        log.info("Server stop requested by Console", .{});
     }
     const view = ctx.views.shutdown;
     view.shutdown(view.ctx) catch {};

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../core/log.zig");
 const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
 
 pub const BanEntry = struct {
@@ -121,7 +121,7 @@ pub const BanManager = struct {
             self.entries.append(self.allocator, entry) catch continue;
         }
         if (shouldEmitStartupLogs()) {
-            Raknet.Logger.INFO("Loaded {d} banned players", .{self.entries.items.len});
+            log.info("Loaded {d} banned players", .{self.entries.items.len});
         }
     }
 

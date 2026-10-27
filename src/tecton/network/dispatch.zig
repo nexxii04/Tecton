@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const protocol = @import("protocol");
@@ -105,7 +106,7 @@ fn dispatchOne(
         if (route.id != id) continue;
         const started = std.Io.Timestamp.now(tecton.io, .awake);
         route.handler(tecton, network, conn, stream) catch |err| {
-            Raknet.Logger.ERROR("{s} error: {any}", .{ route.label, err });
+            log.err("{s} error: {any}", .{ route.label, err });
         };
         const elapsed = started.durationTo(.now(tecton.io, .awake));
         tecton.profiler.record(route.phase, @intCast(@max(0, elapsed.nanoseconds)));
@@ -114,12 +115,12 @@ fn dispatchOne(
 
     for (ignored_packets) |ignored| {
         if (ignored != id) continue;
-        std.debug.print("[net-dispatch] id=0x{x:0>2} explicitly ignored (no handler)\n", .{id});
+        log.debug("id=0x{x:0>2} explicitly ignored (no handler)", .{id});
         return;
     }
 
-    std.debug.print("[net-dispatch] id=0x{x:0>2} UNHANDLED -> falling through payload_len={d}\n", .{ id, payload_len });
-    Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id});
+    log.debug("id=0x{x:0>2} UNHANDLED -> falling through payload_len={d}", .{ id, payload_len });
+    log.info("Unhandled packet 0x{x}", .{id});
 }
 
 test "the route table has no duplicate ids" {

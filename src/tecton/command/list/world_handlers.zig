@@ -1,6 +1,6 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 
-const Raknet = @import("Raknet");
 
 const CommandContext = @import("../context.zig").CommandContext;
 const names = @import("world_names.zig");
@@ -201,7 +201,7 @@ pub fn handleUnload(raw: *anyopaque) void {
     ) catch {
         world.unloading = false;
         world_admin.adopt(world) catch |err| {
-            Raknet.Logger.ERROR("Failed to restore world '{s}' after unload enqueue failure: {any}", .{ name, err });
+            log.err("Failed to restore world '{s}' after unload enqueue failure: {any}", .{ name, err });
         };
         world_admin.endOp(owned_name);
         world_admin.allocator.free(owned_name);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
@@ -568,7 +569,7 @@ pub fn processItemStackRequest(
             },
             .craft_recipe => |c| {
                 if (c.recipe_network_id < villager_trade.TRADE_RECIPE_BASE) {
-                    Raknet.Logger.WARN("Unhandeled action {any}", .{action});
+                    log.warn("Unhandeled action {any}", .{action});
                     continue;
                 }
 
@@ -640,7 +641,7 @@ pub fn processItemStackRequest(
                 _ = EnchantmentEffects.wearTool(held, 1, entropy.interface());
             },
             else => |a| {
-                Raknet.Logger.WARN("Unhandeled action {any}", .{a});
+                log.warn("Unhandeled action {any}", .{a});
             },
         }
     }

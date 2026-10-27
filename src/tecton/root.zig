@@ -3,6 +3,7 @@ const std = @import("std");
 pub const binary_stream = @import("BinaryStream");
 pub const nbt = @import("nbt");
 pub const protocol = @import("protocol");
+pub const log = @import("./core/log.zig");
 
 pub const pool_allocator = @import("./core/pool_allocator.zig");
 pub const alloc_counter = @import("./core/alloc_counter.zig");

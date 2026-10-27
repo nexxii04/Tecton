@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("core/log.zig");
 const Timestamp = std.Io.Timestamp;
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -152,16 +153,17 @@ pub const Tecton = struct {
     pub fn init(options: ServerOptions) !Tecton {
         const io = options.io;
         const base_allocator = options.allocator;
+        // The RakNet server logs from its own internals and needs this before start().
         Raknet.Logger.init(base_allocator);
         var owned_config = options.properties orelse try ServerProperties.load(io, base_allocator, "server.properties");
         errdefer owned_config.deinit();
 
         const counting_allocations = owned_config.count_allocations and alloc_counter.install(base_allocator);
         if (owned_config.count_allocations and !counting_allocations) {
-            Raknet.Logger.WARN("count-allocations is already bound to another allocator in this process; the tick allocation count stays off", .{});
+            log.warn("count-allocations is already bound to another allocator in this process; the tick allocation count stays off", .{});
         }
         const allocator = if (counting_allocations) counted: {
-            Raknet.Logger.INFO("Allocation accounting enabled: counting allocator calls made by the tick thread", .{});
+            log.info("Allocation accounting enabled: counting allocator calls made by the tick thread", .{});
             break :counted alloc_counter.allocator();
         } else base_allocator;
 
@@ -169,25 +171,25 @@ pub const Tecton = struct {
         errdefer if (auth_service) |*service| service.deinit();
         if (owned_config.online_mode) {
             auth_service = AuthService.init(io, allocator, .{}) catch |err| {
-                Raknet.Logger.ERROR(
+                log.err(
                     "Online mode: cannot reach the authorization service ({s}), refusing to start",
                     .{@errorName(err)},
                 );
                 return error.OnlineModeUnavailable;
             };
-            Raknet.Logger.INFO("Online mode enabled", .{});
+            log.info("Online mode enabled", .{});
         } else {
-            Raknet.Logger.INFO("Online mode disabled", .{});
+            log.info("Online mode disabled", .{});
         }
         if ((!owned_config.online_mode or owned_config.online_mode_offline_fallback) and
             std.mem.eql(u8, owned_config.default_group, "operator"))
         {
-            Raknet.Logger.WARN("default-group=operator without verified identities: any client becomes an operator by claiming an operator name", .{});
+            log.warn("default-group=operator without verified identities: any client becomes an operator by claiming an operator name", .{});
         }
 
         const max_mtu = ServerProperties.clampMaxMtu(owned_config.max_mtu);
         if (max_mtu != owned_config.max_mtu) {
-            Raknet.Logger.WARN("max-mtu={d} is outside the supported range {d}-{d}, using {d}", .{
+            log.warn("max-mtu={d} is outside the supported range {d}-{d}, using {d}", .{
                 owned_config.max_mtu,
                 ServerProperties.min_max_mtu,
                 ServerProperties.max_max_mtu,
@@ -195,12 +197,12 @@ pub const Tecton = struct {
             });
         }
         const movement_priority = SendPriority.parse(owned_config.movement_send_priority) orelse fallback: {
-            Raknet.Logger.WARN("movement-send-priority={s} is not a known priority, using immediate", .{owned_config.movement_send_priority});
+            log.warn("movement-send-priority={s} is not a known priority, using immediate", .{owned_config.movement_send_priority});
             break :fallback SendPriority.immediate;
         };
         const mob_broadcast_interval = ServerProperties.clampMobBroadcastInterval(owned_config.mob_broadcast_interval);
         if (mob_broadcast_interval != owned_config.mob_broadcast_interval) {
-            Raknet.Logger.WARN("mob-broadcast-interval={d} is outside the supported range {d}-{d}, using {d}", .{
+            log.warn("mob-broadcast-interval={d} is outside the supported range {d}-{d}, using {d}", .{
                 owned_config.mob_broadcast_interval,
                 ServerProperties.min_mob_broadcast_interval,
                 ServerProperties.max_mob_broadcast_interval,
@@ -209,7 +211,7 @@ pub const Tecton = struct {
         }
 
         if (owned_config.max_view_distance > ServerProperties.max_view_distance_limit) {
-            Raknet.Logger.WARN("max-view-distance={d} exceeds the supported ceiling {d}: client requests are clamped to {d}", .{
+            log.warn("max-view-distance={d} exceeds the supported ceiling {d}: client requests are clamped to {d}", .{
                 owned_config.max_view_distance,
                 ServerProperties.max_view_distance_limit,
                 ServerProperties.max_view_distance_limit,
@@ -241,7 +243,7 @@ pub const Tecton = struct {
             .outbound_queue_slots = std.math.ceilPowerOfTwo(usize, @max(@as(usize, 64), owned_config.outbound_queue_slots)) catch return error.InvalidRingSize,
         }) catch |err| {
             if (err == error.AddressInUse) {
-                Raknet.Logger.ERROR("Address {s}:{d} is already in use, shutting down", .{ owned_config.address, owned_config.port });
+                log.err("Address {s}:{d} is already in use, shutting down", .{ owned_config.address, owned_config.port });
             }
             return err;
         };
@@ -404,7 +406,7 @@ pub const Tecton = struct {
         self.threaded_tasks.setLayout(self.config.worker_layout);
         try self.threaded_tasks.start();
         if (!worker_resolution.auto_selected and worker_resolution.resolved_count < worker_resolution.requested_count) {
-            Raknet.Logger.WARN(
+            log.warn(
                 "Configured worker-threads={d} exceeds recommended max for {d} CPUs, clamping to {d}",
                 .{
                     worker_resolution.requested_count,
@@ -413,29 +415,29 @@ pub const Tecton = struct {
                 },
             );
         }
-        Raknet.Logger.INFO("RakNet MTU cap: {d}", .{self.raknet.options.max_mtu});
-        Raknet.Logger.INFO("Mob broadcast interval: {d} ticks", .{self.mob_broadcast_interval});
+        log.info("RakNet MTU cap: {d}", .{self.raknet.options.max_mtu});
+        log.info("Mob broadcast interval: {d} ticks", .{self.mob_broadcast_interval});
         if (self.config.parallel_visibility and self.threaded_tasks.worldWorkerCount() > 1) {
-            Raknet.Logger.INFO("Visibility pass: {d} world workers (parallel-visibility=true)", .{
+            log.info("Visibility pass: {d} world workers (parallel-visibility=true)", .{
                 self.threaded_tasks.worldWorkerCount(),
             });
         } else {
-            Raknet.Logger.INFO("Visibility pass: inline on the tick thread (parallel-visibility=false)", .{});
+            log.info("Visibility pass: inline on the tick thread (parallel-visibility=false)", .{});
         }
         const pump_threads: usize = if (self.threaded_tasks.layoutResolution().layout == .split) 1 else 0;
-        Raknet.Logger.INFO("Loaded {d} threads, {d} worker threads available", .{
+        log.info("Loaded {d} threads, {d} worker threads available", .{
             totalServerThreadCount(self.threaded_tasks.workerCount()) + pump_threads,
             self.threaded_tasks.workerCount(),
         });
         const pool_layout = self.threaded_tasks.layoutResolution();
         if (pool_layout.layout == .split) {
-            Raknet.Logger.INFO("Worker pool: split layout, {d} input + {d} world workers ({d} CPUs)", .{
+            log.info("Worker pool: split layout, {d} input + {d} world workers ({d} CPUs)", .{
                 pool_layout.input_worker_count,
                 pool_layout.world_worker_count,
                 pool_layout.cpu_count,
             });
         } else {
-            Raknet.Logger.INFO("Worker pool: shared layout, {d} workers ({d} CPUs)", .{
+            log.info("Worker pool: shared layout, {d} workers ({d} CPUs)", .{
                 pool_layout.worker_count,
                 pool_layout.cpu_count,
             });
@@ -445,25 +447,25 @@ pub const Tecton = struct {
                 ServerProperties.clampInboundRingSlots(self.config.inbound_ring_slots),
                 ServerProperties.clampInboundRingSlotSize(self.config.inbound_ring_slot_size),
             ) catch |err| {
-                Raknet.Logger.WARN("network-inbound-ring could not be enabled ({s}); using the legacy packet queue", .{@errorName(err)});
+                log.warn("network-inbound-ring could not be enabled ({s}); using the legacy packet queue", .{@errorName(err)});
             };
         }
         if (self.network.inbound_ring) |ring| {
             const slab_mib = (ring.capacity() * ring.slot_size) / (1024 * 1024);
-            Raknet.Logger.INFO("Inbound ring: {d} slots x {d} bytes ({d} MiB slab)", .{
+            log.info("Inbound ring: {d} slots x {d} bytes ({d} MiB slab)", .{
                 ring.capacity(),
                 ring.slot_size,
                 slab_mib,
             });
         } else {
-            Raknet.Logger.INFO("Inbound ring disabled; using the legacy packet queue", .{});
+            log.info("Inbound ring disabled; using the legacy packet queue", .{});
         }
 
         if (self.threaded_tasks.layoutResolution().layout == .split) {
             try self.network.startInputPump();
-            Raknet.Logger.INFO("Input pump: dedicated thread draining the input queue", .{});
+            log.info("Input pump: dedicated thread draining the input queue", .{});
         } else {
-            Raknet.Logger.INFO("Input pump: disabled (shared layout drains input from the tick)", .{});
+            log.info("Input pump: disabled (shared layout drains input from the tick)", .{});
         }
 
         var event = Events.types.ServerStartEvent{};
@@ -627,7 +629,7 @@ pub const Tecton = struct {
             1.0,
             0,
         ) catch |err| {
-            Raknet.Logger.WARN("ECS registration failed: {s}", .{@errorName(err)});
+            log.warn("ECS registration failed: {s}", .{@errorName(err)});
             return;
         };
         entity.ecs_id = @bitCast(id);
@@ -799,7 +801,7 @@ pub const Tecton = struct {
         self.threaded_tasks.deinit();
         self.shutting_down = true;
 
-        Raknet.Logger.INFO("Allocator: {d} KiB mapped in {d} pool chunks, {d} contention spins", .{
+        log.info("Allocator: {d} KiB mapped in {d} pool chunks, {d} contention spins", .{
             pool_allocator.mappedBytes() / 1024,
             pool_allocator.poolChunks(),
             pool_allocator.contentionSpins(),
@@ -808,7 +810,7 @@ pub const Tecton = struct {
         while (pool_class < pool_allocator.class_total) : (pool_class += 1) {
             const stats = pool_allocator.classStats(pool_class);
             if (stats.chunks == 0) continue;
-            Raknet.Logger.INFO("Pool class {d} B: {d} KiB mapped, {d} chunks, {d} live slots", .{
+            log.info("Pool class {d} B: {d} KiB mapped, {d} chunks, {d} live slots", .{
                 stats.slot,
                 stats.mapped_bytes / 1024,
                 stats.chunks,

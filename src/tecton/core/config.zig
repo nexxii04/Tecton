@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("log.zig");
 const builtin = @import("builtin");
 const Raknet = @import("Raknet");
 const Protocol = @import("protocol");
@@ -113,14 +114,13 @@ pub const ServerProperties = struct {
     };
 
     pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !ServerProperties {
-        Raknet.Logger.init(allocator);
         var self = ServerProperties{ .allocator = allocator };
         errdefer self.deinit();
 
         const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 if (shouldEmitStartupLogs()) {
-                    Raknet.Logger.INFO("server.properties not found, creating with defaults", .{});
+                    log.info("server.properties not found, creating with defaults", .{});
                 }
                 try self.save(io, path);
                 return self;
@@ -130,7 +130,7 @@ pub const ServerProperties = struct {
         defer file.close(io);
 
         if (shouldEmitStartupLogs()) {
-            Raknet.Logger.INFO("Loading server.properties", .{});
+            log.info("Loading server.properties", .{});
         }
 
         var read_buf: [4096]u8 = undefined;
@@ -148,7 +148,7 @@ pub const ServerProperties = struct {
             const value = line[sep + 1 ..];
 
             self.setField(key, value) catch |err| {
-                Raknet.Logger.WARN("Unknown or invalid property: {s} ({any})", .{ key, err });
+                log.warn("Unknown or invalid property: {s} ({any})", .{ key, err });
             };
         }
 

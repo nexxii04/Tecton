@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../core/log.zig");
 const Host = @import("../player/player.zig").Host;
 const World = @import("./world.zig").World;
 const Player = @import("../player/player.zig").Player;
@@ -222,7 +222,7 @@ fn runUnloadTask(state: *WorldLifecycleTask) bool {
                 if (state.ticks_waited < UNLOAD_IDLE_TIMEOUT_TICKS) return false;
 
                 state.tecton.worlds.adopt(world) catch |err| {
-                    Raknet.Logger.ERROR("Failed to restore world '{s}' after unload timeout: {any}", .{ state.name, err });
+                    log.err("Failed to restore world '{s}' after unload timeout: {any}", .{ state.name, err });
                     state.abandoned = true;
                     state.reply(false, "Failed to unload world: dimensions still busy");
                     return false;

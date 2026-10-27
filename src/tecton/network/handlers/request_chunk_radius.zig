@@ -1,3 +1,4 @@
+const log = @import("../../core/log.zig");
 const Raknet = @import("Raknet");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
@@ -19,7 +20,7 @@ pub fn handleRequestChunkRadius(
     player.view_distance = new_distance;
 
     if (changed) {
-        Raknet.Logger.DEBUG("Player {s} requested chunk radius: {d}, set to: {d}", .{
+        log.debug("Player {s} requested chunk radius: {d}, set to: {d}", .{
             player.username,
             packet.radius,
             player.view_distance,

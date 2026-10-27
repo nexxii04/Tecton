@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 const Raknet = @import("Raknet");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
@@ -28,7 +29,7 @@ pub fn handleBlockPickRequest(
     const dimension = player.entity.dimension orelse return;
 
     const perm = dimension.getPermutation(packet.position, 0) catch |err| {
-        Raknet.Logger.ERROR("Failed to get permutation: {any}", .{err});
+        log.err("Failed to get permutation: {any}", .{err});
         return;
     };
 

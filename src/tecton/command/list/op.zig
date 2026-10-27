@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../../core/log.zig");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
@@ -53,7 +53,7 @@ fn handleOp(raw: *anyopaque) void {
     };
 
     const source_op = if (ctx.player) |p| p.username else "Console";
-    Raknet.Logger.INFO("{s} opped {s}", .{ source_op, name });
+    log.info("{s} opped {s}", .{ source_op, name });
     perm_mgr.refreshAbilities(ctx.allocator, name);
 
     var buf: [128]u8 = undefined;
@@ -82,7 +82,7 @@ fn handleDeop(raw: *anyopaque) void {
     };
 
     const source_deop = if (ctx.player) |p| p.username else "Console";
-    Raknet.Logger.INFO("{s} deopped {s}", .{ source_deop, name });
+    log.info("{s} deopped {s}", .{ source_deop, name });
     perm_mgr.refreshAbilities(ctx.allocator, name);
 
     var buf: [128]u8 = undefined;

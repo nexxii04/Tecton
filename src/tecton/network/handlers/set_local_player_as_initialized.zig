@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 const Raknet = @import("Raknet");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
@@ -58,7 +59,7 @@ fn queuePlayerInit(tecton: *Tecton, network: *NetworkHandler, player: *Player) !
 fn runPlayerInitTask(ctx: *anyopaque) bool {
     const state: *PlayerInitTask = @ptrCast(@alignCast(ctx));
     return runPlayerInitTaskImpl(state) catch |err| {
-        Raknet.Logger.ERROR("Player init failed for {s} at stage {s}: {any}", .{
+        log.err("Player init failed for {s} at stage {s}: {any}", .{
             state.player.username,
             @tagName(state.stage),
             err,

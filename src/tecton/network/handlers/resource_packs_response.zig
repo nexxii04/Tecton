@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 const Raknet = @import("Raknet");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -98,7 +99,7 @@ fn queueJoinStartup(tecton: *Tecton, network: *NetworkHandler, player: *Player) 
 fn runJoinStartupTask(ctx: *anyopaque) bool {
     const state: *JoinStartupTask = @ptrCast(@alignCast(ctx));
     return runJoinStartupTaskImpl(state) catch |err| {
-        Raknet.Logger.ERROR("Join startup failed for {s}: {any}", .{ state.player.username, err });
+        log.err("Join startup failed for {s}: {any}", .{ state.player.username, err });
         state.player.join_startup_started = false;
         return true;
     };
@@ -120,13 +121,13 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
         .prepare_player => {
             const location = state.tecton.resolvePlayerLocation(player.uuid);
             const world = resolveJoinWorld(state.tecton, location) orelse {
-                Raknet.Logger.ERROR("Join startup failed for {s}: no world available", .{player.username});
+                log.err("Join startup failed for {s}: no world available", .{player.username});
                 player.join_startup_started = false;
                 return true;
             };
 
             const dimension = resolveJoinDimension(world, location) orelse {
-                Raknet.Logger.ERROR("Join startup failed for {s}: no dimension available", .{player.username});
+                log.err("Join startup failed for {s}: no dimension available", .{player.username});
                 player.join_startup_started = false;
                 return true;
             };

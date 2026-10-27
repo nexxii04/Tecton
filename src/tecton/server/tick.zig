@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 const Timestamp = std.Io.Timestamp;
 
 const Tecton = @import("../tecton.zig").Tecton;
@@ -6,7 +7,6 @@ const entities = @import("../world/dimension/entities.zig");
 const ecs_pipeline = @import("../ecs/pipeline.zig");
 const Events = @import("../events/root.zig");
 const alloc_counter = @import("../core/alloc_counter.zig");
-const Raknet = @import("Raknet");
 
 const packet_drain_budget_pct: u64 = 5;
 const drain_completed_budget_pct: u64 = 15;
@@ -60,7 +60,7 @@ pub fn onTick(context: ?*anyopaque) void {
     const dropped_packets = dropped_total - tecton.last_dropped_packets;
     if ((decompress_pending > 256 or dropped_packets > 0) and tecton.tick_count % target_tps_u64 == 0) {
         tecton.last_dropped_packets = dropped_total;
-        Raknet.Logger.WARN("Network packet backlog: pending={d} queued={d} dropped={d}", .{
+        log.warn("Network packet backlog: pending={d} queued={d} dropped={d}", .{
             decompress_pending,
             tecton.network.queuedInputDepth(),
             dropped_packets,
@@ -160,7 +160,7 @@ pub fn onTick(context: ?*anyopaque) void {
         const recorded = alloc_counter.since(mark);
         tecton.recordTickAllocations(recorded.allocations);
         if (recorded.allocations > 0 and tecton.tick_count % target_tps_u64 == 0) {
-            Raknet.Logger.WARN("Tick allocations: {d} allocations, {d} bytes on the tick thread (peak {d} per tick)", .{
+            log.warn("Tick allocations: {d} allocations, {d} bytes on the tick thread (peak {d} per tick)", .{
                 recorded.allocations,
                 recorded.bytes,
                 tecton.peakTickAllocations(),

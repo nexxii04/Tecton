@@ -3,6 +3,11 @@ const builtin = @import("builtin");
 const Server = @import("tecton").Server;
 const defaultOptions = @import("tecton").defaultOptions;
 const pool_allocator = @import("tecton").pool_allocator;
+const log = @import("tecton").log;
+
+pub const std_options: std.Options = .{
+    .logFn = log.logFn,
+};
 
 const winmm = if (builtin.os.tag == .windows) struct {
     extern "winmm" fn timeBeginPeriod(uPeriod: c_uint) callconv(.winapi) c_uint;

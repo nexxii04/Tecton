@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const NBT = @import("nbt");
@@ -267,7 +268,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
             {
                 generation.applyParsedBlockData(allocator, dim, &work.block_data[i]);
                 dim.world.provider.readChunkEntities(work.chunks[i].?, dim) catch |err| {
-                    Raknet.Logger.WARN("Failed to restore actors for chunk {d},{d}: {s}", .{
+                    log.warn("Failed to restore actors for chunk {d},{d}: {s}", .{
                         work.coords[i].x, work.coords[i].z, @errorName(err),
                     });
                 };
