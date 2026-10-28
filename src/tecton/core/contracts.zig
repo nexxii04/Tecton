@@ -116,7 +116,8 @@ pub fn WorldInfoHost(comptime Player: type, comptime World: type) type {
         target_tps: *const fn (*anyopaque) f64,
         current_tps: *const f64,
         current_mspt: *const f64,
-        current_raknet_mspt: *const f64,
+        current_network_io_mspt: *const f64,
+        current_network_dispatch_mspt: *const f64,
         current_game_mspt: *const f64,
         profiler: *const TickProfiler,
 

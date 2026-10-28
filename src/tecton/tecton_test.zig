@@ -5,24 +5,16 @@ pub fn Suite(comptime scope: type) type {
         const Tecton = scope.Tecton;
 
         pub fn case_000() !void {
-            const source = @embedFile("tecton.zig");
-            const cutoff = std.mem.indexOf(u8, source, "test \"the RakNet MTU cap") orelse return error.TestUnexpectedResult;
-            const init_code = source[0..cutoff];
-            try std.testing.expect(std.mem.indexOf(u8, init_code, "ServerProperties.clampMaxMtu(owned_config.max_mtu)") != null);
+            const data = scope.NetherNet.serverData(.{ .max_players = 10 });
+            try std.testing.expectEqual(@as(i32, @intCast(scope.Protocol.PROTOCOL)), data.protocol);
+            try std.testing.expectEqualStrings(scope.Protocol.MINECRAFT_VERSION, data.game_version);
 
-            var found: usize = 0;
-            var rest: []const u8 = init_code;
-            while (std.mem.indexOf(u8, rest, ".max_mtu = ")) |at| {
-                const value_start = at + ".max_mtu = ".len;
-                const end = std.mem.indexOfScalarPos(u8, rest, value_start, ',') orelse return error.TestUnexpectedResult;
-                if (!std.mem.eql(u8, rest[value_start..end], "max_mtu")) {
-                    std.debug.print("tecton.zig: the RakNet MTU cap is not the clamped config value\n", .{});
-                    return error.TestUnexpectedResult;
-                }
-                found += 1;
-                rest = rest[end..];
+            const source = @embedFile("tecton.zig");
+            const max_message_wired = std.mem.indexOf(u8, source, "ServerProperties.clampMaxMessageSize(self.config.max_message_size)") != null;
+            if (!max_message_wired) {
+                std.debug.print("tecton.zig: max-message-size is not the clamped value the adapter and send pool get\n", .{});
+                return error.TestUnexpectedResult;
             }
-            try std.testing.expectEqual(@as(usize, 1), found);
         }
 
         pub fn case_001() !void {
@@ -88,6 +80,15 @@ pub fn Suite(comptime scope: type) type {
 
         fn on_tick_start_line(source: []const u8, at: usize) usize {
             return std.mem.count(u8, source[0..at], "\n") + 1;
+        }
+
+        pub fn case_005() !void {
+            const source = @embedFile("command/list/worlds.zig");
+            try std.testing.expect(std.mem.indexOf(u8, source, "§7Net I/O: ") != null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "§7Net dispatch: ") != null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "RakNet") == null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "current_network_io_mspt") != null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "current_network_dispatch_mspt") != null);
         }
 
         pub fn case_004() !void {

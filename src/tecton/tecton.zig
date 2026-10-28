@@ -4,7 +4,6 @@ const Timestamp = std.Io.Timestamp;
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
 
 const connection_mod = @import("./transport/connection.zig");
 const Connection = connection_mod.Connection;
@@ -13,7 +12,6 @@ const port_mod = @import("./transport/port.zig");
 
 /// Longest a shutdown waits for queued disconnects to leave the transport.
 const shutdown_flush_ms: i64 = 500;
-const RaknetPort = @import("./transport/raknet_port.zig").RaknetPort;
 const NetherNetAdapter = @import("./transport/nethernet.zig").Adapter;
 
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
@@ -111,8 +109,6 @@ pub const Tecton = struct {
     command_permission_userdata: ?*anyopaque,
     composition: Composition,
     events: Events.Events,
-    raknet: Raknet.Server,
-    raknet_port: ?*RaknetPort = null,
     nethernet: ?*NetherNetAdapter = null,
     transport_clock: ?tick_loop.Clock = null,
     transport_events: std.ArrayList(events_mod.Event) = .empty,
@@ -141,13 +137,17 @@ pub const Tecton = struct {
     last_tick_allocations: std.atomic.Value(usize) = .init(0),
     peak_tick_allocations: std.atomic.Value(usize) = .init(0),
     work_time_accumulator: u64 = 0,
-    raknet_time_accumulator: u64 = 0,
+    /// Written by the transport clock thread and reset by the game tick.
+    network_io_accumulator: std.atomic.Value(u64) = .init(0),
+    network_io_samples: std.atomic.Value(u64) = .init(0),
+    network_dispatch_accumulator: u64 = 0,
     tick_interval_accumulator: u64 = 0,
     tick_interval_samples: u64 = 0,
     tasks_time_accumulator: u64 = 0,
     current_tps: f64 = 20.0,
     current_mspt: f64 = 0.0,
-    current_raknet_mspt: f64 = 0.0,
+    current_network_io_mspt: f64 = 0.0,
+    current_network_dispatch_mspt: f64 = 0.0,
     current_game_mspt: f64 = 0.0,
     last_tick_started_at: ?Timestamp = null,
     tasks: TaskQueue,
@@ -174,8 +174,6 @@ pub const Tecton = struct {
     pub fn init(options: ServerOptions) !Tecton {
         const io = options.io;
         const base_allocator = options.allocator;
-        // The RakNet server logs from its own internals and needs this before start().
-        Raknet.Logger.init(base_allocator);
         var owned_config = options.properties orelse try ServerProperties.load(io, base_allocator, "server.properties");
         errdefer owned_config.deinit();
 
@@ -208,13 +206,13 @@ pub const Tecton = struct {
             log.warn("default-group=operator without verified identities: any client becomes an operator by claiming an operator name", .{});
         }
 
-        const max_mtu = ServerProperties.clampMaxMtu(owned_config.max_mtu);
-        if (max_mtu != owned_config.max_mtu) {
-            log.warn("max-mtu={d} is outside the supported range {d}-{d}, using {d}", .{
-                owned_config.max_mtu,
-                ServerProperties.min_max_mtu,
-                ServerProperties.max_max_mtu,
-                max_mtu,
+        const transport_tick_ms = ServerProperties.clampTransportTickMs(owned_config.transport_tick_ms);
+        if (transport_tick_ms != owned_config.transport_tick_ms) {
+            log.warn("transport-tick-ms={d} is outside the supported range {d}-{d}, using {d}", .{
+                owned_config.transport_tick_ms,
+                ServerProperties.min_transport_tick_ms,
+                ServerProperties.max_transport_tick_ms,
+                transport_tick_ms,
             });
         }
         const movement_priority = SendPriority.parse(owned_config.movement_send_priority) orelse fallback: {
@@ -242,32 +240,6 @@ pub const Tecton = struct {
         const ecs_capacity = @max(@as(usize, 64), @as(usize, owned_config.ecs_capacity));
         var ecs = try EcsWorld.init(allocator, ecs_capacity);
         errdefer ecs.deinit();
-        const raknet = Raknet.Server.init(io, .{
-            .address = owned_config.address,
-            .port = owned_config.port,
-            .tick_rate = @intCast(owned_config.max_tps),
-            .allocator = allocator,
-            .advertisement = .{
-                .game_type = .MCPE,
-                .level_name = owned_config.motd,
-                .protocol = Protocol.PROTOCOL,
-                .version = Protocol.MINECRAFT_VERSION,
-                .player_count = 0,
-                .max_players = @intCast(owned_config.max_players),
-                .guid = 0,
-                .name = owned_config.motd,
-                .gamemode = @tagName(owned_config.gameMode()),
-            },
-            .max_mtu = max_mtu,
-            .output_slab_slots = @max(64, owned_config.output_slab_slots),
-            .transient_slab_slots = @max(64, owned_config.transient_slab_slots),
-            .outbound_queue_slots = std.math.ceilPowerOfTwo(usize, @max(@as(usize, 64), owned_config.outbound_queue_slots)) catch return error.InvalidRingSize,
-        }) catch |err| {
-            if (err == error.AddressInUse) {
-                log.err("Address {s}:{d} is already in use, shutting down", .{ owned_config.address, owned_config.port });
-            }
-            return err;
-        };
         return Tecton{
             .io = io,
             .allocator = allocator,
@@ -291,7 +263,6 @@ pub const Tecton = struct {
             .movement_distance_bands = owned_config.movement_distance_bands,
             .mob_broadcast_interval = mob_broadcast_interval,
             .events = Events.Events.init(allocator),
-            .raknet = raknet,
             .players = PlayerRegistry.init(io, allocator),
             .worlds = worlds_mod.WorldRegistry.init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
@@ -302,7 +273,8 @@ pub const Tecton = struct {
             .network = undefined,
             .current_tps = @as(f64, @floatFromInt(@max(@as(u32, 1), owned_config.max_tps))),
             .current_mspt = 1000.0 / @as(f64, @floatFromInt(@max(@as(u32, 1), owned_config.max_tps))),
-            .current_raknet_mspt = 0.0,
+            .current_network_io_mspt = 0.0,
+            .current_network_dispatch_mspt = 0.0,
             .current_game_mspt = 0.0,
             .tasks = TaskQueue.init(allocator),
             .threaded_tasks = ThreadedTaskQueue.init(io, allocator, owned_config.worker_threads),
@@ -417,10 +389,7 @@ pub const Tecton = struct {
             .dispatch = self.composition.dispatch,
         });
         self.network_initialized = true;
-        switch (self.config.transport) {
-            .nethernet => try self.attachNetherNetPort(),
-            .raknet => try self.attachRaknetPort(),
-        }
+        try self.attachNetherNetPort();
         try self.prepare();
         self.tick_thread_id.store(0, .release);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
@@ -436,7 +405,25 @@ pub const Tecton = struct {
                 },
             );
         }
-        log.info("RakNet MTU cap: {d}", .{self.raknet.options.max_mtu});
+        log.info("NetherNet: signaling on {s}:{d}, {d} sessions, {d} ms transport tick", .{
+            if (self.config.signaling_bind.len > 0) self.config.signaling_bind else self.config.address,
+            self.config.port,
+            self.config.effectiveMaxSessions(),
+            ServerProperties.clampTransportTickMs(self.config.transport_tick_ms),
+        });
+        if (self.config.lan_discovery) {
+            log.info("LAN discovery: UDP {d}", .{self.config.lan_port});
+        } else {
+            log.info("LAN discovery: disabled", .{});
+        }
+        switch (self.config.tls_mode) {
+            .off => log.info("Signaling TLS: off (plain HTTP; clients prompt before trusting it)", .{}),
+            .proxy => log.info("Signaling TLS: terminated by a proxy in front of the listener", .{}),
+            .native => log.warn("tls-mode=native is not implemented yet; the signaling listener stays plain", .{}),
+        }
+        if (self.config.lan_discovery and self.config.lan_port == self.config.port) {
+            log.warn("lan-port and port share {d}: LAN discovery and the MOTD listener both need UDP, so one of them will not bind", .{self.config.port});
+        }
         log.info("Mob broadcast interval: {d} ticks", .{self.mob_broadcast_interval});
         if (self.config.parallel_visibility and self.threaded_tasks.worldWorkerCount() > 1) {
             log.info("Visibility pass: {d} world workers (parallel-visibility=true)", .{
@@ -492,18 +479,15 @@ pub const Tecton = struct {
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
-        switch (self.config.transport) {
-            .nethernet => if (self.nethernet) |adapter| {
-                try adapter.start();
-                self.transport_clock = tick_loop.Clock.init(
-                    self.io,
-                    @as(u64, @max(1, self.config.transport_tick_ms)) * std.time.ns_per_ms,
-                    netherNetTick,
-                    self,
-                );
-                if (self.transport_clock) |*clock| try clock.start();
-            },
-            .raknet => try self.raknet.start(),
+        if (self.nethernet) |adapter| {
+            try adapter.start();
+            self.transport_clock = tick_loop.Clock.init(
+                self.io,
+                @as(u64, ServerProperties.clampTransportTickMs(self.config.transport_tick_ms)) * std.time.ns_per_ms,
+                netherNetTick,
+                self,
+            );
+            if (self.transport_clock) |*clock| try clock.start();
         }
         self.running.store(true, .release);
         self.shutdown_event.reset();
@@ -528,12 +512,17 @@ pub const Tecton = struct {
             .gamemode = self.config.gameMode(),
             .max_players = self.config.max_players,
             .online_mode = self.config.online_mode,
+            .jwks_uri = self.config.jwks_uri,
             .identity_key = self.config.identity_key,
+            .require_client_identity = self.config.clientIdentityRequired(),
             .lan_discovery = self.config.lan_discovery,
             .lan_port = self.config.lan_port,
-            .max_message_size = self.config.max_message_size,
-            .transport_tick_ms = self.config.transport_tick_ms,
-            .outbox_slots = self.config.outbox_slots,
+            .signaling_bind = self.config.signaling_bind,
+            .public_candidate = self.config.public_candidate,
+            .ice_servers = self.config.ice_servers,
+            .max_sessions = self.config.effectiveMaxSessions(),
+            .max_message_size = ServerProperties.clampMaxMessageSize(self.config.max_message_size),
+            .transport_tick_ms = ServerProperties.clampTransportTickMs(self.config.transport_tick_ms),
         }, .{
             .registry = &self.network.connections,
             .events = &self.network.events,
@@ -545,30 +534,25 @@ pub const Tecton = struct {
         // Every frame is compressed into a pool slot, so the slot must hold the largest
         // message the session negotiates.
         const send_slots = @max(@as(usize, 8), @min(@as(usize, 32), @as(usize, self.config.worker_threads) + 2));
-        try self.network.configureSendBuffers(self.config.max_message_size, send_slots);
+        try self.network.configureSendBuffers(ServerProperties.clampMaxMessageSize(self.config.max_message_size), send_slots);
         self.nethernet = adapter;
         self.network.attachPort(adapter.port());
     }
 
     fn netherNetTick(context: ?*anyopaque) void {
         const self: *Tecton = @ptrCast(@alignCast(context.?));
+        const started = Timestamp.now(self.io, .awake);
         if (self.nethernet) |adapter| adapter.tick();
+        const elapsed = started.durationTo(Timestamp.now(self.io, .awake)).nanoseconds;
+        const ns: u64 = @intCast(@max(0, elapsed));
+        _ = self.network_io_accumulator.fetchAdd(ns, .monotonic);
+        _ = self.network_io_samples.fetchAdd(1, .monotonic);
+        self.profiler.record(.net_io, ns);
     }
 
     fn countOnlinePlayers(context: *anyopaque) usize {
         const self: *Tecton = @ptrCast(@alignCast(context));
         return self.players.count();
-    }
-
-    fn attachRaknetPort(self: *Tecton) !void {
-        const raknet_port = try RaknetPort.init(self.allocator, self.io, .{
-            .registry = &self.network.connections,
-            .sink = .{ .ctx = self.network, .packet = NetworkHandler.onPacket },
-        });
-        self.raknet_port = raknet_port;
-        self.network.attachPort(raknet_port.port());
-        self.raknet.setConnectCallback(RaknetPort.onConnect, raknet_port);
-        self.raknet.setDisconnectCallback(RaknetPort.onDisconnect, raknet_port);
     }
 
     pub fn run(self: *Tecton) !void {
@@ -594,7 +578,6 @@ pub const Tecton = struct {
             self.stopped = true;
             self.started = false;
             self.shutdown_event.set(self.io);
-            self.raknet.running.store(false, .release);
             if (self.shutdown_callback) |callback| callback(self.lifecycle_userdata);
         }
         self.plugin_runtime.setServerState(2);
@@ -676,25 +659,18 @@ pub const Tecton = struct {
 
     pub fn addPlayer(self: *Tecton, player: *Player) !void {
         try self.players.insert(player);
-        self.publishPlayerCount();
     }
 
     pub fn removePlayer(self: *Tecton, player: *Player) void {
         self.players.remove(player);
-        self.publishPlayerCount();
     }
 
     pub fn removeConnectionMapping(self: *Tecton, connection: *Connection) void {
         self.players.removeConnection(connection);
-        self.publishPlayerCount();
     }
 
     pub fn enqueuePlayerRemoval(self: *Tecton, player: *Player) void {
         self.players.enqueueRemoval(player);
-    }
-
-    fn publishPlayerCount(self: *Tecton) void {
-        self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
 
     pub fn drainPendingPlayerRemovals(self: *Tecton) void {
@@ -798,17 +774,21 @@ pub const Tecton = struct {
 
     pub fn rollMetricsWindow(self: *Tecton, metrics_window_ticks: u64) void {
         const avg_work_ns = self.work_time_accumulator / metrics_window_ticks;
-        const avg_raknet_ns = self.raknet_time_accumulator / metrics_window_ticks;
+        const net_dispatch_ns = self.network_dispatch_accumulator / metrics_window_ticks;
+        const net_io_samples = self.network_io_samples.swap(0, .monotonic);
+        const net_io_total_ns = self.network_io_accumulator.swap(0, .monotonic);
+        const avg_net_io_ns = if (net_io_samples > 0) net_io_total_ns / net_io_samples else 0;
         const avg_interval_ns = if (self.tick_interval_samples > 0)
             self.tick_interval_accumulator / self.tick_interval_samples
         else
             0;
         self.work_time_accumulator = 0;
-        self.raknet_time_accumulator = 0;
+        self.network_dispatch_accumulator = 0;
         self.tasks_time_accumulator = 0;
 
         self.current_game_mspt = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000.0;
-        self.current_raknet_mspt = @as(f64, @floatFromInt(avg_raknet_ns)) / 1_000_000.0;
+        self.current_network_io_mspt = @as(f64, @floatFromInt(avg_net_io_ns)) / 1_000_000.0;
+        self.current_network_dispatch_mspt = @as(f64, @floatFromInt(net_dispatch_ns)) / 1_000_000.0;
         self.current_mspt = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000.0;
 
         if (avg_interval_ns > 0) {
@@ -916,21 +896,12 @@ pub const Tecton = struct {
         }
     }
 
-    fn stopRaknetTickThread(self: *Tecton) void {
-        self.raknet.running.store(false, .release);
-        if (self.raknet.tick_thread) |*tick_thread| {
-            _ = tick_thread.cancel(self.io);
-            self.raknet.tick_thread = null;
-        }
-    }
-
     pub fn deinit(self: *Tecton) void {
         if (!self.stopped and self.started) {
             self.stop() catch |err| log.err("Shutdown before deinit failed: {s}", .{@errorName(err)});
         }
         self.running.store(false, .release);
         if (self.game_clock) |*clock| clock.stop();
-        self.stopRaknetTickThread();
 
         if (self.network_initialized) self.network.stopInputPump();
 
@@ -969,10 +940,6 @@ pub const Tecton = struct {
 
         self.transport_events.deinit(self.allocator);
         self.reconcile_batch.deinit(self.allocator);
-        if (self.raknet_port) |port| {
-            port.deinit();
-            self.raknet_port = null;
-        }
 
         self.players.silence();
         self.players.destroyPlayers();
@@ -981,8 +948,6 @@ pub const Tecton = struct {
         self.plugin_runtime.deinit();
 
         self.worlds.deinit();
-
-        self.raknet.deinit();
 
         deinitRegistries();
         EntityTraits.deinitEntityTraitRegistry();
@@ -1032,11 +997,13 @@ const test_scope = struct {
     pub const test_dependency_19 = @import("./world/provider/chunk_entities.zig");
     pub const test_dependency_20 = @import("./world/provider/leveldb_provider.zig");
     pub const std = test_owner.std;
+    pub const Protocol = test_owner.Protocol;
+    pub const NetherNet = @import("./transport/nethernet.zig");
     pub const ServerProperties = test_owner.ServerProperties;
     pub const Tecton = test_owner.Tecton;
 };
 
-test "the RakNet MTU cap is the clamped config value, never a literal" {
+test "the advertisement carries Tecton's protocol and the clamped message cap" {
     try @import("tecton_test.zig").Suite(test_scope).case_000();
 }
 
@@ -1054,4 +1021,8 @@ test "the player snapshot goes quiet before the players are freed" {
 
 test {
     try @import("tecton_test.zig").Suite(test_scope).case_004();
+}
+
+test "world info reports net I/O and net dispatch, never RakNet" {
+    try @import("tecton_test.zig").Suite(test_scope).case_005();
 }

@@ -44,7 +44,7 @@ Tecton is built in **Zig** because the problems of Bedrock server software are p
 
 ## ✨ Core Features
 
-- 🌐 **Native RakNet networking.** A from-scratch RakNet implementation for low-latency, reliable UDP transport, with packet compression and batching built in.
+- 🌐 **NetherNet (WebRTC) transport.** Bedrock clients join through the same signaling, ICE and SCTP path the vanilla game uses, with packet compression and batching built in.
 - 💾 **LevelDB world storage.** Bedrock-compatible world persistence, with chunks managed, saved, and loaded by the engine.
 - 🧱 **Complete block system.** Placement, breaking, drops, and interaction.
 - 🎒 **Items & containers.** Item system with traits, containers (including double chests), inventory, and crafting.
@@ -64,6 +64,7 @@ Tecton is built in **Zig** because the problems of Bedrock server software are p
 > Status reflects the current state of the `main` branch. Contributions are welcome.
 
 **Networking & Session**
+- [x] NetherNet (WebRTC) transport and signaling
 - [x] Connections, login, and player spawning
 - [x] Multiplayer
 - [x] Chat and text handling
@@ -127,6 +128,61 @@ zig build -Doptimize=ReleaseFast
 ```
 
 > 💡 **Tip:** Connect from Minecraft Bedrock Edition by adding the server's IP and the default Bedrock port (`19132`) in the *Servers* tab.
+
+---
+
+## 🌐 Networking
+
+Tecton joins clients over **NetherNet**, the WebRTC-based transport Bedrock uses. The signaling
+listener is TCP; the rest of the path is UDP, so both must be reachable.
+
+| Port | Protocol | Purpose |
+|---|---|---|
+| `19132` | TCP | Partner signaling: `GET /v1/join`, `POST /v1/join/{networkId}` |
+| `19132` | UDP | Server-list ping / MOTD |
+| `7551` | UDP | LAN discovery (`lan-discovery=false` turns it off) |
+
+`port` is the signaling port. When a reverse proxy terminates TLS in front of the server, point
+`signaling-bind` at the loopback address and set `tls-mode=proxy`. `tls-mode=native` is accepted by
+the parser but not implemented yet: the listener stays plain and logs a warning at startup.
+
+### Identity and trust
+
+`identity-key` (default `server.key`) is the operator's P-384 key. It signs every signaling answer,
+and its fingerprint is what clients pin: back it up, keep it private, and rotate it deliberately —
+rotating it makes every client prompt again.
+
+- Plain HTTP signaling is trust-on-first-use: the player sees a prompt once, then the client pins the key.
+- HTTPS signaling needs no prompt when the token chains to a key the client already trusts.
+- Answers always carry `a=identity`.
+- `online-mode=true` verifies player tokens against `jwks-uri`; `require-client-identity` (implied by
+  online mode) also refuses tokens that do not chain to the operator or a JWKS key.
+
+### NAT and ICE
+
+- `public-candidate=203.0.113.7:19132` (or `[2001:db8::1]:19132`) advertises the public address of a
+  server behind NAT. Empty uses the address the client reached.
+- `ice-servers` is empty by default. Add `stun:host:port` or `turn:host:port@user:pass` entries only
+  when the server host can reach them; a relay helps clients whose NAT blocks direct UDP.
+- Signaling alone is not enough: WebRTC needs the server's UDP reachable. There is no “P2P without
+  opening ports”.
+
+### LAN discovery
+
+A client running on the same machine may already hold UDP `7551`. Start Tecton first, or set
+`lan-discovery=false` when the port is taken.
+
+### Migrating an existing `server.properties`
+
+`max-mtu`, `output-slab-slots`, `transient-slab-slots`, `outbox-slots` and `transport` no longer
+exist. An older `server.properties` still loads: each removed key logs `Unknown or invalid property`
+and the server starts with the remaining values.
+
+- `max-mtu` has no replacement: NetherNet negotiates the MTU inside SCTP.
+- `outbound-queue-slots`/`outbox-bytes` are gone too; NetherNet bounds each session's outbox on its
+  own (512 messages / 256 KiB), so budget roughly `max-sessions × 256 KiB`.
+- `gamemode=spectator` is accepted and advertised as adventure, because NetherNet exposes three game
+  modes.
 
 ---
 

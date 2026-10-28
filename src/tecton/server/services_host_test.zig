@@ -242,7 +242,8 @@ pub fn Suite(comptime scope: type) type {
 
             tecton.current_tps = 17.5;
             tecton.current_mspt = 2.25;
-            tecton.current_raknet_mspt = 0.5;
+            tecton.current_network_io_mspt = 0.5;
+            tecton.current_network_dispatch_mspt = 0.25;
             tecton.current_game_mspt = 1.75;
             tecton.profiler = .{};
             tecton.profiler.slow_ticks = 3;
@@ -251,7 +252,8 @@ pub fn Suite(comptime scope: type) type {
 
             try testing.expectEqual(@as(f64, 17.5), views.world_info.current_tps.*);
             try testing.expectEqual(@as(f64, 2.25), views.world_info.current_mspt.*);
-            try testing.expectEqual(@as(f64, 0.5), views.world_info.current_raknet_mspt.*);
+            try testing.expectEqual(@as(f64, 0.5), views.world_info.current_network_io_mspt.*);
+            try testing.expectEqual(@as(f64, 0.25), views.world_info.current_network_dispatch_mspt.*);
             try testing.expectEqual(@as(f64, 1.75), views.world_info.current_game_mspt.*);
             try testing.expectEqual(@as(u64, 3), views.world_info.profiler.slow_ticks);
             try testing.expectEqual(@as(f64, 30), views.world_info.targetTps());

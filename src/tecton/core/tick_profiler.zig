@@ -2,7 +2,7 @@ const std = @import("std");
 const log = @import("log.zig");
 
 pub const Phase = enum {
-    raknet_tick,
+    net_io,
     player_tick,
 
     visibility_pass,
@@ -12,6 +12,7 @@ pub const Phase = enum {
     main_tasks,
     drain_completed_2,
     packet_drain,
+    net_dispatch,
     packet_dispatch,
     handler_player_auth,
     handler_chunk_request,
@@ -178,9 +179,9 @@ pub const TickProfiler = struct {
 test "phases and counters accumulate atomically" {
     var profiler: TickProfiler = .{};
 
-    profiler.record(.raknet_tick, 1_000_000);
-    profiler.record(.raknet_tick, 3_000_000);
-    const stats = &profiler.phases[@intFromEnum(Phase.raknet_tick)];
+    profiler.record(.net_io, 1_000_000);
+    profiler.record(.net_io, 3_000_000);
+    const stats = &profiler.phases[@intFromEnum(Phase.net_io)];
     try std.testing.expectEqual(@as(u64, 2), @atomicLoad(u64, &stats.count, .monotonic));
     try std.testing.expectEqual(@as(u64, 4_000_000), @atomicLoad(u64, &stats.total_ns, .monotonic));
     try std.testing.expectEqual(@as(u64, 1_000_000), @atomicLoad(u64, &stats.min_ns, .monotonic));

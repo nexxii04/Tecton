@@ -272,7 +272,6 @@ test "an embedded server starts, ticks and stops on the nethernet transport" {
             .allocator = std.testing.allocator,
             .address = "127.0.0.1",
             .port = 0,
-            .transport = .nethernet,
             .identity_key = key_path,
         },
         .enable_console = false,

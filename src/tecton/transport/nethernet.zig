@@ -30,11 +30,20 @@ pub const Config = struct {
     online_mode: bool = false,
     jwks_uri: []const u8 = default_jwks_uri,
     identity_key: []const u8 = "server.key",
+    /// A verified identity is required from every client, offline server or not.
+    require_client_identity: bool = false,
     lan_discovery: bool = true,
     lan_port: u16 = 7551,
+    /// Host the plain signaling listener binds to; empty follows `address`.
+    signaling_bind: []const u8 = "",
+    /// `ip:port` or `[ipv6]:port` announced to clients behind NAT.
+    public_candidate: []const u8 = "",
+    /// Comma-separated STUN/TURN URLs; TURN credentials follow the URL as `@user:pass`.
+    ice_servers: []const u8 = "",
+    /// Concurrent sessions; zero derives the cap from `max_players`.
+    max_sessions: u32 = 0,
     max_message_size: u32 = 256 * 1024,
     transport_tick_ms: u32 = 10,
-    outbox_slots: u32 = 512,
 };
 
 /// Where the adapter reports what the transport saw. Both callbacks run on NetherNet's
@@ -60,14 +69,31 @@ pub const Adapter = struct {
     deps: Deps,
     identity: nethernet.identity.ServerProvider,
     verifier: ?nethernet.identity.Verifier = null,
+    ice_servers: []nethernet.web_rtc.IceServer = &.{},
+    public_candidate: ?nethernet.sdp_edit.PublicCandidate = null,
     host: *nethernet.server.Host,
     alive: std.atomic.Value(bool) = .init(true),
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, config: Config, deps: Deps) !*Adapter {
-        const bind = std.Io.net.IpAddress.parse(config.address, config.port) catch {
-            log.err("NetherNet cannot bind {s}:{d}: invalid address", .{ config.address, config.port });
+        const signal_host = if (config.signaling_bind.len > 0) config.signaling_bind else config.address;
+        const bind = std.Io.net.IpAddress.parse(signal_host, config.port) catch {
+            log.err("NetherNet cannot bind signaling to {s}:{d}: invalid address", .{ signal_host, config.port });
             return error.InvalidAddress;
         };
+
+        const ice_servers = parseIceServers(allocator, config.ice_servers) catch |err| {
+            log.err("ice-servers={s} is invalid: {s}", .{ config.ice_servers, @errorName(err) });
+            return err;
+        };
+        errdefer {
+            for (ice_servers) |server| freeIceServer(allocator, server);
+            allocator.free(ice_servers);
+        }
+        const public_candidate = parsePublicCandidate(allocator, config.public_candidate) catch |err| {
+            log.err("public-candidate={s} is invalid: expected ip:port or [ipv6]:port", .{config.public_candidate});
+            return err;
+        };
+        errdefer if (public_candidate) |candidate| allocator.free(candidate.address);
 
         const identity = nethernet.identity.ServerProvider.loadOrCreate(io, allocator, config.identity_key) catch |err| {
             log.err("NetherNet could not load the operator key {s}: {s}", .{ config.identity_key, @errorName(err) });
@@ -91,12 +117,14 @@ pub const Adapter = struct {
             .deps = deps,
             .identity = identity,
             .verifier = verifier,
+            .ice_servers = ice_servers,
+            .public_candidate = public_candidate,
             .host = undefined,
         };
 
         self.host = try nethernet.server.Host.init(io, allocator, hostConfig(config, self, bind));
         log.info("NetherNet listening on {s}:{d} (signaling), UDP {d} (motd) and UDP {d} (lan)", .{
-            config.address,
+            signal_host,
             config.port,
             config.port,
             if (config.lan_discovery) config.lan_port else 0,
@@ -131,6 +159,9 @@ pub const Adapter = struct {
         self.host.deinit();
         if (self.verifier) |*verifier| verifier.deinit();
         const allocator = self.allocator;
+        for (self.ice_servers) |server| freeIceServer(allocator, server);
+        if (self.ice_servers.len > 0) allocator.free(self.ice_servers);
+        if (self.public_candidate) |candidate| allocator.free(candidate.address);
         allocator.destroy(self);
     }
 
@@ -245,8 +276,84 @@ pub fn gameType(mode: protocol.GameMode) GameType {
     };
 }
 
+fn freeIceServer(allocator: std.mem.Allocator, server: nethernet.web_rtc.IceServer) void {
+    allocator.free(server.url);
+    allocator.free(server.username);
+    allocator.free(server.credential);
+}
+
+/// `stun:host:port, turn:host:port@user:pass`. TURN credentials are required by most
+/// relays, so they travel with the entry instead of a second property.
+fn parseIceServers(allocator: std.mem.Allocator, text: []const u8) ![]nethernet.web_rtc.IceServer {
+    var servers: std.ArrayList(nethernet.web_rtc.IceServer) = .empty;
+    errdefer {
+        for (servers.items) |server| freeIceServer(allocator, server);
+        servers.deinit(allocator);
+    }
+
+    var entries = std.mem.splitScalar(u8, text, ',');
+    while (entries.next()) |raw| {
+        const entry = std.mem.trim(u8, raw, " \t");
+        if (entry.len == 0) continue;
+
+        var url_text = entry;
+        var username: []const u8 = "";
+        var credential: []const u8 = "";
+        if (std.mem.indexOfScalar(u8, entry, '@')) |at| {
+            url_text = entry[0..at];
+            const credentials = entry[at + 1 ..];
+            const colon = std.mem.indexOfScalar(u8, credentials, ':') orelse return error.InvalidIceServer;
+            username = credentials[0..colon];
+            credential = credentials[colon + 1 ..];
+        }
+        // TLS-wrapped ICE (`stuns:`/`turns:`) is not supported by the peer stack.
+        if (!std.mem.startsWith(u8, url_text, "stun:") and !std.mem.startsWith(u8, url_text, "turn:")) {
+            return error.InvalidIceServer;
+        }
+
+        const url = try allocator.dupe(u8, url_text);
+        errdefer allocator.free(url);
+        const user = try allocator.dupe(u8, username);
+        errdefer allocator.free(user);
+        const pass = try allocator.dupe(u8, credential);
+        errdefer allocator.free(pass);
+        try servers.append(allocator, .{ .url = url, .username = user, .credential = pass });
+    }
+
+    return servers.toOwnedSlice(allocator);
+}
+
+fn parsePublicCandidate(allocator: std.mem.Allocator, text: []const u8) !?nethernet.sdp_edit.PublicCandidate {
+    const trimmed = std.mem.trim(u8, text, " \t");
+    if (trimmed.len == 0) return null;
+
+    var host: []const u8 = undefined;
+    var port_text: []const u8 = undefined;
+    if (trimmed[0] == '[') {
+        const close = std.mem.indexOfScalar(u8, trimmed, ']') orelse return error.InvalidPublicCandidate;
+        if (close + 1 >= trimmed.len or trimmed[close + 1] != ':') return error.InvalidPublicCandidate;
+        host = trimmed[1..close];
+        port_text = trimmed[close + 2 ..];
+    } else {
+        const colon = std.mem.lastIndexOfScalar(u8, trimmed, ':') orelse return error.InvalidPublicCandidate;
+        host = trimmed[0..colon];
+        port_text = trimmed[colon + 1 ..];
+    }
+
+    const port = std.fmt.parseInt(u16, port_text, 10) catch return error.InvalidPublicCandidate;
+    const address = try allocator.dupe(u8, host);
+    errdefer allocator.free(address);
+    const candidate = nethernet.sdp_edit.PublicCandidate{ .address = address, .port = port };
+    nethernet.sdp_edit.validateCandidate(candidate) catch return error.InvalidPublicCandidate;
+    return candidate;
+}
+
 fn hostConfig(config: Config, self: *Adapter, bind: std.Io.net.IpAddress) nethernet.server.Host.Config {
-    const max_sessions: usize = @max(64, @as(usize, config.max_players) + 32);
+    const requested_sessions = if (config.max_sessions != 0)
+        @as(usize, config.max_sessions)
+    else
+        @as(usize, config.max_players) + 32;
+    const max_sessions: usize = std.math.clamp(requested_sessions, 64, 4096);
     const players = self.deps.players orelse nethernet.server.PlayerSource{ .ctx = self, .count = Adapter.countPlayers };
     return .{
         .server_data = serverData(config),
@@ -274,8 +381,10 @@ fn hostConfig(config: Config, self: *Adapter, bind: std.Io.net.IpAddress) nether
         .motd_config = .{ .port = config.port },
         .identity = self.identity,
         .identity_verifier = if (self.verifier) |*verifier| verifier else null,
-        .accept_unverified_identity = !config.online_mode,
-        .require_client_identity = config.online_mode,
+        .accept_unverified_identity = !config.online_mode and !config.require_client_identity,
+        .require_client_identity = config.require_client_identity,
+        .ice_servers = self.ice_servers,
+        .public_candidate = self.public_candidate,
         .spawn_ticker = false,
         .player_source = players,
     };
@@ -350,6 +459,14 @@ test "an offline adapter binds without a verifier and leaves the ticking to Tect
     try testing.expectEqualStrings("adapter test", adapter.host.config.server_data.server_name);
     try testing.expectEqualStrings("world", adapter.host.config.server_data.level_name);
     try testing.expectEqual(GameType.survival, adapter.host.config.server_data.game_type);
+    try testing.expectEqual(@as(u32, 256 * 1024), adapter.host.config.max_message_size);
+    try testing.expect(!adapter.host.config.require_client_identity.?);
+    try testing.expect(adapter.host.config.accept_unverified_identity);
+
+    const strict = hostConfig(.{ .require_client_identity = true, .max_sessions = 128 }, adapter, adapter.host.config.http_config.bind_address);
+    try testing.expect(strict.require_client_identity.?);
+    try testing.expect(!strict.accept_unverified_identity);
+    try testing.expectEqual(@as(usize, 128), strict.http_config.max_sessions);
 
     try adapter.start();
     try testing.expect(adapter.host.run_thread == null);
@@ -399,6 +516,42 @@ test "the advertisement carries Tecton's protocol and level, not the transport's
 test "spectator is advertised as adventure" {
     try testing.expectEqual(GameType.adventure, gameType(.Spectator));
     try testing.expectEqual(GameType.survival, gameType(.Survival));
+}
+
+test "ice servers parse with optional turn credentials" {
+    const servers = try parseIceServers(testing.allocator, " stun:stun.example.org:3478 , turn:relay.example.org:3478@alice:secret");
+    defer {
+        for (servers) |server| freeIceServer(testing.allocator, server);
+        testing.allocator.free(servers);
+    }
+
+    try testing.expectEqual(@as(usize, 2), servers.len);
+    try testing.expectEqualStrings("stun:stun.example.org:3478", servers[0].url);
+    try testing.expectEqualStrings("", servers[0].username);
+    try testing.expectEqualStrings("turn:relay.example.org:3478", servers[1].url);
+    try testing.expectEqualStrings("alice", servers[1].username);
+    try testing.expectEqualStrings("secret", servers[1].credential);
+
+    try testing.expectError(error.InvalidIceServer, parseIceServers(testing.allocator, "http://example.org"));
+    try testing.expectError(error.InvalidIceServer, parseIceServers(testing.allocator, "turn:relay.example.org@alice"));
+    const empty = try parseIceServers(testing.allocator, "  ");
+    testing.allocator.free(empty);
+}
+
+test "the public candidate accepts both address families and rejects bare hosts" {
+    const ipv4 = (try parsePublicCandidate(testing.allocator, "203.0.113.7:19132")).?;
+    defer testing.allocator.free(ipv4.address);
+    try testing.expectEqualStrings("203.0.113.7", ipv4.address);
+    try testing.expectEqual(@as(u16, 19132), ipv4.port);
+
+    const ipv6 = (try parsePublicCandidate(testing.allocator, "[2001:db8::1]:19133")).?;
+    defer testing.allocator.free(ipv6.address);
+    try testing.expectEqualStrings("2001:db8::1", ipv6.address);
+    try testing.expectEqual(@as(u16, 19133), ipv6.port);
+
+    try testing.expect((try parsePublicCandidate(testing.allocator, "")) == null);
+    try testing.expectError(error.InvalidPublicCandidate, parsePublicCandidate(testing.allocator, "203.0.113.7"));
+    try testing.expectError(error.InvalidPublicCandidate, parsePublicCandidate(testing.allocator, "203.0.113.7:0"));
 }
 
 test "a player count past the protocol field is clamped, not wrapped" {

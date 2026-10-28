@@ -36,13 +36,17 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_002() !void {
-            const clamp = ServerProperties.clampMaxMtu;
-            try std.testing.expectEqual(ServerProperties.max_max_mtu, clamp(ServerProperties.max_max_mtu));
-            try std.testing.expectEqual(@as(u16, 1400), clamp(1492));
-            try std.testing.expectEqual(ServerProperties.max_max_mtu, clamp(std.math.maxInt(u16)));
-            try std.testing.expectEqual(@as(u16, 1028), clamp(1028));
-            try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(ServerProperties.min_max_mtu));
-            try std.testing.expectEqual(ServerProperties.min_max_mtu, clamp(0));
+            const clamp = ServerProperties.clampTransportTickMs;
+            try std.testing.expectEqual(@as(u32, 10), clamp(10));
+            try std.testing.expectEqual(ServerProperties.min_transport_tick_ms, clamp(0));
+            try std.testing.expectEqual(ServerProperties.min_transport_tick_ms, clamp(1));
+            try std.testing.expectEqual(ServerProperties.max_transport_tick_ms, clamp(1000));
+            try std.testing.expectEqual(ServerProperties.max_transport_tick_ms, clamp(std.math.maxInt(u32)));
+
+            const message = ServerProperties.clampMaxMessageSize;
+            try std.testing.expectEqual(@as(u32, 262144), message(262144));
+            try std.testing.expectEqual(ServerProperties.min_max_message_size, message(0));
+            try std.testing.expectEqual(ServerProperties.max_max_message_size, message(1 << 20));
         }
 
         pub fn case_003() !void {
@@ -151,42 +155,52 @@ pub fn Suite(comptime scope: type) type {
         pub fn case_009() !void {
             var properties = ServerProperties{ .allocator = std.testing.allocator };
             defer properties.deinit();
-            try std.testing.expectEqual(ServerProperties.max_max_mtu, properties.max_mtu);
+            try std.testing.expectEqual(@as(u32, 0), properties.max_sessions);
+            try std.testing.expectEqual(@as(u32, 152), properties.effectiveMaxSessions());
+
+            properties.max_players = 300;
+            try std.testing.expectEqual(@as(u32, 332), properties.effectiveMaxSessions());
+
+            properties.max_players = 4096;
+            try std.testing.expectEqual(ServerProperties.max_max_sessions, properties.effectiveMaxSessions());
         }
 
         pub fn case_010() !void {
             var properties = ServerProperties{ .allocator = std.testing.allocator };
             defer properties.deinit();
 
-            try scope.set_field(&properties, "max-mtu", "1028");
-            try std.testing.expectEqual(@as(u16, 1028), properties.max_mtu);
+            try scope.set_field(&properties, "max-sessions", "256");
+            try std.testing.expectEqual(@as(u32, 256), properties.max_sessions);
 
-            try std.testing.expectError(error.InvalidValue, scope.set_field(&properties, "max-mtu", "big"));
-            try std.testing.expectError(error.UnknownProperty, scope.set_field(&properties, "mtu", "1028"));
+            try scope.set_field(&properties, "max-sessions", "0");
+            try std.testing.expectEqual(@as(u32, 0), properties.max_sessions);
+
+            try std.testing.expectError(error.InvalidValue, scope.set_field(&properties, "max-sessions", "many"));
+            try std.testing.expectError(error.UnknownProperty, scope.set_field(&properties, "sessions", "256"));
         }
 
         pub fn case_011() !void {
             const io = std.testing.io;
             const allocator = std.testing.allocator;
-            const path = "test-max-mtu.properties";
+            const path = "test-max-sessions.properties";
             defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
             var properties = ServerProperties{ .allocator = allocator };
             defer properties.deinit();
-            properties.max_mtu = 1188;
+            properties.max_sessions = 512;
             try properties.save(io, path);
 
-            var content: [4096]u8 = undefined;
+            var content: [8192]u8 = undefined;
             const file = try std.Io.Dir.cwd().openFile(io, path, .{});
             defer file.close(io);
             var read_buf: [512]u8 = undefined;
             var reader = file.reader(io, &read_buf);
             const bytes = try reader.interface.readSliceShort(&content);
-            try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nmax-mtu=1188\n") != null);
+            try std.testing.expect(std.mem.indexOf(u8, content[0..bytes], "\nmax-sessions=512\n") != null);
 
             var loaded = try ServerProperties.load(io, allocator, path);
             defer loaded.deinit();
-            try std.testing.expectEqual(@as(u16, 1188), loaded.max_mtu);
+            try std.testing.expectEqual(@as(u32, 512), loaded.max_sessions);
             try std.testing.expectEqual(@as(u16, 19132), loaded.port);
         }
 
@@ -251,6 +265,76 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_016() !void {
             try std.testing.expect(!shouldEmitStartupLogs());
+        }
+
+        pub fn case_018() !void {
+            var properties = ServerProperties{ .allocator = std.testing.allocator };
+            defer properties.deinit();
+
+            try std.testing.expectEqualStrings("", properties.signaling_bind);
+            try std.testing.expectEqual(scope.TlsMode.off, properties.tls_mode);
+            try std.testing.expectEqualStrings(scope.default_jwks_uri, properties.jwks_uri);
+            try std.testing.expect(!properties.require_client_identity);
+            try std.testing.expect(!properties.clientIdentityRequired());
+            try std.testing.expectEqualStrings("", properties.public_candidate);
+            try std.testing.expectEqualStrings("", properties.ice_servers);
+
+            try scope.set_field(&properties, "signaling-bind", "127.0.0.1");
+            try std.testing.expectEqualStrings("127.0.0.1", properties.signaling_bind);
+
+            try scope.set_field(&properties, "tls-mode", "proxy");
+            try std.testing.expectEqual(scope.TlsMode.proxy, properties.tls_mode);
+            try std.testing.expectError(error.InvalidValue, scope.set_field(&properties, "tls-mode", "terminate"));
+
+            try scope.set_field(&properties, "require-client-identity", "true");
+            try std.testing.expect(properties.clientIdentityRequired());
+
+            properties.online_mode = true;
+            properties.require_client_identity = false;
+            try std.testing.expect(properties.clientIdentityRequired());
+        }
+
+        pub fn case_019() !void {
+            const io = std.testing.io;
+            const allocator = std.testing.allocator;
+            const path = "test-legacy.properties";
+            defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+            const legacy =
+                "port=19133\n" ++
+                "transport=raknet\n" ++
+                "max-mtu=1400\n" ++
+                "output-slab-slots=512\n" ++
+                "transient-slab-slots=128\n" ++
+                "outbox-slots=512\n" ++
+                "max-players=42\n";
+            const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+            file.writeStreamingAll(io, legacy) catch |err| {
+                file.close(io);
+                return err;
+            };
+            file.close(io);
+
+            var loaded = try ServerProperties.load(io, allocator, path);
+            defer loaded.deinit();
+            try std.testing.expectEqual(@as(u16, 19133), loaded.port);
+            try std.testing.expectEqual(@as(u32, 42), loaded.max_players);
+            try std.testing.expectEqual(@as(u32, 10), loaded.transport_tick_ms);
+            try std.testing.expectEqual(@as(u32, 0), loaded.max_sessions);
+        }
+
+        pub fn case_020() !void {
+            var properties = ServerProperties{ .allocator = std.testing.allocator };
+            defer properties.deinit();
+
+            try scope.set_field(&properties, "ice-servers", "stun:stun.example.org:3478");
+            try std.testing.expectEqualStrings("stun:stun.example.org:3478", properties.ice_servers);
+
+            try scope.set_field(&properties, "public-candidate", "203.0.113.7:19132");
+            try std.testing.expectEqualStrings("203.0.113.7:19132", properties.public_candidate);
+
+            try scope.set_field(&properties, "jwks-uri", "https://example.org/keys");
+            try std.testing.expectEqualStrings("https://example.org/keys", properties.jwks_uri);
         }
 
         pub fn case_017() !void {

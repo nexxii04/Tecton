@@ -332,7 +332,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .server_editor_connection_policy = 0,
         .allow_anonimous_block_drops_in_editor_worlds = false,
         .level_identifier = "Tecton",
-        .level_name = state.tecton.raknet.options.advertisement.level_name,
+        .level_name = state.tecton.config.level_name,
         .premium_world_template_id = "00000000-0000-0000-0000-000000000000",
         .is_trial = false,
         .rewind_history_size = 0,
@@ -340,7 +340,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .current_tick = 0,
         .enchantment_seed = 0,
         .block_type_definitions = block_definitions,
-        .multiplayer_correlation_id = "<raknet>",
+        .multiplayer_correlation_id = "<nethernet>",
         .server_authoritative_inventory = true,
         .engine = "Tecton",
         .properties = properties,
@@ -353,7 +353,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .server_telemetry_data = Protocol.ServerTelemetryData.init(
             "Tecton",
             "tecton.default",
-            state.tecton.raknet.options.advertisement.level_name,
+            state.tecton.config.level_name,
             player.username,
         ),
     };

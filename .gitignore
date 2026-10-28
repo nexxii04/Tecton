@@ -21,6 +21,7 @@ skills-lock.json
 zig-out-verify
 
 server.properties
+server.key
 worlds/
 libs/leveldb/lib/
 permissions.json

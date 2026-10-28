@@ -76,20 +76,22 @@ fn handle(raw: *anyopaque) void {
 
     const target_tps = tecton.targetTps();
     const current_mspt = tecton.current_mspt.*;
-    const raknet_mspt = tecton.current_raknet_mspt.*;
+    const net_io_mspt = tecton.current_network_io_mspt.*;
+    const net_dispatch_mspt = tecton.current_network_dispatch_mspt.*;
     const game_mspt = tecton.current_game_mspt.*;
     const slow_pct = tecton.profiler.slowTickPct();
     const tps_ratio = if (target_tps > 0.0) tecton.current_tps.* / target_tps else 1.0;
     const tps_color: []const u8 = if (tps_ratio >= 0.975) "§a" else if (tps_ratio >= 0.75) "§e" else "§c";
     const slow_color: []const u8 = if (tecton.profiler.slow_ticks == 0) "§a" else if (slow_pct < 5.0) "§e" else "§c";
 
-    std.Io.Writer.print(&writer, "§6World: §f{s}\n§7TPS: {s}{d:.1}§7/§f{d:.1} §7MSPT: §f{d:.2}ms §7RakNet: §f{d:.2}ms §7Game: §f{d:.2}ms §7SlowTicks: {s}{d} §7({d:.1}%)", .{
+    std.Io.Writer.print(&writer, "§6World: §f{s}\n§7TPS: {s}{d:.1}§7/§f{d:.1} §7MSPT: §f{d:.2}ms §7Net I/O: §f{d:.2}ms §7Net dispatch: §f{d:.2}ms §7Game: §f{d:.2}ms §7SlowTicks: {s}{d} §7({d:.1}%)", .{
         world.identifier,
         tps_color,
         tecton.current_tps.*,
         target_tps,
         current_mspt,
-        raknet_mspt,
+        net_io_mspt,
+        net_dispatch_mspt,
         game_mspt,
         slow_color,
         tecton.profiler.slow_ticks,

@@ -39,11 +39,6 @@ pub fn onTick(context: ?*anyopaque) void {
     _ = tecton.events.emit(.ServerTick, &tick_event);
     tecton.ecs.tick();
 
-    // The transport ticks on its own thread; this is a snapshot, not work done by this tick.
-    const transport_ns: u64 = @intCast(@max(0, tecton.raknet.last_connection_tick_ns.nanoseconds));
-    tecton.raknet_time_accumulator += transport_ns;
-    tecton.profiler.record(.raknet_tick, transport_ns);
-
     // Fallback for the shared layout and the pump-less tick: four waves per tick bound the gap between drains to roughly a quarter of the tick.
     const tick_drains_input = !tecton.network.inputPumpActive();
     const packet_drain_budget = (tick_budget_ns * packet_drain_budget_pct / 100) / 4;
@@ -69,8 +64,10 @@ pub fn onTick(context: ?*anyopaque) void {
     }
 
     // Transport callbacks only publish ids; opening and closing sessions happens here.
+    const net_dispatch_start = Timestamp.now(tecton.io, .awake);
     tecton.drainTransportEvents();
     tecton.reconcileClosedConnections();
+    var net_dispatch_ns: u64 = @intCast(@max(0, net_dispatch_start.durationTo(.now(tecton.io, .awake)).nanoseconds));
     tecton.drainPendingPlayerRemovals();
     tecton.rebuildPlayerSnapshot();
 
@@ -146,6 +143,11 @@ pub fn onTick(context: ?*anyopaque) void {
         packet_drain_ns += @intCast(@max(0, phase_start.durationTo(.now(tecton.io, .awake)).nanoseconds));
         tecton.profiler.record(.packet_drain, packet_drain_ns);
     }
+
+    // What this tick spent on the network: transport bookkeeping plus any inline drain.
+    net_dispatch_ns += packet_drain_ns;
+    tecton.network_dispatch_accumulator += net_dispatch_ns;
+    tecton.profiler.record(.net_dispatch, net_dispatch_ns);
 
     const work_end = work_start.durationTo(.now(tecton.io, .awake));
     const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
