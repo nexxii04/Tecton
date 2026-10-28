@@ -357,6 +357,75 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqualStrings("https://example.org/keys", properties.jwks_uri);
         }
 
+        pub fn case_022() !void {
+            var properties = ServerProperties{ .allocator = std.testing.allocator };
+            defer properties.deinit();
+
+            try std.testing.expectEqual(@as(u16, 443), properties.tls_port);
+            try std.testing.expectEqualStrings("", properties.tls_cert);
+            try std.testing.expectEqualStrings("", properties.tls_key);
+            try std.testing.expect(properties.tlsProblem() == null);
+
+            try scope.set_field(&properties, "tls-mode", "native");
+            try std.testing.expectEqual(ServerProperties.TlsProblem.plain_listener_exposed, properties.tlsProblem().?);
+
+            try scope.set_field(&properties, "signaling-bind", "127.0.0.1");
+            try std.testing.expectEqual(ServerProperties.TlsProblem.missing_certificate, properties.tlsProblem().?);
+
+            try scope.set_field(&properties, "tls-cert", "cert.pem");
+            try std.testing.expectEqual(ServerProperties.TlsProblem.missing_key, properties.tlsProblem().?);
+
+            try scope.set_field(&properties, "tls-key", "key.pem");
+            try std.testing.expect(properties.tlsProblem() == null);
+
+            try scope.set_field(&properties, "tls-port", "0");
+            try std.testing.expectEqual(ServerProperties.TlsProblem.zero_tls_port, properties.tlsProblem().?);
+            try scope.set_field(&properties, "tls-port", "8443");
+            try std.testing.expectEqual(@as(u16, 8443), properties.tls_port);
+            try std.testing.expectError(error.InvalidValue, scope.set_field(&properties, "tls-port", "https"));
+
+            try scope.set_field(&properties, "signaling-bind", "::1");
+            try std.testing.expect(properties.tlsProblem() == null);
+
+            try scope.set_field(&properties, "signaling-bind", "0.0.0.0");
+            try std.testing.expectEqual(ServerProperties.TlsProblem.plain_listener_exposed, properties.tlsProblem().?);
+
+            try scope.set_field(&properties, "tls-mode", "proxy");
+            try std.testing.expectEqual(ServerProperties.TlsProblem.plain_listener_exposed, properties.tlsProblem().?);
+            try scope.set_field(&properties, "signaling-bind", "127.0.0.1");
+            try std.testing.expect(properties.tlsProblem() == null);
+
+            try std.testing.expect(ServerProperties.isLoopbackHost("127.0.0.1"));
+            try std.testing.expect(ServerProperties.isLoopbackHost("127.10.0.1"));
+            try std.testing.expect(ServerProperties.isLoopbackHost("::1"));
+            try std.testing.expect(!ServerProperties.isLoopbackHost("0.0.0.0"));
+            try std.testing.expect(!ServerProperties.isLoopbackHost("::"));
+            try std.testing.expect(!ServerProperties.isLoopbackHost("localhost"));
+        }
+
+        pub fn case_023() !void {
+            const io = std.testing.io;
+            const path = "test-tls.properties";
+            defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+            var properties = ServerProperties{ .allocator = std.testing.allocator };
+            defer properties.deinit();
+            try scope.set_field(&properties, "tls-mode", "native");
+            try scope.set_field(&properties, "signaling-bind", "127.0.0.1");
+            try scope.set_field(&properties, "tls-cert", "/etc/tecton/fullchain.pem");
+            try scope.set_field(&properties, "tls-key", "/etc/tecton/privkey.pem");
+            try scope.set_field(&properties, "tls-port", "8443");
+            try properties.save(io, path);
+
+            var loaded = try ServerProperties.load(io, std.testing.allocator, path);
+            defer loaded.deinit();
+            try std.testing.expectEqual(scope.TlsMode.native, loaded.tls_mode);
+            try std.testing.expectEqualStrings("/etc/tecton/fullchain.pem", loaded.tls_cert);
+            try std.testing.expectEqualStrings("/etc/tecton/privkey.pem", loaded.tls_key);
+            try std.testing.expectEqual(@as(u16, 8443), loaded.tls_port);
+            try std.testing.expect(loaded.tlsProblem() == null);
+        }
+
         pub fn case_017() !void {
             const clamp = ServerProperties.clampViewDistance;
 

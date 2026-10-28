@@ -13,6 +13,7 @@ const port_mod = @import("./transport/port.zig");
 /// Longest a shutdown waits for queued disconnects to leave the transport.
 const shutdown_flush_ms: i64 = 500;
 const NetherNetAdapter = @import("./transport/nethernet.zig").Adapter;
+const tls_front_mod = @import("./server/tls_front.zig");
 
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
 const ServerProperties = @import("./core/config.zig").ServerProperties;
@@ -110,6 +111,7 @@ pub const Tecton = struct {
     composition: Composition,
     events: Events.Events,
     nethernet: ?*NetherNetAdapter = null,
+    tls_front: ?*tls_front_mod.Front = null,
     transport_clock: ?tick_loop.Clock = null,
     transport_events: std.ArrayList(events_mod.Event) = .empty,
     reconcile_batch: std.ArrayList(*Player) = .empty,
@@ -215,6 +217,27 @@ pub const Tecton = struct {
                 ServerProperties.max_transport_tick_ms,
                 transport_tick_ms,
             });
+        }
+        if (owned_config.tlsProblem()) |problem| {
+            switch (problem) {
+                .missing_certificate => log.err(
+                    "tls-mode=native needs tls-cert pointing at a PEM certificate chain",
+                    .{},
+                ),
+                .missing_key => log.err(
+                    "tls-mode=native needs tls-key pointing at the PEM private key",
+                    .{},
+                ),
+                .plain_listener_exposed => log.err(
+                    "tls-mode={s} requires a loopback signaling listener; set signaling-bind=127.0.0.1 (or ::1) instead of {s}",
+                    .{ @tagName(owned_config.tls_mode), owned_config.plainSignalingHost() },
+                ),
+                .zero_tls_port => log.err(
+                    "tls-mode=native needs a real tls-port: 0 would bind an ephemeral port clients cannot guess",
+                    .{},
+                ),
+            }
+            return error.TlsMisconfigured;
         }
         const movement_priority = SendPriority.parse(owned_config.movement_send_priority) orelse fallback: {
             log.warn("movement-send-priority={s} is not a known priority, using immediate", .{owned_config.movement_send_priority});
@@ -396,6 +419,7 @@ pub const Tecton = struct {
         });
         self.network_initialized = true;
         try self.attachNetherNetPort();
+        try self.attachTlsFront();
         try self.prepare();
         self.tick_thread_id.store(0, .release);
         const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
@@ -425,7 +449,12 @@ pub const Tecton = struct {
         switch (self.config.tls_mode) {
             .off => log.info("Signaling TLS: off (plain HTTP; clients prompt before trusting it)", .{}),
             .proxy => log.info("Signaling TLS: terminated by a proxy in front of the listener", .{}),
-            .native => log.warn("tls-mode=native is not implemented yet; the signaling listener stays plain", .{}),
+            .native => log.info("Signaling TLS: native front on {s}:{d}, plain listener on {s}:{d}", .{
+                self.config.address,
+                self.config.tls_port,
+                self.config.plainSignalingHost(),
+                self.config.port,
+            }),
         }
         if (self.config.lan_discovery and self.config.lan_port == self.config.port) {
             log.warn("lan-port and port share {d}: LAN discovery and the MOTD listener both need UDP, so one of them will not bind", .{self.config.port});
@@ -487,6 +516,12 @@ pub const Tecton = struct {
 
         if (self.nethernet) |adapter| {
             try adapter.start();
+            if (self.tls_front) |front| {
+                front.start() catch |err| {
+                    adapter.stop();
+                    return err;
+                };
+            }
             self.transport_clock = tick_loop.Clock.init(
                 self.io,
                 @as(u64, ServerProperties.clampTransportTickMs(self.config.transport_tick_ms)) * std.time.ns_per_ms,
@@ -545,6 +580,26 @@ pub const Tecton = struct {
         self.network.attachPort(adapter.port());
     }
 
+    fn attachTlsFront(self: *Tecton) !void {
+        if (self.config.tls_mode != .native) return;
+        const bind = std.Io.net.IpAddress.parse(self.config.address, self.config.tls_port) catch {
+            log.err("tls-port={d} cannot be served on address={s}: not an IP address", .{ self.config.tls_port, self.config.address });
+            return error.InvalidAddress;
+        };
+        const backend = std.Io.net.IpAddress.parse(self.config.plainSignalingHost(), self.config.port) catch {
+            log.err("tls-mode=native needs signaling-bind to be an IP literal, not {s}", .{self.config.plainSignalingHost()});
+            return error.InvalidAddress;
+        };
+        self.tls_front = try tls_front_mod.Front.init(self.io, self.allocator, .{
+            .bind = bind,
+            .backend = backend,
+            .cert_path = self.config.tls_cert,
+            .key_path = self.config.tls_key,
+            // One thread per TLS session; cap it even when max-sessions is higher.
+            .max_connections = @min(self.config.effectiveMaxSessions(), 256),
+        });
+    }
+
     fn netherNetTick(context: ?*anyopaque) void {
         const self: *Tecton = @ptrCast(@alignCast(context.?));
         const started = Timestamp.now(self.io, .awake);
@@ -599,6 +654,8 @@ pub const Tecton = struct {
             self.closePlayer(player, .flush, .{ .message = "Server shutdown." });
         }
 
+        // Stop TLS first: no new signaling connection may reach a transport that is going away.
+        if (self.tls_front) |front| front.stop();
         self.shutdownTransport();
     }
 
@@ -943,6 +1000,10 @@ pub const Tecton = struct {
         }
 
         if (self.transport_clock) |*clock| clock.stop();
+        if (self.tls_front) |front| {
+            front.deinit();
+            self.tls_front = null;
+        }
         if (self.nethernet) |adapter| {
             adapter.deinit();
             self.nethernet = null;

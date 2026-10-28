@@ -141,10 +141,113 @@ listener is TCP; the rest of the path is UDP, so both must be reachable.
 | `19132` | TCP | Partner signaling: `GET /v1/join`, `POST /v1/join/{networkId}` |
 | `19132` | UDP | Server-list ping / MOTD |
 | `7551` | UDP | LAN discovery (`lan-discovery=false` turns it off) |
+| `443` (`tls-port`) | TCP | HTTPS signaling with `tls-mode=native` |
 
-`port` is the signaling port. When a reverse proxy terminates TLS in front of the server, point
-`signaling-bind` at the loopback address and set `tls-mode=proxy`. `tls-mode=native` is accepted by
-the parser but not implemented yet: the listener stays plain and logs a warning at startup.
+`port` is the plain signaling port. `address` is the default host for the signaling and MOTD
+listeners, and `signaling-bind` overrides only the signaling host: that is how the plain listener
+stays on loopback while the MOTD remains reachable.
+
+### Signaling TLS
+
+HTTPS signaling removes the trust prompt the client shows for plain HTTP. `tls-mode` picks how the
+HTTPS endpoint is provided:
+
+| `tls-mode` | Behavior |
+|---|---|
+| `off` (default) | Signaling stays plain HTTP; every player sees the trust prompt once. |
+| `proxy` | A reverse proxy in front terminates TLS; Tecton only serves plain HTTP on loopback. |
+| `native` | Tecton terminates TLS itself and forwards plain HTTP to the signaling listener. |
+
+With `proxy` or `native`, `signaling-bind` must be a loopback address (`127.0.0.1`, `::1`, or any
+`127.0.0.0/8`). The server refuses to start otherwise, so the plain port can never be reached from
+the network. `tls-mode` does not replace `a=identity`: the operator key keeps signing every answer.
+
+#### Mode A — reverse proxy (any platform)
+
+Point `signaling-bind` at loopback and give the proxy enough room for an SDP offer. nginx:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name bedrock.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/bedrock.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bedrock.example.com/privkey.pem;
+
+    client_max_body_size 512k;      # SDP offers are capped at 256 KiB
+    proxy_request_buffering off;    # the offer is written while the client is still sending
+    proxy_read_timeout 60s;         # ICE gathering can take several seconds
+    proxy_send_timeout 60s;
+
+    location / {
+        proxy_pass http://127.0.0.1:19132;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+    }
+}
+```
+
+Caddy has no request-body limit by default and keeps connections open long enough for ICE; the
+minimal block is:
+
+```caddyfile
+bedrock.example.com {
+    reverse_proxy 127.0.0.1:19132
+}
+```
+
+If you add `request_body { max_size ... }`, keep the limit at 512 KB or more.
+
+#### Mode B — native TLS (POSIX)
+
+```properties
+address=0.0.0.0
+signaling-bind=127.0.0.1
+tls-mode=native
+tls-cert=/etc/tecton/fullchain.pem
+tls-key=/etc/tecton/privkey.pem
+tls-port=443
+```
+
+The front accepts TLS on `address:tls-port`, speaks only HTTP/1.1 (ALPN), and forwards the plain
+text to `signaling-bind:port`. It uses TLS 1.2, which is the protocol set enabled by the mbedTLS
+build in the dependency tree; the certificate replaces the client's trust prompt.
+
+Clients reach HTTPS at `address:tls-port` (443 by default), while the server-list ping and MOTD
+stay on `port` over UDP. The ping does not advertise `tls-port`: a value other than 443 is not
+discoverable and its behavior with retail clients is unverified, so keep 443 until that is tested.
+
+- The front is built on POSIX sockets and verified on Linux. On Windows it refuses to start:
+  Zig 0.16's Windows sockets cannot be polled for a byte relay. Use Mode A there.
+- A handshake has one 15 s deadline measured from the accept, idle keep-alives close after 60 s,
+  each write to a peer that stopped reading is abandoned after 30 s and the TLS close notification
+  gets 1 s more, so a stalled client never pins a relay thread.
+- The loopback connect to the plain listener is not timed: Zig 0.16 panics when `netConnectIp`
+  receives a timeout, and the listener is local and started with the server.
+- The front serves at most `min(max-sessions, 256)` TLS connections at once; connections over that
+  limit are closed as soon as they are accepted.
+- `tls-cert` is a PEM chain, `tls-key` its PEM private key. Make the key `0600` and never commit
+  it. Startup fails with a clear error when either is unreadable, unparsable or does not match.
+  `tests/tls/` holds a throwaway self-signed pair that only the test suite uses.
+
+#### Certificate renewal
+
+- Renew with your ACME client (Certbot, Caddy, acme.sh) and keep the private key at `0600`, out of
+  the repository.
+- The front reads `tls-cert` and `tls-key` once at startup: there is no hot reload. Restart Tecton
+  after renewing (in Mode A, reload the proxy instead).
+- Verify the renewal with
+  `openssl s_client -connect host:tls-port -servername host -alpn http/1.1` (check the new dates)
+  and run the smoke test below; it must still answer 200.
+
+Smoke test either mode from another machine (pass the CA file when the certificate is not publicly
+trusted):
+
+```bash
+tests/tls/signaling-smoke.sh https://bedrock.example.com
+tests/tls/signaling-smoke.sh https://203.0.113.7:8443 /path/to/ca.pem
+```
 
 ### Identity and trust
 
@@ -193,6 +296,9 @@ A client running on the same machine may already hold UDP `7551`. Start Tecton f
 `max-mtu`, `output-slab-slots`, `transient-slab-slots`, `outbound-queue-slots` and `transport` no
 longer exist. An older `server.properties` still loads: each removed key logs `Unknown or invalid property`
 and the server starts with the remaining values.
+
+`tls-cert`, `tls-key` and `tls-port` are optional; without them signaling stays plain. `proxy` and
+`native` require a loopback `signaling-bind`, or startup fails.
 
 - `max-mtu` has no replacement: NetherNet negotiates the MTU inside SCTP.
 - `outbound-queue-slots`/`outbox-bytes` are gone too; each session's outbox is bounded by

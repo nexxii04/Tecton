@@ -6,8 +6,7 @@ const WorkerLayout = @import("../tasks/threaded_tasks.zig").WorkerLayout;
 
 pub const default_jwks_uri = "https://authorization.franchise.minecraft-services.net/.well-known/keys";
 
-/// How signaling TLS is provided. `proxy` leaves the plain listener to an external terminator;
-/// `native` terminates TLS inside the server.
+/// How signaling TLS is provided: `proxy` uses an external terminator, `native` terminates here.
 pub const TlsMode = enum { off, proxy, native };
 
 pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
@@ -23,6 +22,9 @@ pub const ServerProperties = struct {
     port: u16 = 19132,
     signaling_bind: []const u8 = "",
     tls_mode: TlsMode = .off,
+    tls_cert: []const u8 = "",
+    tls_key: []const u8 = "",
+    tls_port: u16 = 443,
     motd: []const u8 = "Tecton Server",
     level_name: []const u8 = "Bedrock level",
     gamemode: []const u8 = "survival",
@@ -58,6 +60,35 @@ pub const ServerProperties = struct {
 
     allocator: std.mem.Allocator,
     _allocated_strings: std.ArrayList([]const u8) = .empty,
+
+    pub fn plainSignalingHost(self: *const ServerProperties) []const u8 {
+        return if (self.signaling_bind.len > 0) self.signaling_bind else self.address;
+    }
+
+    pub fn plainSignalingLoopback(self: *const ServerProperties) bool {
+        return isLoopbackHost(self.plainSignalingHost());
+    }
+
+    pub fn isLoopbackHost(host: []const u8) bool {
+        const address = std.Io.net.IpAddress.parse(host, 0) catch return false;
+        return switch (address) {
+            .ip4 => |ip4| ip4.bytes[0] == 127,
+            .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &std.Io.net.Ip6Address.loopback(0).bytes),
+        };
+    }
+
+    pub const TlsProblem = enum { missing_certificate, missing_key, plain_listener_exposed, zero_tls_port };
+
+    /// First reason `tls-mode` cannot be honoured; TLS requires a loopback plain listener.
+    pub fn tlsProblem(self: *const ServerProperties) ?TlsProblem {
+        if (self.tls_mode == .off) return null;
+        if (!self.plainSignalingLoopback()) return .plain_listener_exposed;
+        if (self.tls_mode == .proxy) return null;
+        if (self.tls_cert.len == 0) return .missing_certificate;
+        if (self.tls_key.len == 0) return .missing_key;
+        if (self.tls_port == 0) return .zero_tls_port;
+        return null;
+    }
 
     pub const min_transport_tick_ms: u32 = 5;
     pub const max_transport_tick_ms: u32 = 50;
@@ -124,6 +155,9 @@ pub const ServerProperties = struct {
         .port = "Signaling port (the LAN discovery listener advertises this port)",
         .signaling_bind = "Host the plain signaling listener binds to instead of address (empty follows address; the port stays port)",
         .tls_mode = "Signaling TLS: off leaves signaling plain, proxy is terminated in front of the server, native terminates in the server",
+        .tls_cert = "PEM certificate chain served when tls-mode=native (empty refuses to start)",
+        .tls_key = "PEM private key matching tls-cert, keep it private (native mode only)",
+        .tls_port = "Public TLS port when tls-mode=native; the plain signaling listener stays on port",
         .motd = "What motd should server display in the server list",
         .level_name = "Level name shown to clients before they join",
         .gamemode = "Default game mode: survival, creative, adventure or spectator",
@@ -384,4 +418,12 @@ test "NAT and identity overrides parse" {
 
 test "movement-channel keeps whatever the file says and defaults to reliable" {
     try @import("config_test.zig").Suite(test_scope).case_021();
+}
+
+test "TLS keys parse and reject an exposed plain listener" {
+    try @import("config_test.zig").Suite(test_scope).case_022();
+}
+
+test "a saved properties file carries the TLS keys and loads them back" {
+    try @import("config_test.zig").Suite(test_scope).case_023();
 }
