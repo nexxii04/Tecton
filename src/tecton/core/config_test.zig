@@ -319,14 +319,16 @@ pub fn Suite(comptime scope: type) type {
             const path = "test-legacy.properties";
             defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
+            // Keys an older file may still carry: they are unknown now and must not disturb
+            // the values that still parse.
             const legacy =
                 "port=19133\n" ++
-                "transport=raknet\n" ++
-                "max-mtu=1400\n" ++
-                "output-slab-slots=512\n" ++
-                "transient-slab-slots=128\n" ++
-                "outbox-slots=512\n" ++
-                "outbound-queue-slots=512\n" ++
+                "legacy-transport=legacy\n" ++
+                "legacy-payload=1400\n" ++
+                "legacy-slot-count=512\n" ++
+                "legacy-transient-slots=128\n" ++
+                "legacy-outbox=512\n" ++
+                "legacy-queue=512\n" ++
                 "max-players=42\n";
             const file = try std.Io.Dir.cwd().createFile(io, path, .{});
             file.writeStreamingAll(io, legacy) catch |err| {

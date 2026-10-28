@@ -1,6 +1,6 @@
 .{
     .name = .Tecton,
-    .version = "0.3.0",
+    .version = "0.4.0",
     .fingerprint = 0x450bb029679e1fba,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -20,12 +20,14 @@
             .url = "git+https://github.com/nexxii04/Protocol.git#ed2bd22869e9b601dfaa6bd466afa703a67670c8",
             .hash = "protocol-0.0.0-129wXkDccwB_ks0qubeFXDvBsIAcH4DyfI_VnrMygLl_",
         },
-        .ZigNet = .{
-            .url = "git+https://github.com/nexxii04/ZigNet.git#5c962aee8ad822fc07413d17a2702fa7bd64454f",
-            .hash = "ZigNet-0.0.0-C9ZCIv20BADR2rCAiWJe82hCRylwJ-AOCUGS6-q7I0D2",
+        // Same pin `webrtc` uses, so the cache and the C build are shared.
+        .mbedtls = .{
+            .url = "git+https://github.com/allyourcodebase/mbedtls.git#55f2af148634945e9508a3a50de2ccfe65eb971f",
+            .hash = "mbedtls-3.6.6-E4NUR4cWAACCHFSwZ5urTBPK4A6EZlm3pSUjfg4c3QAw",
         },
         .nethernet_zig = .{
-            .path = "../../vant-studios/nethernet",
+            .url = "git+https://github.com/VantStudios/nethernet-zig.git#16a2b778004083ecbdad0d3ffef70c0571587d48",
+            .hash = "nethernet_zig-0.1.0-y6Rr0YrICwA5Rvc0xsfb4Jp4eBQRfDS-64cO-lvb3F8z",
         },
     },
     .paths = .{

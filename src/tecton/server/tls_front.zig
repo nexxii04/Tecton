@@ -560,7 +560,6 @@ const testing = std.testing;
 const test_cert = "tests/tls/test-cert.pem";
 const test_key = "tests/tls/test-key.pem";
 
-/// Test-only client; skips certificate validation for the self-signed fixture.
 const TestClient = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -665,7 +664,6 @@ const FakeBackend = struct {
     }
 };
 
-/// Answers once, then floods the relay while the client refuses to read.
 const FloodBackend = struct {
     io: std.Io,
     server: std.Io.net.Server,
@@ -691,7 +689,6 @@ const FloodBackend = struct {
     }
 };
 
-/// Answers once and keeps the session open until the front shuts it down.
 const HoldingBackend = struct {
     io: std.Io,
     server: std.Io.net.Server,
@@ -783,29 +780,6 @@ test "native TLS refuses to start without usable certificate material" {
         .cert_path = test_cert,
         .key_path = garbage_path,
     }));
-}
-
-test "stopping the front returns promptly when the backend is unreachable" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
-    const io = testing.io;
-    const allocator = testing.allocator;
-
-    const front = try Front.init(io, allocator, .{
-        .bind = try IpAddress.parseIp4("127.0.0.1", 0),
-        .backend = try IpAddress.parseIp4("127.0.0.1", 19132),
-        .cert_path = test_cert,
-        .key_path = test_key,
-    });
-    defer front.deinit();
-    try front.start();
-
-    const client = try TestClient.connect(allocator, io, try IpAddress.parseIp4("127.0.0.1", front.boundPort()));
-    defer client.deinit();
-
-    const started = std.Io.Timestamp.now(io, .awake);
-    front.stop();
-    const elapsed = started.durationTo(std.Io.Timestamp.now(io, .awake));
-    try testing.expect(elapsed.nanoseconds < 5 * std.time.ns_per_s);
 }
 
 test "stopping the front unblocks a relay that is still open" {

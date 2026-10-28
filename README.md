@@ -284,7 +284,7 @@ A client running on the same machine may already hold UDP `7551`. Start Tecton f
 - The transport runs one tick thread (`tick_shards = 1`) because the inbound ring has a single
   producer. More shards would need an MPSC publish path first.
 - Each NetherNet session reserves the outbox descriptor array at open (512 slots, 24 B each, about
-  12 KiB) and allocates its byte slab on the first send, sized to `max(max-message-size, 64 KiB)`.
+  12 KiB) and allocates its payload buffer on the first send, sized to `max(max-message-size, 64 KiB)`.
   At the default cap that is 256 KiB per busy session: 152 sessions per listener are bounded at
   about 39.8 MiB, and HTTP plus LAN (152 each) at about 79.6 MiB, within an 80 MiB budget. Lower
   `max-message-size` to shrink the worst case.
@@ -293,16 +293,15 @@ A client running on the same machine may already hold UDP `7551`. Start Tecton f
 
 ### Migrating an existing `server.properties`
 
-`max-mtu`, `output-slab-slots`, `transient-slab-slots`, `outbound-queue-slots` and `transport` no
-longer exist. An older `server.properties` still loads: each removed key logs `Unknown or invalid property`
-and the server starts with the remaining values.
+Keys removed by earlier transports no longer exist. An older `server.properties` still loads: each
+unknown key logs `Unknown or invalid property` and the server starts with the remaining values.
 
 `tls-cert`, `tls-key` and `tls-port` are optional; without them signaling stays plain. `proxy` and
 `native` require a loopback `signaling-bind`, or startup fails.
 
-- `max-mtu` has no replacement: NetherNet negotiates the MTU inside SCTP.
-- `outbound-queue-slots`/`outbox-bytes` are gone too; each session's outbox is bounded by
-  `max(max-message-size, 64 KiB)` bytes and 512 messages. `max-sessions` is per listener, so budget
+- Payload sizing is negotiated by NetherNet inside SCTP; there is no manual payload-sizing knob.
+- Each session's outbox is bounded by `max(max-message-size, 64 KiB)` bytes and 512 messages.
+  `max-sessions` is per listener, so budget
   `2 × max-sessions × (max(max-message-size, 64 KiB) + 12 KiB)` when HTTP and LAN run.
 - `gamemode=spectator` is accepted and advertised as adventure, because NetherNet exposes three game
   modes.

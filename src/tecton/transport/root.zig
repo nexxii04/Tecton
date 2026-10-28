@@ -1,6 +1,5 @@
 pub const NetworkHandler = @import("network_handler.zig").NetworkHandler;
 pub const SendBuffers = @import("send_buffers.zig").SendBuffers;
-pub const FrameBuffers = @import("frame_buffers.zig").FrameBuffers;
 pub const PayloadBuffers = @import("payload_buffers.zig").PayloadBuffers;
 pub const Host = @import("host.zig").Host;
 pub const SendPriority = @import("priority.zig").SendPriority;
@@ -15,7 +14,6 @@ pub const CloseMode = @import("port.zig").CloseMode;
 pub const SendError = @import("port.zig").SendError;
 pub const TransportEvent = @import("events.zig").Event;
 pub const TransportEvents = @import("events.zig").Queue;
-pub const RaknetPort = @import("raknet_port.zig").RaknetPort;
 pub const NetherNet = @import("nethernet.zig");
 pub const NetherNetAdapter = NetherNet.Adapter;
 pub const TransportFake = @import("fake_port.zig").TransportFake;

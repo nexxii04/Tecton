@@ -494,11 +494,11 @@ pub const Tecton = struct {
             };
         }
         if (self.network.inbound_ring) |ring| {
-            const slab_mib = (ring.capacity() * ring.slot_size) / (1024 * 1024);
-            log.info("Inbound ring: {d} slots x {d} bytes ({d} MiB slab)", .{
+            const buffer_mib = (ring.capacity() * ring.slot_size) / (1024 * 1024);
+            log.info("Inbound ring: {d} slots x {d} bytes ({d} MiB buffer)", .{
                 ring.capacity(),
                 ring.slot_size,
-                slab_mib,
+                buffer_mib,
             });
         } else {
             log.info("Inbound ring disabled; using the legacy packet queue", .{});

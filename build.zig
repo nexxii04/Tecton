@@ -52,15 +52,12 @@ pub fn build(b: *std.Build) void {
 
     const binarystream_dep = b.dependency("BinaryStream", .{ .target = target, .optimize = optimize });
     const binarystream_mod = binarystream_dep.module("BinaryStream");
-    const raknet_dep = b.dependency("ZigNet", .{ .target = target, .optimize = optimize });
-    const raknet_mod = raknet_dep.module("Raknet");
     const nbt_dep = b.dependency("nbt", .{ .target = target, .optimize = optimize });
     const nbt_mod = nbt_dep.module("nbt");
     const protocol_dep = b.dependency("protocol", .{ .target = target, .optimize = optimize });
     const protocol_mod = protocol_dep.module("Protocol");
 
     nbt_mod.addImport("BinaryStream", binarystream_mod);
-    raknet_mod.addImport("BinaryStream", binarystream_mod);
     protocol_mod.addImport("BinaryStream", binarystream_mod);
 
     const leveldb_mod = b.addModule("leveldb", .{ .root_source_file = b.path("libs/leveldb/leveldb.zig"), .target = target });
@@ -78,7 +75,6 @@ pub fn build(b: *std.Build) void {
     const mbedtls_mod = mbedtls_translate.createModule();
     const tecton_mod = b.addModule("tecton", .{ .root_source_file = b.path("src/tecton/root.zig"), .target = target });
     tecton_mod.addImport("BinaryStream", binarystream_mod);
-    tecton_mod.addImport("Raknet", raknet_mod);
     tecton_mod.addImport("nethernet", nethernet_mod);
     tecton_mod.addImport("mbedtls", mbedtls_mod);
     tecton_mod.linkLibrary(mbedtls);
@@ -180,7 +176,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libcpp = true,
-        .imports = &.{ .{ .name = "BinaryStream", .module = binarystream_mod }, .{ .name = "Raknet", .module = raknet_mod }, .{ .name = "nethernet", .module = nethernet_mod }, .{ .name = "mbedtls", .module = mbedtls_mod }, .{ .name = "protocol", .module = protocol_mod }, .{ .name = "nbt", .module = nbt_mod }, .{ .name = "leveldb", .module = leveldb_mod } },
+        .imports = &.{ .{ .name = "BinaryStream", .module = binarystream_mod }, .{ .name = "nethernet", .module = nethernet_mod }, .{ .name = "mbedtls", .module = mbedtls_mod }, .{ .name = "protocol", .module = protocol_mod }, .{ .name = "nbt", .module = nbt_mod }, .{ .name = "leveldb", .module = leveldb_mod } },
     });
     chest_test_mod.linkLibrary(zlib_dep.artifact("z"));
     if (is_windows) chest_test_mod.linkSystemLibrary("psapi", .{});

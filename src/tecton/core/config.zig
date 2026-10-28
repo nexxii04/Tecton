@@ -172,7 +172,7 @@ pub const ServerProperties = struct {
         .public_candidate = "Host advertised to clients for ICE (empty uses the address the client reached)",
         .ice_servers = "Comma-separated ICE servers as stun:<host>:<port> or turn:<host>:<port>@<user>:<pass> (empty disables STUN and TURN)",
         .max_sessions = "Concurrent NetherNet sessions per listener (0 follows max-players; clamped to 64-4096)",
-        .max_message_size = "Largest NetherNet message accepted from a client, in bytes (clamped to 1024-262144; each session's outbox slab is sized to this, with a 64 KiB floor and 512 descriptor slots)",
+        .max_message_size = "Largest NetherNet message accepted from a client, in bytes (clamped to 1024-262144; each session's outbox buffer is sized to this, with a 64 KiB floor and 512 descriptor slots)",
         .transport_tick_ms = "Milliseconds between NetherNet transport ticks (clamped to 5-50)",
         .max_tps = "Max tps",
         .worker_threads = "Tecton worker threads (0 = auto, higher values are clamped)",
