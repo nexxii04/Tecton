@@ -17,7 +17,8 @@ pub fn Methods(comptime scope: type) type {
         pub fn decompressTask(ctx: *anyopaque) void {
             const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
             work.decompressed = Compression.decompress(work.raw, work.handler.options, work.allocator) catch |err| {
-                std.log.err("decompress failed: {}", .{err});
+                std.log.warn("decompress failed: {}", .{err});
+                _ = work.handler.decompress_failures.fetchAdd(1, .monotonic);
                 work.allocator.free(work.raw);
                 work.raw = &.{};
                 return;
@@ -39,7 +40,7 @@ pub fn Methods(comptime scope: type) type {
                         _ = work.arena_outstanding.?.fetchAdd(1, .release);
                         decoded = true;
                     } else |err| {
-                        std.log.err("decompress failed: {}", .{err});
+                        std.log.warn("decompress failed: {}", .{err});
                     }
                 }
             }
@@ -48,7 +49,8 @@ pub fn Methods(comptime scope: type) type {
                 if (Compression.decompress(work.raw, work.handler.options, work.allocator)) |result| {
                     work.decompressed = result;
                 } else |err| {
-                    std.log.err("decompress failed: {}", .{err});
+                    std.log.warn("decompress failed: {}", .{err});
+                    _ = work.handler.decompress_failures.fetchAdd(1, .monotonic);
                 }
             }
         }

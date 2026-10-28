@@ -19,6 +19,22 @@ const GameType = @FieldType(ServerData, "game_type");
 
 pub const default_jwks_uri = "https://authorization.franchise.minecraft-services.net/.well-known/keys";
 
+/// NetherNet's per-session send queue. The slab is allocated on the first send, so an idle
+/// session only costs the descriptor array; a busy one is bounded by `outboxBytes`.
+pub const outbox_slots: usize = 512;
+pub const outbox_min_bytes: usize = 64 * 1024;
+
+/// `Outbox.Message`: kind, offset and length.
+pub const outbox_entry_bytes: usize = nethernet.server.Host.outbox_descriptor_bytes;
+
+/// Worst case with both listeners active: 2 x 152 sessions.
+pub const outbox_budget_bytes: usize = 80 * 1024 * 1024;
+
+/// The outbox must hold one full message, which is the negotiated message size.
+pub fn outboxBytes(max_message_size: u32) usize {
+    return @max(@as(usize, max_message_size), outbox_min_bytes);
+}
+
 /// What Tecton tells the adapter. Everything here comes from `server.properties`.
 pub const Config = struct {
     address: []const u8 = "0.0.0.0",
@@ -216,14 +232,18 @@ pub const Adapter = struct {
         return @ptrCast(@alignCast(raw));
     }
 
-    fn sendBytes(raw: *anyopaque, conn: *Connection, bytes: []const u8, priority: SendPriority) port_mod.SendError!void {
+    fn sendBytes(raw: *anyopaque, conn: *Connection, bytes: []const u8, channel: port_mod.Channel, priority: SendPriority) port_mod.SendError!void {
         const self: *Adapter = @ptrCast(@alignCast(raw));
         if (!self.alive.load(.acquire)) return error.Closed;
         if (!conn.isOpen()) return error.Closed;
         // NetherNet has no priority knob: the outbox is ordered per session.
         _ = priority;
 
-        self.host.send(conn.id, .reliable, bytes) catch |err| return switch (err) {
+        const kind: nethernet.web_rtc.ChannelKind = switch (channel) {
+            .reliable => .reliable,
+            .unreliable => .unreliable,
+        };
+        self.host.send(conn.id, kind, bytes) catch |err| return switch (err) {
             error.UnknownSession, error.Closed => error.Closed,
             error.Backpressure => error.Backpressure,
             error.PayloadTooLarge => error.PayloadTooLarge,
@@ -370,13 +390,19 @@ fn hostConfig(config: Config, self: *Adapter, bind: std.Io.net.IpAddress) nether
         .http_config = .{
             .bind_address = bind,
             .max_sessions = max_sessions,
+            // One transport thread: the inbound ring is single-producer, so a second shard
+            // would corrupt it without an MPSC publish path.
             .tick_shards = 1,
             .tick_interval_ms = config.transport_tick_ms,
             .max_concurrent_requests = 16,
+            .outbox_slots = outbox_slots,
+            .outbox_bytes = outboxBytes(config.max_message_size),
         },
         .lan_config = .{
             .port = config.lan_port,
             .max_pending_connections = max_sessions,
+            .outbox_slots = outbox_slots,
+            .outbox_bytes = outboxBytes(config.max_message_size),
         },
         .motd_config = .{ .port = config.port },
         .identity = self.identity,
@@ -410,6 +436,13 @@ const Fixture = struct {
     adapter: *Adapter,
 
     fn create(key_path: []const u8) !*Fixture {
+        return createWith(key_path, .{});
+    }
+
+    fn createWith(key_path: []const u8, options: struct {
+        lan_discovery: bool = false,
+        max_message_size: u32 = 256 * 1024,
+    }) !*Fixture {
         const self = try testing.allocator.create(Fixture);
         errdefer testing.allocator.destroy(self);
 
@@ -425,7 +458,9 @@ const Fixture = struct {
             .port = 0,
             .motd = "adapter test",
             .level_name = "world",
-            .lan_discovery = false,
+            .lan_discovery = options.lan_discovery,
+            .lan_port = 0,
+            .max_message_size = options.max_message_size,
             .identity_key = key_path,
         }, .{
             .registry = &self.registry,
@@ -460,6 +495,9 @@ test "an offline adapter binds without a verifier and leaves the ticking to Tect
     try testing.expectEqualStrings("world", adapter.host.config.server_data.level_name);
     try testing.expectEqual(GameType.survival, adapter.host.config.server_data.game_type);
     try testing.expectEqual(@as(u32, 256 * 1024), adapter.host.config.max_message_size);
+    try testing.expectEqual(@as(usize, 1), adapter.host.config.http_config.tick_shards);
+    try testing.expectEqual(outbox_slots, adapter.host.http.?.config.outbox_slots);
+    try testing.expectEqual(outboxBytes(256 * 1024), adapter.host.http.?.config.outbox_bytes);
     try testing.expect(!adapter.host.config.require_client_identity.?);
     try testing.expect(adapter.host.config.accept_unverified_identity);
 
@@ -477,6 +515,28 @@ test "an offline adapter binds without a verifier and leaves the ticking to Tect
     key_file.close(testing.io);
 }
 
+test "the outbox settings reach both listener configs" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var key_buffer: [256]u8 = undefined;
+    const key_path = try std.fmt.bufPrint(&key_buffer, ".zig-cache/tmp/{s}/server.key", .{tmp.sub_path});
+
+    const fixture = try Fixture.createWith(key_path, .{ .lan_discovery = true, .max_message_size = 64 * 1024 });
+    defer fixture.destroy();
+
+    const http = fixture.adapter.host.http.?.config;
+    const lan = fixture.adapter.host.lan.?.config;
+    try testing.expectEqual(outbox_slots, http.outbox_slots);
+    try testing.expectEqual(outboxBytes(64 * 1024), http.outbox_bytes);
+    try testing.expectEqual(outbox_slots, lan.outbox_slots);
+    try testing.expectEqual(outboxBytes(64 * 1024), lan.outbox_bytes);
+
+    const sessions: usize = 152;
+    const per_listener = sessions * (http.outbox_bytes + http.outbox_slots * outbox_entry_bytes);
+    try testing.expect(per_listener <= 40 * 1024 * 1024);
+    try testing.expect(2 * per_listener <= outbox_budget_bytes);
+}
+
 test "the port closes a session the host never adopted" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -491,7 +551,7 @@ test "the port closes a session the host never adopted" {
     conn.retain();
     defer conn.release();
 
-    try testing.expectError(error.Closed, fixture.adapter.port().sendBytes(conn, "frame", .normal));
+    try testing.expectError(error.Closed, fixture.adapter.port().sendBytes(conn, "frame", .reliable, .normal));
     try testing.expectEqual(@as(usize, 0), fixture.adapter.port().maxPayload(conn));
     try testing.expectEqual(@as(usize, 0), fixture.adapter.sessionCount());
 }
@@ -511,6 +571,18 @@ test "the advertisement carries Tecton's protocol and level, not the transport's
     try testing.expectEqual(@as(i32, 40), data.max_player_count);
     try testing.expectEqual(GameType.creative, data.game_type);
     try testing.expect(data.accepts_online_auth);
+}
+
+test "the outbox budget follows the message cap and never drops below its floor" {
+    try testing.expectEqual(@as(usize, 256 * 1024), outboxBytes(256 * 1024));
+    try testing.expectEqual(@as(usize, 128 * 1024), outboxBytes(128 * 1024));
+    try testing.expectEqual(outbox_min_bytes, outboxBytes(1024));
+
+    // Both listeners keep their own max-sessions (152 each), so the worst case is 2 x 152.
+    const sessions: usize = 152;
+    const per_listener = sessions * (outboxBytes(256 * 1024) + outbox_slots * outbox_entry_bytes);
+    try testing.expect(per_listener <= 40 * 1024 * 1024);
+    try testing.expect(2 * per_listener <= outbox_budget_bytes);
 }
 
 test "spectator is advertised as adventure" {

@@ -8,6 +8,7 @@ const SendPriority = @import("priority.zig").SendPriority;
 pub const TransportFake = struct {
     pub const Sent = struct {
         conn_id: u64,
+        channel: port_mod.Channel,
         priority: SendPriority,
         bytes: []u8,
     };
@@ -61,7 +62,7 @@ pub const TransportFake = struct {
         self.closed.clearRetainingCapacity();
     }
 
-    fn send(ctx: *anyopaque, conn: *connection.Connection, bytes: []const u8, priority: SendPriority) port_mod.SendError!void {
+    fn send(ctx: *anyopaque, conn: *connection.Connection, bytes: []const u8, channel: port_mod.Channel, priority: SendPriority) port_mod.SendError!void {
         const self: *TransportFake = @ptrCast(@alignCast(ctx));
         if (self.fail_next_send) |err| {
             self.fail_next_send = null;
@@ -70,7 +71,7 @@ pub const TransportFake = struct {
         if (!conn.isOpen()) return error.Closed;
         if (bytes.len > self.payload_limit) return error.PayloadTooLarge;
         const copy = self.allocator.dupe(u8, bytes) catch return error.Backpressure;
-        self.sent.append(self.allocator, .{ .conn_id = conn.id, .priority = priority, .bytes = copy }) catch {
+        self.sent.append(self.allocator, .{ .conn_id = conn.id, .channel = channel, .priority = priority, .bytes = copy }) catch {
             self.allocator.free(copy);
             return error.Backpressure;
         };
@@ -111,12 +112,13 @@ test "the fake port records every send against the connection id" {
     defer fake.deinit();
 
     const port = fake.port();
-    try port.sendBytes(conn, "one", .normal);
-    try port.sendBytes(conn, "two", .immediate);
+    try port.sendBytes(conn, "one", .reliable, .normal);
+    try port.sendBytes(conn, "two", .unreliable, .immediate);
 
     try testing.expectEqual(@as(usize, 2), fake.sentTo(conn.id));
     try testing.expectEqualStrings("two", fake.lastSent().?.bytes);
     try testing.expectEqual(SendPriority.immediate, fake.lastSent().?.priority);
+    try testing.expectEqual(port_mod.Channel.unreliable, fake.lastSent().?.channel);
     try testing.expectEqual(@as(usize, 1400), port.maxPayload(conn));
 }
 
@@ -130,12 +132,12 @@ test "a closed connection or a full payload is refused instead of recorded" {
     const port = fake.port();
 
     fake.payload_limit = 4;
-    try testing.expectError(error.PayloadTooLarge, port.sendBytes(conn, "toolong", .normal));
+    try testing.expectError(error.PayloadTooLarge, port.sendBytes(conn, "toolong", .reliable, .normal));
 
     port.closeConn(conn, .flush);
     try testing.expectEqual(@as(usize, 1), fake.closed.items.len);
     try testing.expectEqual(port_mod.CloseMode.flush, fake.closed.items[0].mode);
 
     conn.markClosed();
-    try testing.expectError(error.Closed, port.sendBytes(conn, "one", .normal));
+    try testing.expectError(error.Closed, port.sendBytes(conn, "one", .reliable, .normal));
 }

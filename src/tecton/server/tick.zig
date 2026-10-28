@@ -12,6 +12,7 @@ const packet_drain_budget_pct: u64 = 5;
 const drain_completed_budget_pct: u64 = 15;
 const main_tasks_budget_pct: u64 = 50;
 const save_pass_interval_ticks: u64 = 6000;
+const transport_summary_interval_ticks: u64 = 6000;
 
 pub fn onTick(context: ?*anyopaque) void {
     const tecton = @as(*Tecton, @ptrCast(@alignCast(context)));
@@ -60,6 +61,18 @@ pub fn onTick(context: ?*anyopaque) void {
             decompress_pending,
             tecton.network.queuedInputDepth(),
             dropped_packets,
+        });
+    }
+
+    if (tecton.tick_count % transport_summary_interval_ticks == 0) {
+        const sessions = tecton.network.sessionCounts();
+        log.info("Transport: {d}/{d} sessions, {d} reconnects, {d} inbound dropped, {d} outbound backpressure, {d} outbound dropped", .{
+            sessions.active,
+            sessions.total,
+            sessions.reconnects,
+            tecton.network.inboundDroppedCount(),
+            tecton.network.backpressureSendCount(),
+            tecton.network.outboundDroppedCount(),
         });
     }
 

@@ -19,7 +19,8 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_001() !void {
             const source = @embedFile("server/movement.zig");
-            try std.testing.expect(std.mem.indexOf(u8, source, "sendPacketsUncompressedWith(viewer.connection, batch.items, tecton.movement_priority)") != null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "sendPacketsUncompressedOn(viewer.connection, batch.items, tecton.movementSendChannel(), tecton.movement_priority)") != null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "sendPacketsUncompressedWith") == null);
         }
 
         pub fn case_002() !void {
@@ -86,6 +87,8 @@ pub fn Suite(comptime scope: type) type {
             const source = @embedFile("command/list/worlds.zig");
             try std.testing.expect(std.mem.indexOf(u8, source, "§7Net I/O: ") != null);
             try std.testing.expect(std.mem.indexOf(u8, source, "§7Net dispatch: ") != null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "§7Transport: ") != null);
+            try std.testing.expect(std.mem.indexOf(u8, source, "networkStats()") != null);
             try std.testing.expect(std.mem.indexOf(u8, source, "RakNet") == null);
             try std.testing.expect(std.mem.indexOf(u8, source, "current_network_io_mspt") != null);
             try std.testing.expect(std.mem.indexOf(u8, source, "current_network_dispatch_mspt") != null);

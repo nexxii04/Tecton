@@ -413,5 +413,118 @@ pub fn Suite(comptime scope: type) type {
 
             handler.connections.closeAndRelease(conn);
         }
+
+        pub fn case_009() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            fake.payload_limit = 1024;
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+
+            fake.fail_next_send = error.Backpressure;
+            try std.testing.expectError(error.Backpressure, handler.sendPacket(conn, "frame"));
+            try std.testing.expectEqual(@as(usize, 1), handler.backpressureSendCount());
+
+            fake.fail_next_send = error.Closed;
+            try std.testing.expectError(error.Closed, handler.sendPacket(conn, "frame"));
+            try std.testing.expectEqual(@as(usize, 1), handler.outboundDroppedCount());
+
+            try handler.enableInboundRing(64, 64);
+            const frame = [_]u8{0} ** 32;
+            for (0..65) |_| NetworkHandler.onPacket(handler, conn, &frame);
+            try std.testing.expectEqual(@as(usize, 1), handler.inboundDroppedCount());
+
+            handler.connections.closeAndRelease(conn);
+        }
+
+        pub fn case_010() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+            defer handler.connections.closeAndRelease(conn);
+
+            fake.payload_limit = 4;
+            try std.testing.expectError(error.PayloadTooLarge, handler.sendFramed(conn, "12345", .normal));
+            try std.testing.expectEqual(@as(usize, 1), handler.oversizeSendCount());
+            try std.testing.expectEqual(@as(usize, 1), handler.outboundDroppedCount());
+
+            fake.payload_limit = 0;
+            try std.testing.expectError(error.Closed, handler.sendFramed(conn, "1234", .normal));
+            try std.testing.expectEqual(@as(usize, 2), handler.outboundDroppedCount());
+
+            fake.payload_limit = 1024;
+            try handler.sendFramed(conn, "frame", .normal);
+            try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
+            try std.testing.expectEqual(@as(usize, 2), handler.outboundDroppedCount());
+
+            fake.payload_limit = 4;
+            try std.testing.expectError(error.PayloadTooLarge, handler.sendPacket(conn, "compressed frame"));
+            try std.testing.expectEqual(@as(usize, 2), handler.oversizeSendCount());
+            try std.testing.expectEqual(@as(usize, 3), handler.outboundDroppedCount());
+
+            handler.port = null;
+            try std.testing.expectError(error.Closed, handler.sendFramed(conn, "frame", .normal));
+            try std.testing.expectEqual(@as(usize, 4), handler.outboundDroppedCount());
+        }
+
+        pub fn case_011() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            try tasks.start();
+            defer tasks.deinit();
+
+            var dispatch_state = TestDispatchState{};
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = &dispatch_state,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            try handler.enableInboundRing(4, 64);
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+            defer handler.connections.closeAndRelease(conn);
+
+            const CompressionMethod = @import("protocol").CompressionMethod;
+            const corrupt = [_]u8{ 254, @intFromEnum(CompressionMethod.Zlib), 0x00 };
+            NetworkHandler.onPacket(handler, conn, &corrupt);
+            _ = handler.drainPackets(std.math.maxInt(u64), 4096);
+            try drainUntilIdle(&tasks, handler, io);
+
+            try std.testing.expectEqual(@as(usize, 1), handler.decompress_failures.load(.monotonic));
+            try std.testing.expectEqual(@as(usize, 1), handler.inboundDroppedCount());
+            try std.testing.expectEqual(@as(usize, 0), dispatch_state.dispatched_packets);
+        }
     };
 }

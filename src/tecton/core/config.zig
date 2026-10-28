@@ -46,6 +46,7 @@ pub const ServerProperties = struct {
     max_view_distance: u32 = 8,
     simulation_distance: u32 = 4,
     movement_send_priority: []const u8 = "immediate",
+    movement_channel: []const u8 = "reliable",
     movement_distance_bands: bool = true,
     network_inbound_ring: bool = true,
     inbound_ring_slots: u32 = 512,
@@ -136,8 +137,8 @@ pub const ServerProperties = struct {
         .lan_port = "LAN discovery port",
         .public_candidate = "Host advertised to clients for ICE (empty uses the address the client reached)",
         .ice_servers = "Comma-separated ICE servers as stun:<host>:<port> or turn:<host>:<port>@<user>:<pass> (empty disables STUN and TURN)",
-        .max_sessions = "Concurrent NetherNet sessions (0 follows max-players; clamped to 64-4096)",
-        .max_message_size = "Largest NetherNet message accepted from a client, in bytes (clamped to 1024-262144)",
+        .max_sessions = "Concurrent NetherNet sessions per listener (0 follows max-players; clamped to 64-4096)",
+        .max_message_size = "Largest NetherNet message accepted from a client, in bytes (clamped to 1024-262144; each session's outbox slab is sized to this, with a 64 KiB floor and 512 descriptor slots)",
         .transport_tick_ms = "Milliseconds between NetherNet transport ticks (clamped to 5-50)",
         .max_tps = "Max tps",
         .worker_threads = "Tecton worker threads (0 = auto, higher values are clamped)",
@@ -146,6 +147,7 @@ pub const ServerProperties = struct {
         .max_view_distance = "Max view distance in chunks",
         .simulation_distance = "Simulation distance in chunks (chunks within this range are kept loaded)",
         .movement_send_priority = "Movement broadcast priority: immediate or normal (the NetherNet outbox is FIFO; neither changes reliability)",
+        .movement_channel = "Movement broadcast channel: reliable (ordered, may fragment) or unreliable (no retransmits, must fit one message)",
         .movement_distance_bands = "Rate-limit player movement updates by distance to the nearest viewer (false restores a delta every tick)",
         .network_inbound_ring = "Use the zero-alloc SPSC inbound ring instead of the per-packet heap queue (false restores the legacy path)",
         .inbound_ring_slots = "Inbound ring slots (clamped to 64-1048576 and rounded up to a power of two)",
@@ -378,4 +380,8 @@ test "a properties file with the removed keys still loads" {
 
 test "NAT and identity overrides parse" {
     try @import("config_test.zig").Suite(test_scope).case_020();
+}
+
+test "movement-channel keeps whatever the file says and defaults to reliable" {
+    try @import("config_test.zig").Suite(test_scope).case_021();
 }

@@ -23,6 +23,7 @@ pub const entity = @import("./entity/root.zig");
 pub const events = @import("./events/root.zig");
 pub const items = @import("./items/root.zig");
 pub const network = @import("./network/root.zig");
+pub const transport = @import("./transport/root.zig");
 pub const SendPriority = network.SendPriority;
 pub const player = @import("./player/root.zig");
 pub const plugins = @import("./plugins/root.zig");

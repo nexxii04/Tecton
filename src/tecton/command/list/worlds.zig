@@ -98,6 +98,16 @@ fn handle(raw: *anyopaque) void {
         slow_pct,
     }) catch return;
 
+    const net = tecton.networkStats();
+    std.Io.Writer.print(&writer, "\n§7Transport: §f{d}§7/§f{d} sessions §7reconnects §f{d} §7in-dropped §f{d} §7out-backpressure §f{d} §7out-dropped §f{d}", .{
+        net.sessions_active,
+        net.sessions_total,
+        net.reconnects,
+        net.inbound_dropped,
+        net.outbound_backpressure,
+        net.outbound_dropped,
+    }) catch return;
+
     const snapshots = tecton.getPlayerSnapshots();
     var dim_it = world.dimensions.valueIterator();
     while (dim_it.next()) |dim| {

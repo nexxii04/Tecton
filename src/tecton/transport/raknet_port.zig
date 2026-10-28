@@ -116,7 +116,7 @@ pub const RaknetPort = struct {
         return if (removed) |entry| entry.value else null;
     }
 
-    fn send(ctx: *anyopaque, conn: *Connection, bytes: []const u8, priority: SendPriority) port_mod.SendError!void {
+    fn send(ctx: *anyopaque, conn: *Connection, bytes: []const u8, channel: port_mod.Channel, priority: SendPriority) port_mod.SendError!void {
         const self: *RaknetPort = @ptrCast(@alignCast(ctx));
         if (!conn.isOpen()) return error.Closed;
         if (bytes.len == 0) return;
@@ -128,6 +128,10 @@ pub const RaknetPort = struct {
             .normal => .Normal,
             .immediate => .Immediate,
         };
+        const reliability: Raknet.Proto.Frame.Reliability = switch (channel) {
+            .reliable => .ReliableOrdered,
+            .unreliable => .Unreliable,
+        };
 
         // A frame that fits one datagram is copied into the pool; anything larger goes through
         // the transport's own split path, which frees the payload with the transport allocator.
@@ -138,11 +142,12 @@ pub const RaknetPort = struct {
                 return;
             };
             @memcpy(buffer, bytes);
-            const frame = Raknet.Proto.Frame.init(null, null, null, 0, .ReliableOrdered, buffer, null, null, null, pool);
+            const frame = Raknet.Proto.Frame.init(null, null, null, 0, reliability, buffer, null, null, null, pool);
             backend.sendFrame(frame, backend_priority);
             return;
         }
 
+        if (channel == .unreliable) return error.PayloadTooLarge;
         backend.sendReliableMessage(bytes, backend_priority);
     }
 
@@ -222,7 +227,7 @@ test "connect, packet and disconnect are routed through the port" {
     conn.retain();
     defer conn.release();
 
-    try port.port().sendBytes(conn, "frame-bytes", .normal);
+    try port.port().sendBytes(conn, "frame-bytes", .reliable, .normal);
     try testing.expectEqual(@as(usize, 1), backend.comm_data.output_frame_queue.items.len);
 
     backend.game_packet_callback.?(backend, "incoming", backend.game_packet_context);
@@ -269,7 +274,7 @@ test "a payload that cannot fit the pool is handed to the transport instead of t
 
     var large: [3000]u8 = undefined;
     @memset(&large, 0x41);
-    try port.port().sendBytes(conn, &large, .normal);
+    try port.port().sendBytes(conn, &large, .reliable, .normal);
     try testing.expect(backend.comm_data.output_frame_queue.items.len > 1);
     for (backend.comm_data.output_frame_queue.items) |*frame| frame.deinit();
     backend.comm_data.output_frame_queue.clearRetainingCapacity();
@@ -304,6 +309,6 @@ test "sending on a closed session reports Closed and never touches the transport
     defer conn.release();
     port.port().closeConn(conn, .abort);
 
-    try testing.expectError(error.Closed, port.port().sendBytes(conn, "late", .normal));
+    try testing.expectError(error.Closed, port.port().sendBytes(conn, "late", .reliable, .normal));
     try testing.expectEqual(@as(usize, 0), backend.comm_data.output_frame_queue.items.len);
 }

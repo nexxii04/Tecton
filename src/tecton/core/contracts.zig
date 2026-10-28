@@ -108,11 +108,21 @@ pub fn WorldQuery(comptime World: type) type {
     };
 }
 
+pub const NetworkStats = struct {
+    sessions_active: usize,
+    sessions_total: usize,
+    reconnects: usize,
+    inbound_dropped: usize,
+    outbound_backpressure: usize,
+    outbound_dropped: usize,
+};
+
 pub fn WorldInfoHost(comptime Player: type, comptime World: type) type {
     return struct {
         worlds: WorldQuery(World),
         players: SelectionHost(Player),
         ctx: *anyopaque,
+        network_stats: *const fn (*anyopaque) NetworkStats,
         target_tps: *const fn (*anyopaque) f64,
         current_tps: *const f64,
         current_mspt: *const f64,
@@ -127,6 +137,10 @@ pub fn WorldInfoHost(comptime Player: type, comptime World: type) type {
 
         pub fn getPlayerSnapshots(self: @This()) []const *Player {
             return self.players.getPlayerSnapshots();
+        }
+
+        pub fn networkStats(self: @This()) NetworkStats {
+            return self.network_stats(self.ctx);
         }
     };
 }

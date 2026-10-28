@@ -121,6 +121,7 @@ pub const Tecton = struct {
     address_stamp: usize = 0,
     players: PlayerRegistry,
     movement_priority: SendPriority = .immediate,
+    movement_channel: port_mod.Channel = .reliable,
     movement_distance_bands: bool = true,
     mob_broadcast_interval: u8 = 2,
     tick_thread_id: std.atomic.Value(usize) = .init(0),
@@ -219,6 +220,10 @@ pub const Tecton = struct {
             log.warn("movement-send-priority={s} is not a known priority, using immediate", .{owned_config.movement_send_priority});
             break :fallback SendPriority.immediate;
         };
+        const movement_channel = port_mod.Channel.parse(owned_config.movement_channel) orelse fallback: {
+            log.warn("movement-channel={s} is not a known channel, using reliable", .{owned_config.movement_channel});
+            break :fallback port_mod.Channel.reliable;
+        };
         const mob_broadcast_interval = ServerProperties.clampMobBroadcastInterval(owned_config.mob_broadcast_interval);
         if (mob_broadcast_interval != owned_config.mob_broadcast_interval) {
             log.warn("mob-broadcast-interval={d} is outside the supported range {d}-{d}, using {d}", .{
@@ -260,6 +265,7 @@ pub const Tecton = struct {
             .command_permission_userdata = options.command_permission_userdata,
             .composition = options.composition,
             .movement_priority = movement_priority,
+            .movement_channel = movement_channel,
             .movement_distance_bands = owned_config.movement_distance_bands,
             .mob_broadcast_interval = mob_broadcast_interval,
             .events = Events.Events.init(allocator),
@@ -770,6 +776,10 @@ pub const Tecton = struct {
 
     pub fn movementSendPriority(self: *const Tecton) SendPriority {
         return self.movement_priority;
+    }
+
+    pub fn movementSendChannel(self: *const Tecton) port_mod.Channel {
+        return self.movement_channel;
     }
 
     pub fn rollMetricsWindow(self: *Tecton, metrics_window_ticks: u64) void {

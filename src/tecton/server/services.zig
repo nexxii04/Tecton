@@ -89,6 +89,7 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
             .worlds = query,
             .players = selection,
             .ctx = tecton,
+            .network_stats = networkStats,
             .target_tps = players.targetTps,
             .current_tps = &tecton.current_tps,
             .current_mspt = &tecton.current_mspt,
@@ -116,6 +117,19 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
             .queue_load = queueWorldLoad,
             .queue_unload = queueWorldUnload,
         },
+    };
+}
+
+fn networkStats(ctx: *anyopaque) contracts.NetworkStats {
+    const tecton = cast(ctx);
+    const sessions = tecton.network.sessionCounts();
+    return .{
+        .sessions_active = sessions.active,
+        .sessions_total = sessions.total,
+        .reconnects = sessions.reconnects,
+        .inbound_dropped = tecton.network.inboundDroppedCount(),
+        .outbound_backpressure = tecton.network.backpressureSendCount(),
+        .outbound_dropped = tecton.network.outboundDroppedCount(),
     };
 }
 

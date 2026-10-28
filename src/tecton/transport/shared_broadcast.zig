@@ -41,7 +41,9 @@ pub const SharedBroadcast = struct {
         const frame = self.bytes();
         if (frame.len == 0) return;
         // One unreachable recipient must not stop the broadcast to the rest.
-        port.sendBytes(conn, frame, priority) catch {};
+        port.sendBytes(conn, frame, .reliable, priority) catch |err| {
+            std.log.debug("shared broadcast to connection {d} failed: {}", .{ conn.id, err });
+        };
     }
 
     pub fn deinit(self: *SharedBroadcast) void {

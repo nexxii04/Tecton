@@ -39,13 +39,28 @@ pub const Connection = struct {
     }
 };
 
+pub const SessionCounts = struct {
+    active: usize,
+    total: usize,
+    reconnects: usize,
+};
+
 /// Owns every live connection by id and emits one `opened`/`closed` event per session.
 pub const ConnectionRegistry = struct {
+    /// How many retired ids are remembered for reconnect detection. A client that comes back
+    /// after more than this many other sessions is counted as a fresh session, not a reconnect.
+    const recent_closed_capacity: usize = 256;
+
     allocator: std.mem.Allocator,
     io: std.Io,
     events: *events_mod.Queue,
     mutex: std.Io.Mutex = .init,
     next_id: u64 = 0,
+    total_opened: usize = 0,
+    reconnects: usize = 0,
+    recent_closed: [recent_closed_capacity]u64 = @splat(0),
+    recent_closed_len: usize = 0,
+    recent_closed_head: usize = 0,
     by_id: std.AutoHashMap(u64, *Connection),
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, event_queue: *events_mod.Queue) ConnectionRegistry {
@@ -92,6 +107,7 @@ pub const ConnectionRegistry = struct {
             .state = std.atomic.Value(State).init(.open),
         };
         try self.by_id.put(conn.id, conn);
+        self.total_opened += 1;
         self.events.push(.{ .opened = conn.id });
         return conn;
     }
@@ -109,6 +125,8 @@ pub const ConnectionRegistry = struct {
 
         const entry = try self.by_id.getOrPut(id);
         if (entry.found_existing) return error.ConnectionIdInUse;
+        if (self.wasClosedRecently(id)) self.reconnects += 1;
+        self.total_opened += 1;
 
         conn.* = .{
             .id = id,
@@ -134,6 +152,25 @@ pub const ConnectionRegistry = struct {
         return self.by_id.count();
     }
 
+    pub fn counts(self: *ConnectionRegistry) SessionCounts {
+        self.mutex.lock(self.io) catch return .{ .active = 0, .total = self.total_opened, .reconnects = self.reconnects };
+        defer self.mutex.unlock(self.io);
+        return .{ .active = self.by_id.count(), .total = self.total_opened, .reconnects = self.reconnects };
+    }
+
+    fn wasClosedRecently(self: *const ConnectionRegistry, id: u64) bool {
+        for (self.recent_closed[0..self.recent_closed_len]) |closed| {
+            if (closed == id) return true;
+        }
+        return false;
+    }
+
+    fn rememberClosed(self: *ConnectionRegistry, id: u64) void {
+        self.recent_closed[self.recent_closed_head] = id;
+        self.recent_closed_head = (self.recent_closed_head + 1) % recent_closed_capacity;
+        if (self.recent_closed_len < recent_closed_capacity) self.recent_closed_len += 1;
+    }
+
     /// Drops the transport reference and emits `closed` exactly once, for whichever caller closes first.
     pub fn closeAndRelease(self: *ConnectionRegistry, conn: *Connection) void {
         if (!conn.beginClose()) return;
@@ -145,6 +182,7 @@ pub const ConnectionRegistry = struct {
             return;
         };
         _ = self.by_id.remove(conn.id);
+        self.rememberClosed(conn.id);
         self.mutex.unlock(self.io);
 
         self.events.push(.{ .closed = conn.id });
@@ -300,6 +338,35 @@ test "the registry frees connections the transport never closed" {
     for (&backends) |*backend| _ = try registry.create(backend);
     try testing.expectEqual(@as(usize, 2), registry.count());
     registry.deinit();
+}
+
+test "session counts track every open and the reconnects that reuse an id" {
+    var queue = events_mod.Queue.init(testing.io, testing.allocator);
+    defer queue.deinit();
+
+    var registry = ConnectionRegistry.init(testing.allocator, testing.io, &queue);
+    defer registry.deinit();
+
+    var backend: u128 = 0;
+    const first = try registry.createWithId(40, &backend);
+    var counts = registry.counts();
+    try testing.expectEqual(@as(usize, 1), counts.active);
+    try testing.expectEqual(@as(usize, 1), counts.total);
+    try testing.expectEqual(@as(usize, 0), counts.reconnects);
+
+    registry.closeAndRelease(first);
+    const again = try registry.createWithId(40, &backend);
+    counts = registry.counts();
+    try testing.expectEqual(@as(usize, 1), counts.active);
+    try testing.expectEqual(@as(usize, 2), counts.total);
+    try testing.expectEqual(@as(usize, 1), counts.reconnects);
+
+    registry.closeAndRelease(again);
+    var fresh: u128 = 0;
+    _ = try registry.create(&fresh);
+    counts = registry.counts();
+    try testing.expectEqual(@as(usize, 3), counts.total);
+    try testing.expectEqual(@as(usize, 1), counts.reconnects);
 }
 
 test "retain and release balance out" {

@@ -75,6 +75,8 @@ pub const NetworkHandler = struct {
     payload_buffers: PayloadBuffers,
     oversize_sends: std.atomic.Value(usize) = .init(0),
     backpressure_sends: std.atomic.Value(usize) = .init(0),
+    outbound_dropped: std.atomic.Value(usize) = .init(0),
+    decompress_failures: std.atomic.Value(usize) = .init(0),
     port: ?port_mod.Port = null,
     events: events_mod.Queue,
     connections: connection_mod.ConnectionRegistry,
@@ -138,8 +140,25 @@ pub const NetworkHandler = struct {
         return self.backpressure_sends.load(.monotonic);
     }
 
+    /// Frames the game produced that never reached the transport: no open session to send
+    /// through, a frame over the negotiated message size, or the port refusing it as closed.
+    pub fn outboundDroppedCount(self: *const NetworkHandler) usize {
+        return self.outbound_dropped.load(.monotonic);
+    }
+
     pub fn droppedPacketCount(self: *const NetworkHandler) usize {
         return self.dropped_packets.load(.monotonic);
+    }
+
+    /// Input refusals the handler can attribute to a packet: a full ring or queue, an
+    /// exhausted work pool, or a frame that did not decompress. The ring publish already
+    /// reports its refusal through `dropped_packets`, so the ring's counter is not added again.
+    pub fn inboundDroppedCount(self: *const NetworkHandler) usize {
+        return self.dropped_packets.load(.monotonic) + self.decompress_failures.load(.monotonic);
+    }
+
+    pub fn sessionCounts(self: *NetworkHandler) connection_mod.SessionCounts {
+        return self.connections.counts();
     }
 
     /// The transport is attached once, after the handler that owns the registry and the pool exists.
@@ -255,6 +274,8 @@ pub const NetworkHandler = struct {
     pub const sendImmediate = @import("send.zig").Methods(helper_scope).sendImmediate;
     pub const sendPackets = @import("send.zig").Methods(helper_scope).sendPackets;
     pub const sendPacketsWith = @import("send.zig").Methods(helper_scope).sendPacketsWith;
+    pub const sendPacketsOn = @import("send.zig").Methods(helper_scope).sendPacketsOn;
+    pub const sendPacketsUncompressedOn = @import("send.zig").Methods(helper_scope).sendPacketsUncompressedOn;
     pub const sendPacketsUncompressed = @import("send.zig").Methods(helper_scope).sendPacketsUncompressed;
     pub const sendPacketsUncompressedWith = @import("send.zig").Methods(helper_scope).sendPacketsUncompressedWith;
 
@@ -368,10 +389,23 @@ test "a split compressed batch round-trips in order" {
     try @import("network_handler_test.zig").Suite(test_scope).case_008();
 }
 
+test "transport counters report backpressure, drops and a full ring" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_009();
+}
+
+test "outbound drops count every refusal once" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_010();
+}
+
+test "a corrupt frame is counted as an inbound drop" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_011();
+}
+
 const helper_owner = @This();
 const helper_scope = struct {
     pub const log = @import("../core/log.zig");
     pub const Port = helper_owner.port_mod.Port;
+    pub const Channel = helper_owner.port_mod.Channel;
     pub const Connection = helper_owner.Connection;
     pub const CompressionOptions = helper_owner.CompressionOptions;
     pub const SendPriority = helper_owner.SendPriority;

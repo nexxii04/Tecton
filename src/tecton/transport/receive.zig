@@ -60,7 +60,8 @@ pub fn Methods(comptime scope: type) type {
 
                     .shard_key = popped.entry.conn.id,
                     .kind = .input,
-                }) catch {
+                }) catch |err| {
+                    if (err == error.QueueFull) _ = self.dropped_packets.fetchAdd(1, .monotonic);
                     _ = self.decompress_pending.fetchSub(1, .monotonic);
                     dropPopped(ring, popped);
                     self.decompress_pool.release(work);
@@ -135,8 +136,9 @@ pub fn Methods(comptime scope: type) type {
                     .ctx = @ptrCast(work),
                     .shard_key = entry.conn.id,
                     .kind = .input,
-                }) catch {
+                }) catch |err| {
                     log.err("threaded_tasks enqueue FAILED", .{});
+                    if (err == error.QueueFull) _ = self.dropped_packets.fetchAdd(1, .monotonic);
                     _ = self.decompress_pending.fetchSub(1, .monotonic);
                     entry.conn.release();
                     self.allocator.free(entry.payload);
@@ -180,6 +182,7 @@ pub fn Methods(comptime scope: type) type {
             if (!conn.isOpen()) return;
             conn.retain();
             const copy = self.allocator.dupe(u8, payload) catch {
+                _ = self.dropped_packets.fetchAdd(1, .monotonic);
                 conn.release();
                 return;
             };
@@ -203,6 +206,7 @@ pub fn Methods(comptime scope: type) type {
                 .conn = conn,
                 .payload = copy,
             }) catch {
+                _ = self.dropped_packets.fetchAdd(1, .monotonic);
                 conn.release();
                 self.allocator.free(copy);
             };

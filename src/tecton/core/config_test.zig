@@ -84,6 +84,25 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqualStrings("immediate", loaded.movement_send_priority);
         }
 
+        pub fn case_021() !void {
+            const io = std.testing.io;
+            const allocator = std.testing.allocator;
+            const path = "test-movement-channel.properties";
+            defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+            var properties = ServerProperties{ .allocator = allocator };
+            defer properties.deinit();
+            try std.testing.expectEqualStrings("reliable", properties.movement_channel);
+            try scope.set_field(&properties, "movement-channel", "unreliable");
+            try std.testing.expectEqualStrings("unreliable", properties.movement_channel);
+            try std.testing.expectError(error.UnknownProperty, scope.set_field(&properties, "movement_channel", "unreliable"));
+
+            try properties.save(io, path);
+            var loaded = try ServerProperties.load(io, allocator, path);
+            defer loaded.deinit();
+            try std.testing.expectEqualStrings("unreliable", loaded.movement_channel);
+        }
+
         pub fn case_005() !void {
             var properties = ServerProperties{ .allocator = std.testing.allocator };
             defer properties.deinit();
@@ -307,6 +326,7 @@ pub fn Suite(comptime scope: type) type {
                 "output-slab-slots=512\n" ++
                 "transient-slab-slots=128\n" ++
                 "outbox-slots=512\n" ++
+                "outbound-queue-slots=512\n" ++
                 "max-players=42\n";
             const file = try std.Io.Dir.cwd().createFile(io, path, .{});
             file.writeStreamingAll(io, legacy) catch |err| {

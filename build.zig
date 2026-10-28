@@ -120,6 +120,26 @@ pub fn build(b: *std.Build) void {
     const embedded_example_step = b.step("embedded-example", "Build the embedded vanilla server example");
     embedded_example_step.dependOn(&embedded_example.step);
 
+    const soak_exe = b.addExecutable(.{
+        .name = "TectonSoak",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/soak/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libcpp = true,
+            .imports = &.{
+                .{ .name = "tecton", .module = tecton_mod },
+            },
+        }),
+    });
+    soak_exe.root_module.linkLibrary(leveldb_lib);
+    soak_exe.root_module.linkLibrary(zlib_dep.artifact("z"));
+    if (is_windows) soak_exe.root_module.linkSystemLibrary("winmm", .{});
+    const soak_step = b.step("soak", "Run the transport load, lifecycle and soak scenarios");
+    const run_soak = b.addRunArtifact(soak_exe);
+    if (b.args) |args| run_soak.addArgs(args);
+    soak_step.dependOn(&run_soak.step);
+
     const native_example = addPluginExample(b, target, optimize);
     const native_example_step = b.step("plugin-example", "Build the minimal C ABI plugin");
     native_example_step.dependOn(b.getInstallStep());
