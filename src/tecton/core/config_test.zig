@@ -363,7 +363,6 @@ pub fn Suite(comptime scope: type) type {
             var properties = ServerProperties{ .allocator = std.testing.allocator };
             defer properties.deinit();
 
-            try std.testing.expectEqual(@as(u16, 443), properties.tls_port);
             try std.testing.expectEqualStrings("", properties.tls_cert);
             try std.testing.expectEqualStrings("", properties.tls_key);
             try std.testing.expect(properties.tlsProblem() == null);
@@ -380,11 +379,10 @@ pub fn Suite(comptime scope: type) type {
             try scope.set_field(&properties, "tls-key", "key.pem");
             try std.testing.expect(properties.tlsProblem() == null);
 
-            try scope.set_field(&properties, "tls-port", "0");
-            try std.testing.expectEqual(ServerProperties.TlsProblem.zero_tls_port, properties.tlsProblem().?);
-            try scope.set_field(&properties, "tls-port", "8443");
-            try std.testing.expectEqual(@as(u16, 8443), properties.tls_port);
-            try std.testing.expectError(error.InvalidValue, scope.set_field(&properties, "tls-port", "https"));
+            try scope.set_field(&properties, "port", "0");
+            try std.testing.expectEqual(ServerProperties.TlsProblem.zero_port, properties.tlsProblem().?);
+            try scope.set_field(&properties, "port", "8443");
+            try std.testing.expectEqual(@as(u16, 8443), properties.port);
 
             try scope.set_field(&properties, "signaling-bind", "::1");
             try std.testing.expect(properties.tlsProblem() == null);
@@ -416,7 +414,8 @@ pub fn Suite(comptime scope: type) type {
             try scope.set_field(&properties, "signaling-bind", "127.0.0.1");
             try scope.set_field(&properties, "tls-cert", "/etc/tecton/fullchain.pem");
             try scope.set_field(&properties, "tls-key", "/etc/tecton/privkey.pem");
-            try scope.set_field(&properties, "tls-port", "8443");
+            try scope.set_field(&properties, "port", "8443");
+            try scope.set_field(&properties, "motd-port", "19132");
             try properties.save(io, path);
 
             var loaded = try ServerProperties.load(io, std.testing.allocator, path);
@@ -424,8 +423,14 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(scope.TlsMode.native, loaded.tls_mode);
             try std.testing.expectEqualStrings("/etc/tecton/fullchain.pem", loaded.tls_cert);
             try std.testing.expectEqualStrings("/etc/tecton/privkey.pem", loaded.tls_key);
-            try std.testing.expectEqual(@as(u16, 8443), loaded.tls_port);
+            try std.testing.expectEqual(@as(u16, 8443), loaded.port);
+            try std.testing.expectEqual(@as(u16, 19132), loaded.motd_port);
+            try std.testing.expectEqual(@as(u16, 19132), loaded.motdPort());
             try std.testing.expect(loaded.tlsProblem() == null);
+
+            var defaults = ServerProperties{ .allocator = std.testing.allocator };
+            defer defaults.deinit();
+            try std.testing.expectEqual(defaults.port, defaults.motdPort());
         }
 
         pub fn case_017() !void {

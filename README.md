@@ -138,14 +138,15 @@ listener is TCP; the rest of the path is UDP, so both must be reachable.
 
 | Port | Protocol | Purpose |
 |---|---|---|
-| `19132` | TCP | Partner signaling: `GET /v1/join`, `POST /v1/join/{networkId}` |
+| `19132` | TCP | Partner signaling: plain HTTP and HTTPS on the same port |
 | `19132` | UDP | Server-list ping / MOTD |
 | `7551` | UDP | LAN discovery (`lan-discovery=false` turns it off) |
-| `443` (`tls-port`) | TCP | HTTPS signaling with `tls-mode=native` |
 
-`port` is the plain signaling port. `address` is the default host for the signaling and MOTD
+`port` is the only public signaling port. `address` is the default host for the signaling and MOTD
 listeners, and `signaling-bind` overrides only the signaling host: that is how the plain listener
-stays on loopback while the MOTD remains reachable.
+stays on loopback while the MOTD remains reachable. With `tls-mode=native` the front owns `port`
+and accepts both TLS and plain HTTP there, so a client that falls back to plaintext still joins;
+the plain listener moves to a kernel-chosen loopback port and no second public port is taken.
 
 ### Signaling TLS
 
@@ -156,7 +157,7 @@ HTTPS endpoint is provided:
 |---|---|
 | `off` (default) | Signaling stays plain HTTP; every player sees the trust prompt once. |
 | `proxy` | A reverse proxy in front terminates TLS; Tecton only serves plain HTTP on loopback. |
-| `native` | Tecton terminates TLS itself and forwards plain HTTP to the signaling listener. |
+| `native` | Tecton terminates TLS itself on `port` and also relays plain HTTP there to the signaling listener. |
 
 With `proxy` or `native`, `signaling-bind` must be a loopback address (`127.0.0.1`, `::1`, or any
 `127.0.0.0/8`). The server refuses to start otherwise, so the plain port can never be reached from
@@ -203,20 +204,22 @@ If you add `request_body { max_size ... }`, keep the limit at 512 KB or more.
 
 ```properties
 address=0.0.0.0
+port=19132
 signaling-bind=127.0.0.1
 tls-mode=native
 tls-cert=/etc/tecton/fullchain.pem
 tls-key=/etc/tecton/privkey.pem
-tls-port=443
 ```
 
-The front accepts TLS on `address:tls-port`, speaks only HTTP/1.1 (ALPN), and forwards the plain
-text to `signaling-bind:port`. It uses TLS 1.2, which is the protocol set enabled by the mbedTLS
-build in the dependency tree; the certificate replaces the client's trust prompt.
+The front owns `address:port` and sniffs the first bytes of every connection: a TLS ClientHello is
+terminated with HTTP/1.1 (ALPN), anything else is relayed as plain HTTP. Both paths end at the
+plain signaling listener on a kernel-chosen loopback port, so no second public port exists and
+clients that reject the certificate fall back to plaintext on the same address. It uses TLS 1.2,
+which is the protocol set enabled by the mbedTLS build in the dependency tree; a trusted
+certificate replaces the client's trust prompt.
 
-Clients reach HTTPS at `address:tls-port` (443 by default), while the server-list ping and MOTD
-stay on `port` over UDP. The ping does not advertise `tls-port`: a value other than 443 is not
-discoverable and its behavior with retail clients is unverified, so keep 443 until that is tested.
+Clients reach HTTPS and plain HTTP at `address:port`, while the server-list ping and MOTD stay on
+the same `port` over UDP.
 
 - The front is built on POSIX sockets and verified on Linux. On Windows it refuses to start:
   Zig 0.16's Windows sockets cannot be polled for a byte relay. Use Mode A there.
@@ -225,7 +228,7 @@ discoverable and its behavior with retail clients is unverified, so keep 443 unt
   gets 1 s more, so a stalled client never pins a relay thread.
 - The loopback connect to the plain listener is not timed: Zig 0.16 panics when `netConnectIp`
   receives a timeout, and the listener is local and started with the server.
-- The front serves at most `min(max-sessions, 256)` TLS connections at once; connections over that
+- The front serves at most `min(max-sessions, 256)` signaling connections at once; connections over that
   limit are closed as soon as they are accepted.
 - `tls-cert` is a PEM chain, `tls-key` its PEM private key. Make the key `0600` and never commit
   it. Startup fails with a clear error when either is unreadable, unparsable or does not match.
@@ -238,7 +241,7 @@ discoverable and its behavior with retail clients is unverified, so keep 443 unt
 - The front reads `tls-cert` and `tls-key` once at startup: there is no hot reload. Restart Tecton
   after renewing (in Mode A, reload the proxy instead).
 - Verify the renewal with
-  `openssl s_client -connect host:tls-port -servername host -alpn http/1.1` (check the new dates)
+  `openssl s_client -connect host:port -servername host -alpn http/1.1` (check the new dates)
   and run the smoke test below; it must still answer 200.
 
 Smoke test either mode from another machine (pass the CA file when the certificate is not publicly
@@ -296,8 +299,8 @@ A client running on the same machine may already hold UDP `7551`. Start Tecton f
 Keys removed by earlier transports no longer exist. An older `server.properties` still loads: each
 unknown key logs `Unknown or invalid property` and the server starts with the remaining values.
 
-`tls-cert`, `tls-key` and `tls-port` are optional; without them signaling stays plain. `proxy` and
-`native` require a loopback `signaling-bind`, or startup fails.
+`tls-cert` and `tls-key` are optional; without them signaling stays plain. `proxy` and `native`
+require a loopback `signaling-bind`, or startup fails.
 
 - Payload sizing is negotiated by NetherNet inside SCTP; there is no manual payload-sizing knob.
 - Each session's outbox is bounded by `max(max-message-size, 64 KiB)` bytes and 512 messages.

@@ -232,8 +232,8 @@ pub const Tecton = struct {
                     "tls-mode={s} requires a loopback signaling listener; set signaling-bind=127.0.0.1 (or ::1) instead of {s}",
                     .{ @tagName(owned_config.tls_mode), owned_config.plainSignalingHost() },
                 ),
-                .zero_tls_port => log.err(
-                    "tls-mode=native needs a real tls-port: 0 would bind an ephemeral port clients cannot guess",
+                .zero_port => log.err(
+                    "tls-mode=native needs a real port: 0 would bind an ephemeral public port clients cannot guess",
                     .{},
                 ),
             }
@@ -437,7 +437,7 @@ pub const Tecton = struct {
         }
         log.info("NetherNet: signaling on {s}:{d}, {d} sessions, {d} ms transport tick", .{
             if (self.config.signaling_bind.len > 0) self.config.signaling_bind else self.config.address,
-            self.config.port,
+            if (self.nethernet) |adapter| adapter.signalingPort() else self.config.port,
             self.config.effectiveMaxSessions(),
             ServerProperties.clampTransportTickMs(self.config.transport_tick_ms),
         });
@@ -449,15 +449,15 @@ pub const Tecton = struct {
         switch (self.config.tls_mode) {
             .off => log.info("Signaling TLS: off (plain HTTP; clients prompt before trusting it)", .{}),
             .proxy => log.info("Signaling TLS: terminated by a proxy in front of the listener", .{}),
-            .native => log.info("Signaling TLS: native front on {s}:{d}, plain listener on {s}:{d}", .{
+            .native => log.info("Signaling TLS: native on {s}:{d} (TLS and plain HTTP in one port), loopback listener on {s}:{d}", .{
                 self.config.address,
-                self.config.tls_port,
-                self.config.plainSignalingHost(),
                 self.config.port,
+                self.config.plainSignalingHost(),
+                if (self.nethernet) |adapter| adapter.signalingPort() else 0,
             }),
         }
-        if (self.config.lan_discovery and self.config.lan_port == self.config.port) {
-            log.warn("lan-port and port share {d}: LAN discovery and the MOTD listener both need UDP, so one of them will not bind", .{self.config.port});
+        if (self.config.lan_discovery and self.config.lan_port == self.config.motdPort()) {
+            log.warn("lan-port and motd-port share {d}: LAN discovery and the MOTD listener both need UDP, so one of them will not bind", .{self.config.motdPort()});
         }
         log.info("Mob broadcast interval: {d} ticks", .{self.mob_broadcast_interval});
         if (self.config.parallel_visibility and self.threaded_tasks.worldWorkerCount() > 1) {
@@ -548,6 +548,8 @@ pub const Tecton = struct {
         const adapter = try NetherNetAdapter.init(self.io, self.allocator, .{
             .address = self.config.address,
             .port = self.config.port,
+            .signaling_port = if (self.config.tls_mode == .native) 0 else null,
+            .motd_port = self.config.motd_port,
             .motd = self.config.motd,
             .level_name = self.config.level_name,
             .gamemode = self.config.gameMode(),
@@ -582,11 +584,12 @@ pub const Tecton = struct {
 
     fn attachTlsFront(self: *Tecton) !void {
         if (self.config.tls_mode != .native) return;
-        const bind = std.Io.net.IpAddress.parse(self.config.address, self.config.tls_port) catch {
-            log.err("tls-port={d} cannot be served on address={s}: not an IP address", .{ self.config.tls_port, self.config.address });
+        const adapter = self.nethernet orelse return error.TransportUnavailable;
+        const bind = std.Io.net.IpAddress.parse(self.config.address, self.config.port) catch {
+            log.err("port={d} cannot be served on address={s}: not an IP address", .{ self.config.port, self.config.address });
             return error.InvalidAddress;
         };
-        const backend = std.Io.net.IpAddress.parse(self.config.plainSignalingHost(), self.config.port) catch {
+        const backend = std.Io.net.IpAddress.parse(self.config.plainSignalingHost(), adapter.signalingPort()) catch {
             log.err("tls-mode=native needs signaling-bind to be an IP literal, not {s}", .{self.config.plainSignalingHost()});
             return error.InvalidAddress;
         };

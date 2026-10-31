@@ -11,6 +11,10 @@ pub fn Suite(comptime scope: type) type {
             _ = conn;
             const state: *TestDispatchState = @ptrCast(@alignCast(ctx));
             state.dispatched_packets += packets.len;
+            if (packets.len > 0 and packets[0].len > 0) {
+                state.last_packet_head = packets[0][0];
+                if (state.first_packet_head == null) state.first_packet_head = packets[0][0];
+            }
             if (state.expected_fill) |fill| {
                 for (packets) |packet| {
                     for (packet) |byte| {
@@ -18,6 +22,14 @@ pub fn Suite(comptime scope: type) type {
                     }
                 }
             }
+        }
+
+        fn initialFrame(payload: []const u8, buffer: []u8) ![]const u8 {
+            const packets = [_][]const u8{payload};
+            return scope.Compression.compressInto(&packets, .{
+                .compression_method = .NotPresent,
+                .compression_threshold = 255,
+            }, buffer);
         }
 
         fn drainUntilIdle(tasks: *ThreadedTaskQueue, handler: *NetworkHandler, io: std.Io) !void {
@@ -99,9 +111,10 @@ pub fn Suite(comptime scope: type) type {
             const live = try handler.connections.create(&live_backend);
             const resigned = try handler.connections.create(&closed_backend);
 
+            var frame_buffer: [32]u8 = undefined;
             for (0..4) |i| {
                 const payload = [_]u8{@intCast(i + 1)} ** 16;
-                NetworkHandler.onPacket(handler, live, &payload);
+                NetworkHandler.onPacket(handler, live, try initialFrame(&payload, &frame_buffer));
             }
             NetworkHandler.onPacket(handler, resigned, "stale");
             handler.connections.closeAndRelease(resigned);
@@ -158,8 +171,9 @@ pub fn Suite(comptime scope: type) type {
             const fill: u8 = 0x37;
             const slab_payload = [_]u8{fill} ** 32;
             const overflow_payload = [_]u8{fill} ** 100;
-            NetworkHandler.onPacket(handler, conn, &slab_payload);
-            NetworkHandler.onPacket(handler, conn, &overflow_payload);
+            var frame_buffer: [128]u8 = undefined;
+            NetworkHandler.onPacket(handler, conn, try initialFrame(&slab_payload, &frame_buffer));
+            NetworkHandler.onPacket(handler, conn, try initialFrame(&overflow_payload, &frame_buffer));
 
             dispatch_state.expected_fill = fill;
             const result = handler.drainPackets(std.math.maxInt(u64), 4096);
@@ -225,19 +239,20 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(usize, 6), sent.len);
             for (sent[0..4], 0..) |*entry, index| {
                 try std.testing.expectEqual(conn.id, entry.conn_id);
-                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, allocator);
+                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, .negotiated, allocator);
                 defer decoded.deinit();
                 try std.testing.expectEqual(@as(usize, 1), decoded.packets.len);
                 try std.testing.expectEqualSlices(u8, &expected[index], decoded.packets[0]);
             }
 
             {
-                const decoded = try scope.Compression.decompress(sent[4].bytes, handler.options, allocator);
+                try std.testing.expectEqual(@as(u8, "handshake reply".len), sent[4].bytes[0]);
+                const decoded = try scope.Compression.decompress(sent[4].bytes, handler.options, .initial, allocator);
                 defer decoded.deinit();
                 try std.testing.expectEqualStrings("handshake reply", decoded.packets[0]);
             }
             {
-                const decoded = try scope.Compression.decompress(sent[5].bytes, handler.options, allocator);
+                const decoded = try scope.Compression.decompress(sent[5].bytes, handler.options, .negotiated, allocator);
                 defer decoded.deinit();
                 try std.testing.expectEqual(@as(usize, 2), decoded.packets.len);
                 try std.testing.expectEqualStrings("first", decoded.packets[0]);
@@ -280,7 +295,7 @@ pub fn Suite(comptime scope: type) type {
             // Frames must arrive in order: decoding them back-to-back rebuilds the batch.
             var decoded_count: usize = 0;
             for (fake.sent.items) |entry| {
-                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, allocator);
+                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, .negotiated, allocator);
                 defer decoded.deinit();
                 for (decoded.packets) |packet| {
                     try std.testing.expect(decoded_count < packets.len);
@@ -316,10 +331,15 @@ pub fn Suite(comptime scope: type) type {
             const conn = try handler.connections.create(&backend);
 
             const big = [_]u8{0xA5} ** 4096;
-            try std.testing.expectError(error.PayloadTooLarge, handler.sendPacket(conn, &big));
+            try handler.sendPacket(conn, &big);
             try std.testing.expectError(error.PayloadTooLarge, handler.sendFramed(conn, &big, .normal));
-            try std.testing.expectEqual(@as(usize, 2), handler.oversizeSendCount());
-            try std.testing.expectEqual(@as(usize, 0), fake.sent.items.len);
+            try std.testing.expectEqual(@as(usize, 1), handler.oversizeSendCount());
+            try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
+
+            const decoded = try scope.Compression.decompress(fake.sent.items[0].bytes, handler.options, .negotiated, allocator);
+            defer decoded.deinit();
+            try std.testing.expectEqual(@as(usize, 1), decoded.packets.len);
+            try std.testing.expectEqualSlices(u8, &big, decoded.packets[0]);
 
             handler.connections.closeAndRelease(conn);
         }
@@ -401,7 +421,7 @@ pub fn Suite(comptime scope: type) type {
 
             var decoded_count: usize = 0;
             for (fake.sent.items) |entry| {
-                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, allocator);
+                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, .negotiated, allocator);
                 defer decoded.deinit();
                 for (decoded.packets) |packet| {
                     try std.testing.expect(decoded_count < packets.len);
@@ -516,8 +536,7 @@ pub fn Suite(comptime scope: type) type {
             const conn = try handler.connections.create(&backend);
             defer handler.connections.closeAndRelease(conn);
 
-            const CompressionMethod = @import("protocol").CompressionMethod;
-            const corrupt = [_]u8{ 254, @intFromEnum(CompressionMethod.Zlib), 0x00 };
+            const corrupt = [_]u8{ 0x05, 0x00 };
             NetworkHandler.onPacket(handler, conn, &corrupt);
             _ = handler.drainPackets(std.math.maxInt(u64), 4096);
             try drainUntilIdle(&tasks, handler, io);
@@ -525,6 +544,47 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(usize, 1), handler.decompress_failures.load(.monotonic));
             try std.testing.expectEqual(@as(usize, 1), handler.inboundDroppedCount());
             try std.testing.expectEqual(@as(usize, 0), dispatch_state.dispatched_packets);
+        }
+
+        pub fn case_012() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            try tasks.start();
+            defer tasks.deinit();
+
+            var dispatch_state = TestDispatchState{};
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = &dispatch_state,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            try handler.enableInboundRing(8, 64);
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+            defer handler.connections.closeAndRelease(conn);
+
+            const request = [_]u8{ 0x06, 0xC1, 0x01, 0x00, 0x00, 0x08, 0xB1 };
+            NetworkHandler.onPacket(handler, conn, &request);
+            _ = handler.drainPackets(std.math.maxInt(u64), 4096);
+            try drainUntilIdle(&tasks, handler, io);
+
+            try std.testing.expectEqual(@as(usize, 1), dispatch_state.dispatched_packets);
+            try std.testing.expectEqual(@as(?u8, 0xC1), dispatch_state.first_packet_head);
+
+            conn.markCompressionReady();
+            const login = [_]u8{ 0x01, 0x00 };
+            const packets = [_][]const u8{&login};
+            const framed = try scope.Compression.compress(&packets, handler.options, allocator);
+            defer allocator.free(framed);
+            NetworkHandler.onPacket(handler, conn, framed);
+            _ = handler.drainPackets(std.math.maxInt(u64), 4096);
+            try drainUntilIdle(&tasks, handler, io);
+
+            try std.testing.expectEqual(@as(usize, 2), dispatch_state.dispatched_packets);
+            try std.testing.expectEqual(@as(?u8, 0x01), dispatch_state.last_packet_head);
         }
     };
 }

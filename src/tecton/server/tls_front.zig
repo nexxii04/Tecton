@@ -24,9 +24,9 @@ pub const Options = struct {
     close_timeout_ms: u32 = 1_000,
 };
 
-/// TLS terminator for signaling: one accept thread, one relay thread per connection.
-/// The backend connect is unbounded (Zig 0.16 panics on a connect timeout) and relay
-/// uses `poll`, so `native` is POSIX only.
+/// Signaling front: one accept thread holds the public port and each connection gets
+/// one relay thread. It sniffs the first record so the same port serves TLS and plain
+/// HTTP; the relay uses `poll`, so `native` is POSIX only.
 pub const Front = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -127,7 +127,7 @@ pub const Front = struct {
             self.server = null;
             return err;
         };
-        log.info("Signaling TLS: native front on {f}, forwarding to {f}", .{
+        log.info("Signaling front: TLS and plain HTTP on {f}, forwarding to {f}", .{
             self.server.?.socket.address,
             self.options.backend,
         });
@@ -217,6 +217,7 @@ pub const Front = struct {
             .read_timeout_ms = @max(500, self.options.handshake_timeout_ms),
         };
         preventSigPipe(client.socket.handle);
+        setNoDelay(client.socket.handle);
         // Unregister before closing: stop shuts down whatever is still listed.
         defer self.allocator.destroy(conn);
         defer {
@@ -268,6 +269,8 @@ pub const Front = struct {
     }
 };
 
+const PeerKind = enum { tls, http };
+
 const Connection = struct {
     front: *Front,
     client: Stream,
@@ -281,6 +284,60 @@ const Connection = struct {
     read_timeout_ms: u32,
 
     fn run(self: *Connection) void {
+        const kind = self.classify() catch return;
+        switch (kind) {
+            .tls => self.runTls(),
+            .http => self.runPlain(),
+        }
+    }
+
+    /// A TLS ClientHello starts with a handshake record; anything else is worth handing to
+    /// the HTTP listener. `peek` leaves the bytes for whichever path takes over.
+    fn classify(self: *Connection) !PeerKind {
+        if (comptime builtin.os.tag == .windows) return error.TlsNativeUnsupported;
+        const io = self.front.io;
+        var waited_ms: u32 = 0;
+        while (self.front.running.load(.acquire)) {
+            const slice_ms = self.readSliceMs(io, waited_ms) orelse return error.Timeout;
+            var fds = [1]std.posix.pollfd{
+                .{ .fd = self.client.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
+            };
+            const ready = std.posix.poll(&fds, slice_ms) catch return error.ConnectionClosed;
+            if (ready == 0) {
+                waited_ms += @intCast(slice_ms);
+                continue;
+            }
+
+            var first: [3]u8 = undefined;
+            const count = peek(self.client.socket.handle, &first) catch |err| switch (err) {
+                error.Interrupted => continue,
+                error.WouldBlock => {
+                    waited_ms += @intCast(@min(slice_ms, poll_slice_ms));
+                    continue;
+                },
+                error.ConnectionClosed => return error.ConnectionClosed,
+            };
+            if (count >= 3 and first[0] == 0x16 and first[1] == 0x03) return .tls;
+            return .http;
+        }
+        return error.ConnectionClosed;
+    }
+
+    fn connectBackend(self: *Connection) bool {
+        self.backend = self.front.options.backend.connect(self.front.io, .{ .mode = .stream }) catch |err| {
+            log.warn("signaling front could not reach the loopback listener at {f}: {s}", .{
+                self.front.options.backend,
+                @errorName(err),
+            });
+            return false;
+        };
+        preventSigPipe(self.backend.socket.handle);
+        setNoDelay(self.backend.socket.handle);
+        self.backend_connected.store(true, .release);
+        return true;
+    }
+
+    fn runTls(self: *Connection) void {
         const io = self.front.io;
         mbedtls.mbedtls_ssl_init(&self.ssl);
         defer mbedtls.mbedtls_ssl_free(&self.ssl);
@@ -296,16 +353,7 @@ const Connection = struct {
             return;
         }
         self.handshake_deadline = null;
-
-        self.backend = self.front.options.backend.connect(io, .{ .mode = .stream }) catch |err| {
-            log.warn("TLS front could not reach the plain signaling listener at {f}: {s}", .{
-                self.front.options.backend,
-                @errorName(err),
-            });
-            return;
-        };
-        preventSigPipe(self.backend.socket.handle);
-        self.backend_connected.store(true, .release);
+        if (!self.connectBackend()) return;
 
         self.read_timeout_ms = @max(500, self.front.options.idle_timeout_ms);
         self.relay();
@@ -315,9 +363,61 @@ const Connection = struct {
         self.write_deadline_override = null;
     }
 
+    fn runPlain(self: *Connection) void {
+        self.handshake_deadline = null;
+        if (!self.connectBackend()) return;
+        self.read_timeout_ms = @max(500, self.front.options.idle_timeout_ms);
+        self.relayPlain();
+    }
+
     fn relay(self: *Connection) void {
         if (comptime builtin.os.tag == .windows) return;
         self.relayPolled();
+    }
+
+    fn relayPlain(self: *Connection) void {
+        if (comptime builtin.os.tag == .windows) return;
+        const io = self.front.io;
+        var buffer: [16 * 1024]u8 = undefined;
+        var idle_ms: u32 = 0;
+        const events: i16 = std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR;
+
+        while (self.front.running.load(.acquire)) {
+            var fds = [2]std.posix.pollfd{
+                .{ .fd = self.client.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
+                .{ .fd = self.backend.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
+            };
+            const ready = std.posix.poll(&fds, poll_slice_ms) catch return;
+            if (ready == 0) {
+                idle_ms += @intCast(poll_slice_ms);
+                if (idle_ms >= self.front.options.idle_timeout_ms) return;
+                continue;
+            }
+            idle_ms = 0;
+
+            if (fds[0].revents & events != 0) {
+                const read = readStream(io, self.client.socket.handle, &buffer) catch return;
+                if (read == 0) return;
+                writeAllBounded(
+                    io,
+                    self.backend.socket.handle,
+                    buffer[0..read],
+                    self.writeDeadline(),
+                    &self.front.running,
+                ) catch return;
+            }
+            if (fds[1].revents & events != 0) {
+                const read = readStream(io, self.backend.socket.handle, &buffer) catch return;
+                if (read == 0) return;
+                writeAllBounded(
+                    io,
+                    self.client.socket.handle,
+                    buffer[0..read],
+                    self.writeDeadline(),
+                    &self.front.running,
+                ) catch return;
+            }
+        }
     }
 
     /// Both directions run on this thread; only it touches `ssl`.
@@ -480,6 +580,19 @@ fn readStream(io: std.Io, handle: std.Io.net.Socket.Handle, buffer: []u8) !usize
     return io.vtable.netRead(io.userdata, handle, &slices);
 }
 
+const PeekError = error{ Interrupted, WouldBlock, ConnectionClosed };
+
+fn peek(handle: std.Io.net.Socket.Handle, buffer: []u8) PeekError!usize {
+    if (comptime builtin.os.tag == .windows) return error.ConnectionClosed;
+    const rc = std.c.recvfrom(handle, buffer.ptr, buffer.len, std.posix.MSG.PEEK, null, null);
+    if (rc >= 0) return @intCast(rc);
+    return switch (std.posix.errno(rc)) {
+        .INTR => error.Interrupted,
+        .AGAIN => error.WouldBlock,
+        else => error.ConnectionClosed,
+    };
+}
+
 fn remainingMs(io: std.Io, deadline: std.Io.Timestamp) i32 {
     const left = std.Io.Timestamp.now(io, .awake).durationTo(deadline).nanoseconds;
     if (left <= 0) return 0;
@@ -554,6 +667,13 @@ fn preventSigPipe(handle: std.Io.net.Socket.Handle) void {
             log.warn("TLS front cannot set SO_NOSIGPIPE: {s}", .{@errorName(err)});
         };
     }
+}
+
+/// Small TLS and HTTP writes must not wait on Nagle.
+fn setNoDelay(handle: std.Io.net.Socket.Handle) void {
+    if (comptime builtin.os.tag == .windows) return;
+    var enabled: c_int = 1;
+    std.posix.setsockopt(handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&enabled)) catch {};
 }
 
 const testing = std.testing;
@@ -745,6 +865,44 @@ test "the native front proxies a TLS request to the plain signaling listener" {
     const read = try client.read(&response);
     try testing.expect(read > 0);
     try testing.expect(std.mem.indexOf(u8, response[0..read], "tlsok") != null);
+}
+
+test "the same port forwards a plain HTTP request to the plain signaling listener" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const io = testing.io;
+    const allocator = testing.allocator;
+
+    var backend = FakeBackend{
+        .io = io,
+        .server = try (try IpAddress.parseIp4("127.0.0.1", 0)).listen(io, .{ .reuse_address = true }),
+    };
+    defer backend.server.deinit(io);
+    var backend_future = try io.concurrent(FakeBackend.run, .{&backend});
+    defer backend_future.await(io);
+
+    const front = try Front.init(io, allocator, .{
+        .bind = try IpAddress.parseIp4("127.0.0.1", 0),
+        .backend = try IpAddress.parseIp4("127.0.0.1", backend.server.socket.address.getPort()),
+        .cert_path = test_cert,
+        .key_path = test_key,
+    });
+    defer front.deinit();
+    try front.start();
+
+    const stream = try (try IpAddress.parseIp4("127.0.0.1", front.boundPort())).connect(io, .{ .mode = .stream });
+    defer stream.close(io);
+    try writeStreamAll(io, stream.socket.handle, "GET /v1/join HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+    var response: [256]u8 = undefined;
+    var received: usize = 0;
+    while (received == 0) {
+        var fds = [1]std.posix.pollfd{
+            .{ .fd = stream.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
+        };
+        if (try std.posix.poll(&fds, 2_000) == 0) return error.ResponseTimeout;
+        received = try readStream(io, stream.socket.handle, &response);
+    }
+    try testing.expect(std.mem.indexOf(u8, response[0..received], "tlsok") != null);
 }
 
 test "native TLS refuses to start without usable certificate material" {

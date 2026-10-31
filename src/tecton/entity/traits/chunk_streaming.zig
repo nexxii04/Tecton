@@ -32,7 +32,7 @@ const ChunkStreamState = struct {
     upgrade_idx: usize,
 };
 
-const MAX_INFLIGHT_BATCHES: u32 = 4;
+const MAX_INFLIGHT_BATCHES: u32 = 8;
 
 pub const PacketAction = enum { send_cached, wait, schedule };
 

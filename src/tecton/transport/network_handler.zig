@@ -6,6 +6,7 @@ const threaded_tasks = @import("../tasks/threaded_tasks.zig");
 const ThreadedTaskQueue = threaded_tasks.ThreadedTaskQueue;
 const CompressionOptions = @import("./compression/options.zig").CompressionOptions;
 const Compression = @import("./compression/root.zig").Compression;
+const Framing = @import("./compression/root.zig").Framing;
 const DecompressResult = @import("./compression/root.zig").DecompressResult;
 const ArenaDecompressResult = @import("./compression/root.zig").ArenaDecompressResult;
 
@@ -252,7 +253,8 @@ pub const NetworkHandler = struct {
     const drainLegacy = @import("receive.zig").Methods(helper_scope).drainLegacy;
 
     pub fn onGamePacket(self: *NetworkHandler, conn: *Connection, payload: []const u8) !void {
-        const decompressed = try Compression.decompress(payload, self.options, self.allocator);
+        const framing: Framing = if (conn.isCompressionReady()) .negotiated else .initial;
+        const decompressed = try Compression.decompress(payload, self.options, framing, self.allocator);
         defer decompressed.deinit();
         self.host.dispatch(self.host.ctx, conn, decompressed.packets);
     }
@@ -337,6 +339,8 @@ const TestDispatchState = struct {
     dispatched_packets: usize = 0,
     expected_fill: ?u8 = null,
     content_mismatch: bool = false,
+    first_packet_head: ?u8 = null,
+    last_packet_head: ?u8 = null,
 };
 
 const test_owner = @This();
@@ -401,6 +405,10 @@ test "a corrupt frame is counted as an inbound drop" {
     try @import("network_handler_test.zig").Suite(test_scope).case_011();
 }
 
+test "the first NetherNet batch decodes raw and later batches decode compressed" {
+    try @import("network_handler_test.zig").Suite(test_scope).case_012();
+}
+
 const helper_owner = @This();
 const helper_scope = struct {
     pub const log = @import("../core/log.zig");
@@ -419,6 +427,7 @@ const helper_scope = struct {
     pub const WorkerBuffers = helper_owner.WorkerBuffers;
     pub const threaded_tasks = helper_owner.threaded_tasks;
     pub const Compression = helper_owner.Compression;
+    pub const Framing = helper_owner.Framing;
     pub const SendBuffers = helper_owner.SendBuffers;
     pub const ringDecompressTask = helper_owner.NetworkHandler.ringDecompressTask;
     pub const decompressTask = helper_owner.NetworkHandler.decompressTask;

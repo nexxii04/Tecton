@@ -117,14 +117,16 @@ pub fn Methods(comptime scope: type) type {
                 }
             }
 
+            // The capacity is compression's upper bound, not the final size. A single
+            // large packet can still fit once zlib runs, so try it in a heap buffer.
+            if (packets.len < 2) {
+                const buffer = self.allocator.alloc(u8, capacity) catch return error.OutOfMemory;
+                defer self.allocator.free(buffer);
+                return sendFrame(self, port, conn, packets, options, channel, priority, buffer);
+            }
+
             // Halving keeps the order and bounds the recursion: each half is sent before the
             // next one, so the client sees the same packet sequence.
-            if (packets.len < 2) {
-                _ = self.oversize_sends.fetchAdd(1, .monotonic);
-                recordOutboundDrop(self);
-                scope.log.debug("dropping a {d}-byte message for connection {d}: the transport allows {d}", .{ capacity, conn.id, max_payload });
-                return error.PayloadTooLarge;
-            }
             const half = packets.len / 2;
             try sendPacketsFramed(self, conn, packets[0..half], options, channel, priority);
             try sendPacketsFramed(self, conn, packets[half..], options, channel, priority);
@@ -148,6 +150,12 @@ pub fn Methods(comptime scope: type) type {
                 },
                 else => return err,
             };
+            const max_payload = port.maxPayload(conn);
+            if (framed.len > max_payload) {
+                _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                recordOutboundDrop(self);
+                return error.PayloadTooLarge;
+            }
             return sendThroughPort(self, port, conn, framed, channel, priority);
         }
 

@@ -39,6 +39,10 @@ pub fn outboxBytes(max_message_size: u32) usize {
 pub const Config = struct {
     address: []const u8 = "0.0.0.0",
     port: u16 = 19132,
+    /// Port for the plain signaling listener: null follows `port`, 0 asks the kernel
+    /// for one (the native front forwards to whatever it got).
+    signaling_port: ?u16 = null,
+    motd_port: u16 = 0,
     motd: []const u8 = "Tecton Server",
     level_name: []const u8 = "Bedrock level",
     gamemode: protocol.GameMode = .Survival,
@@ -92,8 +96,9 @@ pub const Adapter = struct {
 
     pub fn init(io: std.Io, allocator: std.mem.Allocator, config: Config, deps: Deps) !*Adapter {
         const signal_host = if (config.signaling_bind.len > 0) config.signaling_bind else config.address;
-        const bind = std.Io.net.IpAddress.parse(signal_host, config.port) catch {
-            log.err("NetherNet cannot bind signaling to {s}:{d}: invalid address", .{ signal_host, config.port });
+        const signaling_port = config.signaling_port orelse config.port;
+        const bind = std.Io.net.IpAddress.parse(signal_host, signaling_port) catch {
+            log.err("NetherNet cannot bind signaling to {s}:{d}: invalid address", .{ signal_host, signaling_port });
             return error.InvalidAddress;
         };
 
@@ -141,11 +146,15 @@ pub const Adapter = struct {
         self.host = try nethernet.server.Host.init(io, allocator, hostConfig(config, self, bind));
         log.info("NetherNet listening on {s}:{d} (signaling), UDP {d} (motd) and UDP {d} (lan)", .{
             signal_host,
-            config.port,
-            config.port,
+            self.host.signalingPort(),
+            motdPort(config),
             if (config.lan_discovery) config.lan_port else 0,
         });
         return self;
+    }
+
+    pub fn signalingPort(self: *const Adapter) u16 {
+        return self.host.signalingPort();
     }
 
     pub fn port(self: *Adapter) port_mod.Port {
@@ -198,6 +207,7 @@ pub const Adapter = struct {
             return;
         };
         session.user_data = conn;
+        conn.max_payload = self.host.sessionMaxMessageSize(session.id) orelse 0;
         log.info("NetherNet session {d} opened", .{conn.id});
     }
 
@@ -262,7 +272,10 @@ pub const Adapter = struct {
     fn maxPayload(raw: *anyopaque, conn: *Connection) usize {
         const self: *Adapter = @ptrCast(@alignCast(raw));
         if (!self.alive.load(.acquire)) return 0;
-        return self.host.sessionMaxMessageSize(conn.id) orelse 0;
+        return if (conn.max_payload != 0)
+            conn.max_payload
+        else
+            self.host.sessionMaxMessageSize(conn.id) orelse 0;
     }
 
     fn countPlayers(raw: *anyopaque) usize {
@@ -274,6 +287,10 @@ pub const Adapter = struct {
 /// The advertisement the client reads before it joins. `protocol` and `game_version`
 /// are Tecton's, not the transport defaults: a client whose build does not match would
 /// be turned away after the handshake.
+fn motdPort(config: Config) u16 {
+    return if (config.motd_port == 0) config.port else config.motd_port;
+}
+
 pub fn serverData(config: Config) ServerData {
     return .{
         .server_name = config.motd,
@@ -404,7 +421,7 @@ fn hostConfig(config: Config, self: *Adapter, bind: std.Io.net.IpAddress) nether
             .outbox_slots = outbox_slots,
             .outbox_bytes = outboxBytes(config.max_message_size),
         },
-        .motd_config = .{ .port = config.port },
+        .motd_config = .{ .port = motdPort(config) },
         .identity = self.identity,
         .identity_verifier = if (self.verifier) |*verifier| verifier else null,
         .accept_unverified_identity = !config.online_mode and !config.require_client_identity,

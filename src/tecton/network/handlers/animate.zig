@@ -21,6 +21,7 @@ pub fn handleAnimate(
         .runtime_entity_id = @intCast(player.entity.runtime_id),
         .data = packet.data,
         .swing_source = packet.swing_source,
+        .hand = packet.hand,
     };
     const serialized = try out_packet.serialize(&out_stream);
 

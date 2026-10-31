@@ -26,7 +26,7 @@ pub fn Suite(comptime scope: type) type {
                 const compressed = try Compression.compress(&pkts, options, allocator);
                 defer allocator.free(compressed);
 
-                const result = try Compression.decompress(compressed, options, allocator);
+                const result = try Compression.decompress(compressed, options, .negotiated, allocator);
                 defer result.deinit();
 
                 try std.testing.expectEqual(@as(usize, 1), result.packets.len);
@@ -61,7 +61,7 @@ pub fn Suite(comptime scope: type) type {
                 const compressed = try Compression.compress(pkt_slices[0..pkt_count], options, allocator);
                 defer allocator.free(compressed);
 
-                const result = try Compression.decompress(compressed, options, allocator);
+                const result = try Compression.decompress(compressed, options, .negotiated, allocator);
                 defer result.deinit();
 
                 try std.testing.expectEqual(pkt_count, result.packets.len);
@@ -146,7 +146,7 @@ pub fn Suite(comptime scope: type) type {
 
                 var arena = std.heap.ArenaAllocator.init(allocator);
                 defer arena.deinit();
-                const result = try Compression.decompressInto(compressed, options, arena.allocator());
+                const result = try Compression.decompressInto(compressed, options, .negotiated, arena.allocator());
 
                 try std.testing.expectEqual(pkt_count, result.packets.len);
                 for (0..pkt_count) |i| {
@@ -170,9 +170,9 @@ pub fn Suite(comptime scope: type) type {
             const packets = [_][]const u8{&packet};
             const compressed = try Compression.compress(&packets, options, allocator);
             defer allocator.free(compressed);
-            try std.testing.expect(compressed[1] != 0xFE);
+            try std.testing.expectEqual(@as(u8, 0xFF), compressed[0]);
 
-            const result = try Compression.decompressInto(compressed, options, arena.allocator());
+            const result = try Compression.decompressInto(compressed, options, .negotiated, arena.allocator());
             try std.testing.expectEqual(@as(usize, 1), result.packets.len);
             try std.testing.expectEqualSlices(u8, &packet, result.packets[0]);
             const payload_ptr = @intFromPtr(result.packets[0].ptr);
@@ -202,7 +202,7 @@ pub fn Suite(comptime scope: type) type {
                 const compressed = try Compression.compress(&slices, options, allocator);
                 defer allocator.free(compressed);
 
-                const result = try Compression.decompressInto(compressed, options, arena.allocator());
+                const result = try Compression.decompressInto(compressed, options, .negotiated, arena.allocator());
                 try std.testing.expectEqualSlices(u8, payload[0..len], result.packets[0]);
                 _ = arena.reset(.retain_capacity);
             }
@@ -221,6 +221,57 @@ pub fn Suite(comptime scope: type) type {
             try expectSameBytes(&.{ &medium, &small }, .{ .compression_method = .Zlib, .compression_threshold = 1 });
             try expectSameBytes(&.{&large}, .{ .compression_method = .Zlib, .compression_threshold = 255 });
             try expectSameBytes(&.{&medium}, .{ .compression_method = .NotPresent, .compression_threshold = 255 });
+        }
+
+        pub fn case_012() !void {
+            const allocator = std.testing.allocator;
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+
+            const initial = [_]u8{ 0x06, 0xC1, 0x01, 0x00, 0x00, 0x08, 0xB1 };
+            const result = try Compression.decompressInto(&initial, .{
+                .compression_method = .NotPresent,
+                .compression_threshold = 255,
+            }, .initial, arena.allocator());
+
+            try std.testing.expectEqual(@as(usize, 1), result.packets.len);
+            try std.testing.expectEqualSlices(u8, initial[1..], result.packets[0]);
+        }
+
+        pub fn case_013() !void {
+            defer Compression.deinitThreadLocal();
+            const allocator = std.testing.allocator;
+            const packet = [_]u8{ 0x01, 0x02 };
+            const packets = [_][]const u8{&packet};
+            const options = CompressionOptions{ .compression_method = .Zlib, .compression_threshold = 255 };
+
+            const framed = try Compression.compress(&packets, options, allocator);
+            defer allocator.free(framed);
+            try std.testing.expectEqual(@as(u8, 0xFF), framed[0]);
+            try std.testing.expectEqual(@as(usize, 4), framed.len);
+
+            const decoded = try Compression.decompress(framed, options, .negotiated, allocator);
+            defer decoded.deinit();
+            try std.testing.expectEqual(@as(usize, 1), decoded.packets.len);
+            try std.testing.expectEqualSlices(u8, &packet, decoded.packets[0]);
+        }
+
+        pub fn case_014() !void {
+            defer Compression.deinitThreadLocal();
+            const allocator = std.testing.allocator;
+            var packet: [600]u8 = undefined;
+            for (&packet, 0..) |*byte, index| byte.* = @intCast(index % 251);
+            const packets = [_][]const u8{&packet};
+            const options = CompressionOptions{ .compression_method = .Zlib, .compression_threshold = 1 };
+
+            const framed = try Compression.compress(&packets, options, allocator);
+            defer allocator.free(framed);
+            try std.testing.expectEqual(@as(u8, 0x00), framed[0]);
+
+            const decoded = try Compression.decompress(framed, options, .negotiated, allocator);
+            defer decoded.deinit();
+            try std.testing.expectEqual(@as(usize, 1), decoded.packets.len);
+            try std.testing.expectEqualSlices(u8, &packet, decoded.packets[0]);
         }
 
         fn expectSameBytes(packets: []const []const u8, options: CompressionOptions) !void {

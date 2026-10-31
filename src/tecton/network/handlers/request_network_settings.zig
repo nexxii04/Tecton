@@ -22,7 +22,7 @@ pub fn handleNetworkSettings(
             .reason = reason,
         };
         const serialized = try disconnect.serialize(&str);
-        try network.sendPacket(connection, serialized);
+        try network.sendUncompressedPacket(connection, serialized);
         return;
     }
 
@@ -38,4 +38,5 @@ pub fn handleNetworkSettings(
     };
     const packet = try response.serialize(&write);
     try network.sendUncompressedPacket(connection, packet);
+    connection.markCompressionReady();
 }

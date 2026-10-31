@@ -38,7 +38,7 @@ pub fn Suite(comptime scope: type) type {
             const batch = try Compression.compress(&entries, options, allocator);
             defer allocator.free(batch);
 
-            const result = try Compression.decompress(batch, options, allocator);
+            const result = try Compression.decompress(batch, options, .negotiated, allocator);
             defer result.deinit();
 
             try std.testing.expectEqual(@as(usize, 2), result.packets.len);

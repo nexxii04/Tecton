@@ -123,6 +123,7 @@ pub const Player = struct {
     pending_removal: std.atomic.Value(bool) = .init(false),
     spawned: bool = false,
     join_startup_started: bool = false,
+    spawn_chunks_started: bool = false,
     pending_dimension: ?*Dimension = null,
     opened_container: ?*Container = null,
     block_target: ?Protocol.BlockPosition = null,
@@ -502,6 +503,7 @@ pub const Player = struct {
     }
 
     fn releaseChunks(self: *Player) void {
+        self.spawn_chunks_started = false;
         const dimension = self.entity.dimension orelse return;
         const allocator = self.entity.allocator;
 
@@ -559,7 +561,8 @@ pub const Player = struct {
         }
     }
 
-    fn sendSpawnChunks(self: *Player) !void {
+    pub fn sendSpawnChunks(self: *Player) !void {
+        self.spawn_chunks_started = true;
         const allocator = self.entity.allocator;
 
         var pub_stream = BinaryStream.init(allocator, null, null);

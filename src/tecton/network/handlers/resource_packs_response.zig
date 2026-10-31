@@ -30,7 +30,8 @@ const JoinStartupTask = struct {
     spawn_pos: Protocol.BlockPosition = Protocol.BlockPosition.init(0, 100, 0),
 };
 
-const JOIN_STAGE_DELAY_TICKS: u8 = 20;
+/// One tick preserves the client's packet order without stretching the join.
+const JOIN_STAGE_DELAY_TICKS: u8 = 1;
 
 pub fn handleResourcePack(
     tecton: *Tecton,

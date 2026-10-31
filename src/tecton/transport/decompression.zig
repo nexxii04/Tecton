@@ -16,7 +16,8 @@ pub fn Methods(comptime scope: type) type {
 
         pub fn decompressTask(ctx: *anyopaque) void {
             const work = @as(*DecompressWork, @ptrCast(@alignCast(ctx)));
-            work.decompressed = Compression.decompress(work.raw, work.handler.options, work.allocator) catch |err| {
+            const framing: scope.Framing = if (work.conn.isCompressionReady()) .negotiated else .initial;
+            work.decompressed = Compression.decompress(work.raw, work.handler.options, framing, work.allocator) catch |err| {
                 std.log.warn("decompress failed: {}", .{err});
                 _ = work.handler.decompress_failures.fetchAdd(1, .monotonic);
                 work.allocator.free(work.raw);
@@ -34,7 +35,8 @@ pub fn Methods(comptime scope: type) type {
             if (workerBuffersForCurrentThread(work.handler)) |buffers| {
                 if (buffers.claim(&work.handler.tasks.stop_requested)) |index| {
                     const arena_allocator = buffers.arenas[index].allocator();
-                    if (Compression.decompressInto(work.raw, work.handler.options, arena_allocator)) |result| {
+                    const framing: scope.Framing = if (work.conn.isCompressionReady()) .negotiated else .initial;
+                    if (Compression.decompressInto(work.raw, work.handler.options, framing, arena_allocator)) |result| {
                         work.arena_result = result;
                         work.arena_outstanding = buffers.outstandingCounter(index);
                         _ = work.arena_outstanding.?.fetchAdd(1, .release);
@@ -46,7 +48,8 @@ pub fn Methods(comptime scope: type) type {
             }
 
             if (!decoded) {
-                if (Compression.decompress(work.raw, work.handler.options, work.allocator)) |result| {
+                const framing: scope.Framing = if (work.conn.isCompressionReady()) .negotiated else .initial;
+                if (Compression.decompress(work.raw, work.handler.options, framing, work.allocator)) |result| {
                     work.decompressed = result;
                 } else |err| {
                     std.log.warn("decompress failed: {}", .{err});

@@ -90,12 +90,16 @@ fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
             return false;
         },
         .send_existing_players => {
-            try sendExistingPlayers(state);
+            sendExistingPlayers(state) catch |err| {
+                log.warn("Could not send the player list to {s}: {s}", .{ player.username, @errorName(err) });
+            };
             state.stage = .broadcast_new_player;
             return false;
         },
         .broadcast_new_player => {
-            try broadcastNewPlayer(state);
+            broadcastNewPlayer(state) catch |err| {
+                log.warn("Could not announce {s} to the other players: {s}", .{ player.username, @errorName(err) });
+            };
             player.spawned = true;
             return true;
         },

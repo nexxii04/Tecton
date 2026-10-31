@@ -34,4 +34,11 @@ pub fn handleRequestChunkRadius(
     };
     const serialized = try response.serialize(&str);
     try network.sendPacket(connection, serialized);
+
+    // The client needs terrain before it can leave the loading screen.
+    if (changed or !player.spawn_chunks_started) {
+        player.sendSpawnChunks() catch |err| {
+            log.warn("Could not start chunk streaming for {s}: {s}", .{ player.username, @errorName(err) });
+        };
+    }
 }

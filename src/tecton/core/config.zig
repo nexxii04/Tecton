@@ -24,7 +24,7 @@ pub const ServerProperties = struct {
     tls_mode: TlsMode = .off,
     tls_cert: []const u8 = "",
     tls_key: []const u8 = "",
-    tls_port: u16 = 443,
+    motd_port: u16 = 0,
     motd: []const u8 = "Tecton Server",
     level_name: []const u8 = "Bedrock level",
     gamemode: []const u8 = "survival",
@@ -65,6 +65,10 @@ pub const ServerProperties = struct {
         return if (self.signaling_bind.len > 0) self.signaling_bind else self.address;
     }
 
+    pub fn motdPort(self: *const ServerProperties) u16 {
+        return if (self.motd_port == 0) self.port else self.motd_port;
+    }
+
     pub fn plainSignalingLoopback(self: *const ServerProperties) bool {
         return isLoopbackHost(self.plainSignalingHost());
     }
@@ -77,7 +81,7 @@ pub const ServerProperties = struct {
         };
     }
 
-    pub const TlsProblem = enum { missing_certificate, missing_key, plain_listener_exposed, zero_tls_port };
+    pub const TlsProblem = enum { missing_certificate, missing_key, plain_listener_exposed, zero_port };
 
     /// First reason `tls-mode` cannot be honoured; TLS requires a loopback plain listener.
     pub fn tlsProblem(self: *const ServerProperties) ?TlsProblem {
@@ -86,7 +90,7 @@ pub const ServerProperties = struct {
         if (self.tls_mode == .proxy) return null;
         if (self.tls_cert.len == 0) return .missing_certificate;
         if (self.tls_key.len == 0) return .missing_key;
-        if (self.tls_port == 0) return .zero_tls_port;
+        if (self.port == 0) return .zero_port;
         return null;
     }
 
@@ -153,11 +157,11 @@ pub const ServerProperties = struct {
     const comments = .{
         .address = "Address the signaling listener binds to when signaling-bind is empty; empty means all interfaces",
         .port = "Signaling port (the LAN discovery listener advertises this port)",
-        .signaling_bind = "Host the plain signaling listener binds to instead of address (empty follows address; the port stays port)",
+        .signaling_bind = "Host the plain signaling listener binds to instead of address (empty follows address; with tls-mode=native it gets a kernel-chosen port)",
         .tls_mode = "Signaling TLS: off leaves signaling plain, proxy is terminated in front of the server, native terminates in the server",
         .tls_cert = "PEM certificate chain served when tls-mode=native (empty refuses to start)",
         .tls_key = "PEM private key matching tls-cert, keep it private (native mode only)",
-        .tls_port = "Public TLS port when tls-mode=native; the plain signaling listener stays on port",
+        .motd_port = "UDP port that answers the external server list ping (0 follows port)",
         .motd = "What motd should server display in the server list",
         .level_name = "Level name shown to clients before they join",
         .gamemode = "Default game mode: survival, creative, adventure or spectator",

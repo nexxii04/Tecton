@@ -60,7 +60,7 @@ pub fn Suite(comptime scope: type) type {
             const decompressed = try Compression.decompress(broadcast.bytes(), .{
                 .compression_method = .Zlib,
                 .compression_threshold = 255,
-            }, std.testing.allocator);
+            }, .negotiated, std.testing.allocator);
             defer decompressed.deinit();
             try std.testing.expectEqual(@as(usize, 1), decompressed.packets.len);
             try std.testing.expectEqualStrings(packet, decompressed.packets[0]);
@@ -100,7 +100,7 @@ pub fn Suite(comptime scope: type) type {
             broadcast.deinit();
             try poolCountsRestored(&handler.payload_buffers);
 
-            const decompressed = try Compression.decompress(fake.sent.items[0].bytes, zlib_options, allocator);
+            const decompressed = try Compression.decompress(fake.sent.items[0].bytes, zlib_options, .negotiated, allocator);
             defer decompressed.deinit();
             try std.testing.expectEqualStrings(packet, decompressed.packets[0]);
         }

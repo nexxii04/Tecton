@@ -13,6 +13,9 @@ pub const Connection = struct {
     allocator: std.mem.Allocator,
     refs: std.atomic.Value(u32),
     state: std.atomic.Value(State),
+    compression_ready: std.atomic.Value(bool) = .init(false),
+    /// Negotiated at open; avoids taking the session lock per frame.
+    max_payload: usize = 0,
 
     pub fn retain(self: *Connection) void {
         const previous = self.refs.fetchAdd(1, .monotonic);
@@ -27,6 +30,14 @@ pub const Connection = struct {
 
     pub fn isOpen(self: *const Connection) bool {
         return self.state.load(.acquire) == .open;
+    }
+
+    pub fn isCompressionReady(self: *const Connection) bool {
+        return self.compression_ready.load(.acquire);
+    }
+
+    pub fn markCompressionReady(self: *Connection) void {
+        self.compression_ready.store(true, .release);
     }
 
     /// Returns true for the single caller that gets to tear the connection down.

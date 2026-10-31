@@ -1,13 +1,19 @@
 const std = @import("std");
 
+pub const max_packets: usize = 512;
+
 pub fn unframe(payload: []const u8, allocator: std.mem.Allocator) ![][]const u8 {
     var count: usize = 0;
     var offset: usize = 0;
     while (offset < payload.len) {
         const v = readVarInt(payload[offset..]) orelse return error.MalformedPacketFraming;
-        offset += v.size + v.value;
-        if (offset > payload.len) return error.MalformedPacketFraming;
+        if (v.size > payload.len - offset) return error.MalformedPacketFraming;
+        const start = offset + v.size;
+        const length: usize = v.value;
+        if (length > payload.len - start) return error.MalformedPacketFraming;
+        offset = start + length;
         count += 1;
+        if (count > max_packets) return error.TooManyPackets;
     }
 
     const packets = try allocator.alloc([]const u8, count);
@@ -16,10 +22,10 @@ pub fn unframe(payload: []const u8, allocator: std.mem.Allocator) ![][]const u8 
     var idx: usize = 0;
     while (offset < payload.len) : (idx += 1) {
         const v = readVarInt(payload[offset..]) orelse return error.MalformedPacketFraming;
-        offset += v.size;
-        if (offset + v.value > payload.len) return error.MalformedPacketFraming;
-        packets[idx] = payload[offset..][0..v.value];
-        offset += v.value;
+        const start = offset + v.size;
+        const length: usize = v.value;
+        packets[idx] = payload[start..][0..length];
+        offset = start + length;
     }
 
     return packets;
