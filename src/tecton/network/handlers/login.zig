@@ -108,6 +108,50 @@ fn resolveIdentity(
     return .verified;
 }
 
+fn logClientSkin(data: *const Protocol.Login.Decoder.LoginData) void {
+    if (!log.enabled(.debug)) return;
+    const skin = &data.client_data;
+
+    log.debug(
+        "Skin {s}: image={d}x{d} cape={d}x{d} arm={s} persona={} premium={} trusted={} override={} animations={d} pieces={d} tints={d}",
+        .{
+            skin.skin_id,
+            skin.skin_image_width,
+            skin.skin_image_height,
+            skin.cape_image_width,
+            skin.cape_image_height,
+            skin.arm_size,
+            skin.persona_skin,
+            skin.premium_skin,
+            skin.trusted_skin,
+            skin.override_skin,
+            skin.animated_image_data.len,
+            skin.persona_pieces.len,
+            skin.piece_tint_colors.len,
+        },
+    );
+
+    for (skin.persona_pieces) |piece| {
+        log.debug("Skin piece: type={s} ordinal={d} default={} product={s}", .{
+            piece.piece_type,
+            Protocol.SerializedSkin.personaPieceOrdinal(piece.piece_type),
+            piece.is_default,
+            piece.product_id,
+        });
+    }
+
+    for (skin.piece_tint_colors) |tint| {
+        log.debug("Skin tint: type={s} wire={s} colors={s},{s},{s},{s}", .{
+            tint.piece_type,
+            Protocol.SerializedSkin.personaPieceWireName(tint.piece_type),
+            tint.colors[0],
+            tint.colors[1],
+            tint.colors[2],
+            tint.colors[3],
+        });
+    }
+}
+
 fn sendPlayStatus(
     network: *NetworkHandler,
     connection: *transport.Connection,
@@ -160,6 +204,7 @@ pub fn handleLogin(
         sendPlayStatus(network, connection, .FailedClient);
         return;
     };
+    logClientSkin(&data);
     errdefer {
         data.deinit();
         sendPlayStatus(network, connection, .FailedClient);

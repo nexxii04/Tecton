@@ -129,6 +129,8 @@ fn sendExistingPlayers(state: *PlayerInitTask) !void {
             .entity_unique_id = p.entity.unique_id,
             .username = p.username,
             .xuid = p.xuid,
+            .play_fab_id = p.login_data.client_data.play_fab_id,
+            .platform_online_id = p.login_data.client_data.platform_online_id,
             .skin = &p.login_data.client_data,
             .build_platform = @intCast(p.login_data.client_data.device_os),
         };
@@ -159,6 +161,8 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
         .entity_unique_id = state.player.entity.unique_id,
         .username = state.player.username,
         .xuid = state.player.xuid,
+        .play_fab_id = state.player.login_data.client_data.play_fab_id,
+        .platform_online_id = state.player.login_data.client_data.platform_online_id,
         .skin = &state.player.login_data.client_data,
         .build_platform = @intCast(state.player.login_data.client_data.device_os),
     }};
