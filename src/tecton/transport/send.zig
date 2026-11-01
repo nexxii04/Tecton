@@ -1,105 +1,191 @@
-const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
+/// Smallest frames (control replies, keepalives) are built in this per-thread scratch,
+/// so the common send never touches the pool and never contends for a slot.
+const inline_frame_size: usize = 4096;
+threadlocal var tl_frame: [inline_frame_size]u8 = undefined;
 
 pub fn Methods(comptime scope: type) type {
     return struct {
         const std = scope.std;
-        const Raknet = scope.Raknet;
+        const Connection = scope.Connection;
         const NetworkHandler = scope.NetworkHandler;
         const CompressionOptions = scope.CompressionOptions;
         const Compression = scope.Compression;
         const SendPriority = scope.SendPriority;
 
-        pub fn sendUncompressedPacket(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
+        pub fn sendUncompressedPacket(self: *NetworkHandler, conn: *Connection, packet: []const u8) !void {
             const packets = [_][]const u8{packet};
-            return sendFramed(self, conn, &packets, .{ .compression_method = .NotPresent, .compression_threshold = 255 }, .normal);
+            return sendPacketsFramed(self, conn, &packets, .{ .compression_method = .NotPresent, .compression_threshold = 255 }, .reliable, .normal);
         }
 
-        pub fn sendPacket(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
+        pub fn sendPacket(self: *NetworkHandler, conn: *Connection, packet: []const u8) !void {
             return self.sendPacketWith(conn, packet, .normal);
         }
 
-        pub fn sendPacketWith(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8, priority: SendPriority) !void {
+        pub fn sendPacketWith(self: *NetworkHandler, conn: *Connection, packet: []const u8, priority: SendPriority) !void {
             const packets = [_][]const u8{packet};
-            return sendFramed(self, conn, &packets, self.options, priority);
+            return sendPacketsFramed(self, conn, &packets, self.options, .reliable, priority);
         }
 
-        pub fn sendImmediate(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
+        pub fn sendImmediate(self: *NetworkHandler, conn: *Connection, packet: []const u8) !void {
             return self.sendPacketWith(conn, packet, .immediate);
         }
 
-        pub fn sendPackets(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) !void {
+        pub fn sendPackets(self: *NetworkHandler, conn: *Connection, packets: []const []const u8) !void {
             return self.sendPacketsWith(conn, packets, .normal);
         }
 
-        pub fn sendPacketsWith(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8, priority: SendPriority) !void {
-            return sendFramed(self, conn, packets, self.options, priority);
+        pub fn sendPacketsWith(self: *NetworkHandler, conn: *Connection, packets: []const []const u8, priority: SendPriority) !void {
+            return sendPacketsOn(self, conn, packets, .reliable, priority);
         }
 
-        pub fn sendPacketsUncompressed(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) !void {
+        pub fn sendPacketsUncompressed(self: *NetworkHandler, conn: *Connection, packets: []const []const u8) !void {
             return self.sendPacketsUncompressedWith(conn, packets, .normal);
         }
 
-        pub fn sendPacketsUncompressedWith(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8, priority: SendPriority) !void {
-            if (priority == .immediate and self.options.compression_method != .NotPresent) {
-                conn.sendPacketBatch(packets, switch (priority) {
-                    .normal => .Normal,
-                    .immediate => .Immediate,
-                });
-                return;
-            }
-            var options = self.options;
-            options.compression_threshold = std.math.maxInt(u16);
-            return sendFramed(self, conn, packets, options, priority);
+        pub fn sendPacketsUncompressedWith(self: *NetworkHandler, conn: *Connection, packets: []const []const u8, priority: SendPriority) !void {
+            return sendPacketsUncompressedOn(self, conn, packets, .reliable, priority);
         }
 
-        fn sendFramed(
+        pub fn sendPacketsOn(self: *NetworkHandler, conn: *Connection, packets: []const []const u8, channel: scope.Channel, priority: SendPriority) !void {
+            return sendPacketsFramed(self, conn, packets, self.options, channel, priority);
+        }
+
+        pub fn sendPacketsUncompressedOn(self: *NetworkHandler, conn: *Connection, packets: []const []const u8, channel: scope.Channel, priority: SendPriority) !void {
+            var options = self.options;
+            options.compression_threshold = std.math.maxInt(u16);
+            return sendPacketsFramed(self, conn, packets, options, channel, priority);
+        }
+
+        fn recordOutboundDrop(self: *NetworkHandler) void {
+            _ = self.outbound_dropped.fetchAdd(1, .monotonic);
+        }
+
+        /// Delivers bytes that are already one Bedrock frame, as the chunk cache keeps them.
+        pub fn sendFramed(self: *NetworkHandler, conn: *Connection, framed: []const u8, priority: SendPriority) !void {
+            const port = self.port orelse {
+                recordOutboundDrop(self);
+                return error.Closed;
+            };
+            if (framed.len == 0) return;
+
+            const max_payload = port.maxPayload(conn);
+            if (max_payload == 0) {
+                recordOutboundDrop(self);
+                return error.Closed;
+            }
+            // A single frame cannot be split without breaking its own framing.
+            if (framed.len > max_payload) {
+                _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                recordOutboundDrop(self);
+                scope.log.debug("dropping a {d}-byte frame for connection {d}: the transport allows {d}", .{ framed.len, conn.id, max_payload });
+                return error.PayloadTooLarge;
+            }
+            return sendThroughPort(self, port, conn, framed, .reliable, priority);
+        }
+
+        fn sendPacketsFramed(
             self: *NetworkHandler,
-            conn: *Raknet.Connection,
+            conn: *Connection,
             packets: []const []const u8,
             options: CompressionOptions,
+            channel: scope.Channel,
             priority: SendPriority,
         ) !void {
-            const capacity = Compression.frameCapacity(packets, options);
-            if (self.frame_buffers) |frame_buffers| {
-                if (capacity <= FrameBuffers.slot_size and capacity <= maxFramePayload(conn)) {
-                    const buffers = frame_buffers.allocator();
-                    const buffer = try buffers.alloc(u8, capacity);
-                    const framed = Compression.compressInto(packets, options, buffer) catch |err| {
-                        buffers.free(buffer);
-                        return err;
-                    };
+            const port = self.port orelse {
+                recordOutboundDrop(self);
+                return error.Closed;
+            };
+            const max_payload = port.maxPayload(conn);
+            if (max_payload == 0) {
+                recordOutboundDrop(self);
+                return error.Closed;
+            }
 
-                    const frame = Raknet.Proto.Frame.init(null, null, null, 0, .ReliableOrdered, framed, null, null, null, buffers);
-                    conn.sendFrame(frame, switch (priority) {
-                        .normal => .Normal,
-                        .immediate => .Immediate,
-                    });
-                    return;
+            // `frameCapacity` is an upper bound, so a frame that fits by it fits for real.
+            const capacity = Compression.frameCapacity(packets, options);
+            if (capacity <= max_payload) {
+                if (capacity <= inline_frame_size) {
+                    return sendFrame(self, port, conn, packets, options, channel, priority, &tl_frame);
+                }
+                if (capacity <= self.send_buffers.slotSize()) {
+                    const buffer = self.send_buffers.acquire() orelse {
+                        _ = self.backpressure_sends.fetchAdd(1, .monotonic);
+                        return error.Backpressure;
+                    };
+                    defer self.send_buffers.release(buffer);
+                    return sendFrame(self, port, conn, packets, options, channel, priority, buffer);
                 }
             }
 
-            const framed = try Compression.compress(packets, options, self.allocator);
-            deliverOwned(self, conn, framed, priority);
-        }
-
-        fn maxFramePayload(conn: *Raknet.Connection) usize {
-            return if (conn.mtu_size > 36) conn.mtu_size - 36 else 0;
-        }
-
-        fn deliverOwned(self: *NetworkHandler, conn: *Raknet.Connection, bytes: []const u8, priority: SendPriority) void {
-            const transport_allocator = conn.server.options.allocator;
-            if (self.allocator.ptr != transport_allocator.ptr or self.allocator.vtable != transport_allocator.vtable) {
-                defer self.allocator.free(bytes);
-                conn.sendReliableMessage(bytes, switch (priority) {
-                    .normal => .Normal,
-                    .immediate => .Immediate,
-                });
-                return;
+            // The capacity is compression's upper bound, not the final size. A single
+            // large packet can still fit once zlib runs, so try it in a heap buffer.
+            if (packets.len < 2) {
+                const buffer = self.allocator.alloc(u8, capacity) catch return error.OutOfMemory;
+                defer self.allocator.free(buffer);
+                return sendFrame(self, port, conn, packets, options, channel, priority, buffer);
             }
-            conn.sendReliableMessageOwned(bytes, switch (priority) {
-                .normal => .Normal,
-                .immediate => .Immediate,
-            });
+
+            // Halving keeps the order and bounds the recursion: each half is sent before the
+            // next one, so the client sees the same packet sequence.
+            const half = packets.len / 2;
+            try sendPacketsFramed(self, conn, packets[0..half], options, channel, priority);
+            try sendPacketsFramed(self, conn, packets[half..], options, channel, priority);
+        }
+
+        fn sendFrame(
+            self: *NetworkHandler,
+            port: scope.Port,
+            conn: *Connection,
+            packets: []const []const u8,
+            options: CompressionOptions,
+            channel: scope.Channel,
+            priority: SendPriority,
+            buffer: []u8,
+        ) !void {
+            const framed = Compression.compressInto(packets, options, buffer) catch |err| switch (err) {
+                error.CompressionBufferTooSmall => {
+                    _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                    recordOutboundDrop(self);
+                    return error.PayloadTooLarge;
+                },
+                else => return err,
+            };
+            const max_payload = port.maxPayload(conn);
+            if (framed.len > max_payload) {
+                _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                recordOutboundDrop(self);
+                return error.PayloadTooLarge;
+            }
+            return sendThroughPort(self, port, conn, framed, channel, priority);
+        }
+
+        /// Splitting a compressed frame would break its framing, so only the reliable path
+        /// gets the fixed limit the port negotiates.
+        fn sendThroughPort(
+            self: *NetworkHandler,
+            port: scope.Port,
+            conn: *Connection,
+            framed: []const u8,
+            channel: scope.Channel,
+            priority: SendPriority,
+        ) !void {
+            const max_payload = port.maxPayload(conn);
+            if (max_payload == 0) {
+                recordOutboundDrop(self);
+                return error.Closed;
+            }
+            if (channel == .unreliable and framed.len > max_payload) {
+                _ = self.oversize_sends.fetchAdd(1, .monotonic);
+                recordOutboundDrop(self);
+                return error.PayloadTooLarge;
+            }
+            port.sendBytes(conn, framed, channel, priority) catch |err| {
+                switch (err) {
+                    error.Backpressure => _ = self.backpressure_sends.fetchAdd(1, .monotonic),
+                    error.Closed, error.UnknownConnection, error.PayloadTooLarge => recordOutboundDrop(self),
+                }
+                return err;
+            };
         }
     };
 }

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const Connection = @import("connection.zig").Connection;
 
 pub const InboundRing = struct {
     pub const overflow_slot_size: usize = 1024 * 1024;
@@ -8,8 +8,7 @@ pub const InboundRing = struct {
 
     pub const Entry = struct {
         state: std.atomic.Value(u8) = .init(@intFromEnum(SlotState.free)),
-        conn: *Raknet.Connection = undefined,
-        generation: u64 = 0,
+        conn: *Connection = undefined,
         len: u32 = 0,
 
         heap: ?[]u8 = null,
@@ -80,8 +79,7 @@ pub const InboundRing = struct {
 
     pub fn publish(
         self: *InboundRing,
-        conn: *Raknet.Connection,
-        generation: u64,
+        conn: *Connection,
         payload: []const u8,
     ) ?bool {
         const head = self.head.load(.acquire);
@@ -106,7 +104,6 @@ pub const InboundRing = struct {
         }
 
         entry.conn = conn;
-        entry.generation = generation;
         entry.len = @intCast(payload.len);
         entry.heap = heap;
         entry.state.store(@intFromEnum(SlotState.filled), .release);
@@ -179,7 +176,7 @@ pub const InboundRing = struct {
 
 const testing = std.testing;
 
-fn testConnection(storage: *u128) *Raknet.Connection {
+fn testConnection(storage: *u128) *Connection {
     return @ptrCast(@alignCast(storage));
 }
 
@@ -194,14 +191,13 @@ test "ring round-trips payloads in publish order" {
 
     var payload_a = [_]u8{1} ** 32;
     var payload_b = [_]u8{2} ** 8;
-    try testing.expectEqual(false, ring.publish(first, 7, &payload_a).?);
-    try testing.expectEqual(false, ring.publish(second, 9, &payload_b).?);
+    try testing.expectEqual(false, ring.publish(first, &payload_a).?);
+    try testing.expectEqual(false, ring.publish(second, &payload_b).?);
     try testing.expectEqual(@as(usize, 2), ring.depth());
 
     const a = ring.pop().?;
     try testing.expectEqual(@as(u32, 0), a.slot);
     try testing.expectEqual(first, a.entry.conn);
-    try testing.expectEqual(@as(u64, 7), a.entry.generation);
     try testing.expectEqualSlices(u8, &payload_a, ring.slab[a.slot * ring.slot_size ..][0..a.entry.len]);
     ring.discard(a);
 
@@ -224,16 +220,16 @@ test "a full ring drops instead of allocating and recovers after release" {
     const conn = testConnection(&conn_storage);
     const payload = [_]u8{0xAB} ** 16;
 
-    for (0..4) |i| {
-        try testing.expectEqual(false, ring.publish(conn, @intCast(i), &payload).?);
+    for (0..4) |_| {
+        try testing.expectEqual(false, ring.publish(conn, &payload).?);
     }
-    try testing.expectEqual(@as(?bool, null), ring.publish(conn, 4, &payload));
+    try testing.expectEqual(@as(?bool, null), ring.publish(conn, &payload));
     try testing.expectEqual(@as(usize, 1), ring.dropped_full.load(.monotonic));
     try testing.expectEqual(@as(usize, 4), ring.depth());
 
     const popped = ring.pop().?;
     ring.release(popped.slot);
-    try testing.expectEqual(false, ring.publish(conn, 4, &payload).?);
+    try testing.expectEqual(false, ring.publish(conn, &payload).?);
     try testing.expectEqual(@as(usize, 4), ring.depth());
 }
 
@@ -246,7 +242,7 @@ test "oversize payloads use reserved overflow slots and are recycled on discard"
     const conn = testConnection(&conn_storage);
     const payload = [_]u8{0x5A} ** 48;
 
-    try testing.expectEqual(true, ring.publish(conn, 1, &payload).?);
+    try testing.expectEqual(true, ring.publish(conn, &payload).?);
     try testing.expectEqual(@as(usize, 1), ring.oversize_count.load(.monotonic));
 
     const popped = ring.pop().?;
@@ -264,7 +260,7 @@ test "release recycles an overflow payload still owned by the descriptor" {
     const conn = testConnection(&conn_storage);
     const payload = [_]u8{0x11} ** 64;
 
-    _ = ring.publish(conn, 1, &payload);
+    _ = ring.publish(conn, &payload);
     const popped = ring.pop().?;
     popped.entry.heap = popped.heap;
     ring.release(popped.slot);
@@ -289,14 +285,14 @@ test "overflow exhaustion is bounded and does not allocate" {
     var conn_storage: u128 align(16) = 0;
     const conn = testConnection(&conn_storage);
     const payload = [_]u8{0x77} ** 128;
-    for (0..InboundRing.overflow_slots) |_| try testing.expectEqual(true, ring.publish(conn, 1, &payload).?);
-    try testing.expect(ring.publish(conn, 1, &payload) == null);
+    for (0..InboundRing.overflow_slots) |_| try testing.expectEqual(true, ring.publish(conn, &payload).?);
+    try testing.expect(ring.publish(conn, &payload) == null);
     ring.discard(ring.pop().?);
-    try testing.expectEqual(true, ring.publish(conn, 1, &payload).?);
+    try testing.expectEqual(true, ring.publish(conn, &payload).?);
     while (ring.pop()) |popped| ring.discard(popped);
     const large = try testing.allocator.alloc(u8, InboundRing.overflow_slot_size + 1);
     defer testing.allocator.free(large);
-    try testing.expect(ring.publish(conn, 1, large) == null);
+    try testing.expect(ring.publish(conn, large) == null);
     try testing.expectEqual(@as(usize, 0), ring.depth());
     try testing.expectEqual(allocations, failing.alloc_index);
     try testing.expect(!failing.has_induced_failure);
@@ -313,9 +309,9 @@ test "slots are recycled strictly in publish order after wrap" {
     var payload = [_]u8{ 0, 1, 2, 3, 4, 5, 6, 7 };
     for (0..6) |i| {
         payload[0] = @intCast(i);
-        _ = ring.publish(conn, i, &payload);
+        _ = ring.publish(conn, &payload);
         const popped = ring.pop().?;
-        try testing.expectEqual(popped.entry.generation, @as(u64, @intCast(i)));
+        try testing.expectEqual(@as(u8, @intCast(i)), ring.slab[popped.slot * ring.slot_size]);
         ring.release(popped.slot);
     }
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
@@ -8,7 +9,7 @@ const StackResponseSlotInfo = Protocol.StackResponseSlotInfo;
 const FullContainerName = Protocol.FullContainerName;
 const StackRequestAction = Protocol.StackRequestAction;
 const StackRequestSlotInfo = Protocol.StackRequestSlotInfo;
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const Container = @import("../../container/container.zig").Container;
 const AnvilWindowTrait = @import("../../entity/traits/anvil_window.zig").AnvilWindowTrait;
@@ -395,7 +396,7 @@ fn buildResponse(
     };
 }
 
-fn sendItemStackResponse(network: *NetworkHandler, connection: *Raknet.Connection, responses: []const ItemStackResponse) void {
+fn sendItemStackResponse(network: *NetworkHandler, connection: *transport.Connection, responses: []const ItemStackResponse) void {
     const allocator = network.allocator;
     var out = BinaryStream.init(allocator, null, null);
     defer out.deinit();
@@ -407,7 +408,7 @@ fn sendItemStackResponse(network: *NetworkHandler, connection: *Raknet.Connectio
 pub fn processItemStackRequest(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     request: Protocol.ItemStackRequest,
 ) !void {
     const allocator = network.allocator;
@@ -568,7 +569,7 @@ pub fn processItemStackRequest(
             },
             .craft_recipe => |c| {
                 if (c.recipe_network_id < villager_trade.TRADE_RECIPE_BASE) {
-                    Raknet.Logger.WARN("Unhandeled action {any}", .{action});
+                    log.warn("Unhandeled action {any}", .{action});
                     continue;
                 }
 
@@ -640,7 +641,7 @@ pub fn processItemStackRequest(
                 _ = EnchantmentEffects.wearTool(held, 1, entropy.interface());
             },
             else => |a| {
-                Raknet.Logger.WARN("Unhandeled action {any}", .{a});
+                log.warn("Unhandeled action {any}", .{a});
             },
         }
     }
@@ -672,7 +673,7 @@ pub fn processItemStackRequest(
 pub fn handleItemStackRequest(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const allocator = network.allocator;

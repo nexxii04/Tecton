@@ -1,10 +1,12 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const NBT = @import("nbt");
 const Protocol = @import("protocol");
 
-const Raknet = @import("Raknet");
+const Connection = @import("../../transport/connection.zig").Connection;
+const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 
 const Host = @import("../../player/player.zig").Host;
 const Player = @import("../../player/player.zig").Player;
@@ -30,7 +32,7 @@ const ChunkStreamState = struct {
     upgrade_idx: usize,
 };
 
-const MAX_INFLIGHT_BATCHES: u32 = 4;
+const MAX_INFLIGHT_BATCHES: u32 = 8;
 
 pub const PacketAction = enum { send_cached, wait, schedule };
 
@@ -130,19 +132,15 @@ fn freeStreamState(state: *ChunkStreamState) void {
     state.allocator.destroy(state);
 }
 
-fn sendCachedChunkPacket(conn: *Raknet.Connection, cached: []const u8) void {
-    conn.sendReliableMessage(cached, .Normal);
+/// Cached chunk packets are already one framed Bedrock frame.
+fn sendCachedChunkPacket(network: *NetworkHandler, conn: *Connection, cached: []const u8) void {
+    network.sendFramed(conn, cached, .normal) catch {};
 }
 
-fn sendOwnedChunkPacket(conn: *Raknet.Connection, allocator: std.mem.Allocator, bytes: []const u8) void {
+fn sendOwnedChunkPacket(network: *NetworkHandler, conn: *Connection, allocator: std.mem.Allocator, bytes: []const u8) void {
     if (bytes.len == 0) return;
-    const transport_allocator = conn.server.options.allocator;
-    if (allocator.ptr == transport_allocator.ptr and allocator.vtable == transport_allocator.vtable) {
-        conn.sendReliableMessageOwned(bytes, .Normal);
-        return;
-    }
     defer allocator.free(bytes);
-    conn.sendReliableMessage(bytes, .Normal);
+    network.sendFramed(conn, bytes, .normal) catch {};
 }
 
 fn onBatchComplete(ctx: *anyopaque) void {
@@ -244,7 +242,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
         for (0..work.count) |i| {
             const compressed = work.packets[i];
             if (compressed.len == 0) continue;
-            sendOwnedChunkPacket(player.connection, work.allocator, compressed);
+            sendOwnedChunkPacket(player.network, player.connection, work.allocator, compressed);
             work.packets[i] = &.{};
         }
 
@@ -267,7 +265,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
             {
                 generation.applyParsedBlockData(allocator, dim, &work.block_data[i]);
                 dim.world.provider.readChunkEntities(work.chunks[i].?, dim) catch |err| {
-                    Raknet.Logger.WARN("Failed to restore actors for chunk {d},{d}: {s}", .{
+                    log.warn("Failed to restore actors for chunk {d},{d}: {s}", .{
                         work.coords[i].x, work.coords[i].z, @errorName(err),
                     });
                 };
@@ -566,7 +564,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
                     const cached = dimension.getCachedChunkPacket(chunk_hash);
                     switch (choosePacketAction(sim_dist > 0, loaded, cached != null, dimension.isPacketInflight(chunk_hash))) {
                         .send_cached => {
-                            sendCachedChunkPacket(player.connection, cached.?);
+                            sendCachedChunkPacket(player.network, player.connection, cached.?);
                             if (loaded) sendLiveBlockActorDataForChunk(allocator, player, dimension, state.center_x, state.center_z);
                             player.sent_chunks.put(chunk_hash, {}) catch {};
                         },
@@ -610,7 +608,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             const cached = dimension.getCachedChunkPacket(chunk_hash);
             switch (choosePacketAction(in_simulation, loaded, cached != null, dimension.isPacketInflight(chunk_hash))) {
                 .send_cached => {
-                    sendCachedChunkPacket(player.connection, cached.?);
+                    sendCachedChunkPacket(player.network, player.connection, cached.?);
                     if (loaded) sendLiveBlockActorDataForChunk(allocator, player, dimension, coords[0], coords[1]);
                     player.sent_chunks.put(chunk_hash, {}) catch {};
                     state.ring_idx += 1;
@@ -758,7 +756,8 @@ fn ringCoord(cx: i32, cz: i32, ring: i32, idx: i32) [2]i32 {
 const test_owner = @This();
 const test_scope = struct {
     pub const std = test_owner.std;
-    pub const Raknet = test_owner.Raknet;
+    pub const Connection = test_owner.Connection;
+    pub const NetworkHandler = test_owner.NetworkHandler;
     pub const releaseCachedPackets = test_owner.releaseCachedPackets;
     pub const dropPendingHashes = test_owner.dropPendingHashes;
     pub const PacketAction = test_owner.PacketAction;

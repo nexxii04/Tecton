@@ -136,7 +136,9 @@ pub fn flush(tecton: *Tecton) void {
                 MovementBroadcast.MAX_BATCH_BYTES,
             );
             if (batch.items.len == 0) break;
-            tecton.network.sendPacketsUncompressedWith(viewer.connection, batch.items, tecton.movement_priority) catch {};
+            tecton.network.sendPacketsUncompressedOn(viewer.connection, batch.items, tecton.movementSendChannel(), tecton.movement_priority) catch |err| {
+                std.log.debug("movement broadcast to connection {d} failed: {}", .{ viewer.connection.id, err });
+            };
             updates += batch.items.len;
             batches += 1;
         }

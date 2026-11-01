@@ -47,8 +47,11 @@ fn onTick(state: *State, entity: *Entity) void {
 
     if (!state.initialized) {
         state.initialized = true;
-        player.sent_chunks.clearRetainingCapacity();
-        player.pending_chunks.clearRetainingCapacity();
+        // Terrain queued before init already tracks what the client received.
+        if (!player.spawn_chunks_started) {
+            player.sent_chunks.clearRetainingCapacity();
+            player.pending_chunks.clearRetainingCapacity();
+        }
         visibility.sendPublisherUpdate(player);
         chunk_streaming.queueChunkStreaming(player) catch {};
         return;

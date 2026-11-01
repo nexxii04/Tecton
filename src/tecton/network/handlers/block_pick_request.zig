@@ -1,5 +1,6 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../../core/log.zig");
+const transport = @import("../../transport/root.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const NBT = @import("nbt");
@@ -13,7 +14,7 @@ const Inventory = @import("../../entity/traits/inventory.zig");
 pub fn handleBlockPickRequest(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;
@@ -28,7 +29,7 @@ pub fn handleBlockPickRequest(
     const dimension = player.entity.dimension orelse return;
 
     const perm = dimension.getPermutation(packet.position, 0) catch |err| {
-        Raknet.Logger.ERROR("Failed to get permutation: {any}", .{err});
+        log.err("Failed to get permutation: {any}", .{err});
         return;
     };
 

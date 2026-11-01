@@ -103,24 +103,28 @@ pub const BiomeStorage = struct {
 
     pub fn serialize(self: *const BiomeStorage, stream: *BinaryStream) !void {
         if (self.data == null) {
-            try stream.writeUint8(0);
-            try stream.writeInt32(@bitCast(self.uniformBiome()), .Little);
+            try stream.writeUint8(1);
+            try stream.writeZigZag(@intCast(self.uniformBiome()));
             return;
         }
-        try stream.writeUint8(@as(u8, self.bits) << 1);
+        try stream.writeUint8((@as(u8, self.bits) << 1) | 1);
         for (self.data.?) |word| try stream.writeInt32(@bitCast(word), .Little);
         try stream.writeZigZag(@intCast(self.palette.items.len));
         for (self.palette.items) |biome| try stream.writeZigZag(@intCast(biome));
     }
 
     pub fn deserialize(stream: *BinaryStream, allocator: std.mem.Allocator) !BiomeStorage {
-        const wire_bits = (try stream.readUint8()) >> 1;
+        const header = try stream.readUint8();
+        const wire_bits = header >> 1;
         var storage = BiomeStorage.init(allocator);
         errdefer storage.deinit();
         switch (wire_bits) {
             0x7f => return storage,
             0 => {
-                const biome = try stream.readInt32(.Little);
+                const biome = if (header & 1 != 0)
+                    try stream.readZigZag()
+                else
+                    try stream.readInt32(.Little);
                 if (biome < 0) return error.InvalidBiome;
                 try storage.palette.append(allocator, @intCast(biome));
                 return storage;
@@ -151,6 +155,33 @@ fn exerciseBiomeGrowth(allocator: std.mem.Allocator) !void {
     defer storage.deinit();
     for (0..130) |pos| try storage.setBiome(@intCast(pos >> 8), @intCast(pos & 15), @intCast((pos >> 4) & 15), @intCast(pos + 1));
     for (0..130) |pos| try std.testing.expectEqual(@as(u32, @intCast(pos + 1)), storage.getBiome(@intCast(pos >> 8), @intCast(pos & 15), @intCast((pos >> 4) & 15)));
+}
+
+test "biome network encoding uses a runtime flag and a varint for uniform palettes" {
+    var storage = BiomeStorage.init(std.testing.allocator);
+    defer storage.deinit();
+    try storage.palette.append(std.testing.allocator, 300);
+
+    var stream = BinaryStream.init(std.testing.allocator, null, null);
+    defer stream.deinit();
+    try storage.serialize(&stream);
+
+    // Network header (0 bits, runtime IDs), then signed varint 300, without a count.
+    try std.testing.expectEqualSlices(u8, &.{ 0x01, 0xd8, 0x04 }, stream.getBuffer());
+}
+
+test "biome network encoding marks packed palettes as runtime IDs" {
+    var storage = BiomeStorage.init(std.testing.allocator);
+    defer storage.deinit();
+    try storage.setBiome(1, 2, 3, 7);
+
+    var stream = BinaryStream.init(std.testing.allocator, null, null);
+    defer stream.deinit();
+    try storage.serialize(&stream);
+
+    const encoded = stream.getBuffer();
+    try std.testing.expectEqual(@as(u8, 0x03), encoded[0]);
+    try std.testing.expectEqualSlices(u8, &.{ 0x04, 0x00, 0x0e }, encoded[513..]);
 }
 
 test "packed biomes grow safely through every allocation failure" {
@@ -186,7 +217,7 @@ test "packed biomes round trip every supported width without serialization alloc
         var stream = BinaryStream.init(std.testing.failing_allocator, &bytes, null);
         stream.reset();
         try storage.serialize(&stream);
-        try std.testing.expectEqual(@as(u8, BiomeStorage.bitsFor(colors)) << 1, bytes[0]);
+        try std.testing.expectEqual((@as(u8, BiomeStorage.bitsFor(colors)) << 1) | 1, bytes[0]);
         var reader = BinaryStream.init(std.testing.failing_allocator, stream.getBuffer(), null);
         var decoded = try BiomeStorage.deserialize(&reader, allocator);
         defer decoded.deinit();

@@ -1,4 +1,4 @@
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -7,7 +7,7 @@ const Protocol = @import("protocol");
 pub fn handleAnimate(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;
@@ -21,6 +21,7 @@ pub fn handleAnimate(
         .runtime_entity_id = @intCast(player.entity.runtime_id),
         .data = packet.data,
         .swing_source = packet.swing_source,
+        .hand = packet.hand,
     };
     const serialized = try out_packet.serialize(&out_stream);
 

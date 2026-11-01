@@ -2,6 +2,10 @@ const std = @import("std");
 const CompressionMethod = @import("protocol").CompressionMethod;
 const CompressionOptions = @import("./options.zig").CompressionOptions;
 
+pub const Framing = enum { initial, negotiated };
+
+pub const max_uncompressed_bytes: usize = 8 * 1024 * 1024;
+
 const c = @cImport({
     @cInclude("zlib.h");
 });
@@ -98,7 +102,7 @@ pub const Compression = struct {
     pub fn frameCapacity(packets: []const []const u8, options: CompressionOptions) usize {
         const framed_size = framedLength(packets);
         if (compresses(options, framed_size)) {
-            return 2 + @as(usize, @intCast(c.compressBound(@intCast(framed_size))));
+            return 1 + @as(usize, @intCast(c.compressBound(@intCast(framed_size))));
         }
         return headerLength(options) + framed_size;
     }
@@ -108,29 +112,27 @@ pub const Compression = struct {
 
         if (compresses(options, framed_size)) {
             const max_compressed: usize = @intCast(c.compressBound(@intCast(framed_size)));
-            if (dest.len < 2 + max_compressed) return error.CompressionBufferTooSmall;
+            if (dest.len < 1 + max_compressed) return error.CompressionBufferTooSmall;
 
             const framed = try framedScratch(framed_size);
             framePackets(packets, framed);
 
-            dest[0] = 254;
-            dest[1] = @intFromEnum(options.compression_method);
+            dest[0] = @intFromEnum(options.compression_method);
 
             const stream = try acquireThreadLocal();
             stream.next_in = framed.ptr;
             stream.avail_in = @as(c_uint, @intCast(framed_size));
-            stream.next_out = dest.ptr + 2;
+            stream.next_out = dest.ptr + 1;
             stream.avail_out = @as(c_uint, @intCast(max_compressed));
 
             if (c.deflate(stream, c.Z_FINISH) != c.Z_STREAM_END) return error.ZlibDeflateFailed;
-            return dest[0 .. 2 + (max_compressed - stream.avail_out)];
+            return dest[0 .. 1 + (max_compressed - stream.avail_out)];
         }
 
         const header_size = headerLength(options);
         if (dest.len < header_size + framed_size) return error.CompressionBufferTooSmall;
 
-        dest[0] = 254;
-        if (options.compression_method != .NotPresent) dest[1] = 0xFF;
+        if (header_size == 1) dest[0] = 0xFF;
         framePackets(packets, dest[header_size..][0..framed_size]);
         return dest[0 .. header_size + framed_size];
     }
@@ -142,11 +144,22 @@ pub const Compression = struct {
     }
 
     fn headerLength(options: CompressionOptions) usize {
-        return if (options.compression_method == .NotPresent) 1 else 2;
+        return if (options.compression_method == .NotPresent) 0 else 1;
     }
 
     fn compresses(options: CompressionOptions, framed_size: usize) bool {
         return options.compression_method == .Zlib and framed_size >= options.compression_threshold;
+    }
+
+    const WireMethod = enum { zlib, snappy, none };
+
+    fn wireMethod(byte: u8) ?WireMethod {
+        return switch (byte) {
+            @as(u8, @intFromEnum(CompressionMethod.Zlib)) => .zlib,
+            @as(u8, @intFromEnum(CompressionMethod.Snappy)) => .snappy,
+            @as(u8, @intFromEnum(CompressionMethod.None)) => .none,
+            else => null,
+        };
     }
 
     fn framePackets(packets: []const []const u8, dest: []u8) void {
@@ -169,88 +182,55 @@ pub const Compression = struct {
     pub fn decompressInto(
         data: []const u8,
         options: CompressionOptions,
+        framing: Framing,
         arena_allocator: std.mem.Allocator,
     ) !ArenaDecompressResult {
         _ = options;
-        if (data.len == 0 or data[0] != 254) {
-            const packets = try arena_allocator.alloc([]const u8, 1);
-            packets[0] = data;
+        if (framing == .initial) {
+            const packets = try unframe(data, arena_allocator);
             return .{ .packets = packets };
         }
 
-        const method: CompressionMethod = if (data.len > 1) switch (data[1]) {
-            @as(u8, @intFromEnum(CompressionMethod.Zlib)) => .Zlib,
-            @as(u8, @intFromEnum(CompressionMethod.NotPresent)) => .NotPresent,
-            @as(u8, @intFromEnum(CompressionMethod.Snappy)) => .Snappy,
-            @as(u8, @intFromEnum(CompressionMethod.None)) => .None,
-            else => .NotPresent,
-        } else .NotPresent;
-
-        var payload = data;
-        if (method != .NotPresent and data.len > 1) {
-            payload = payload[2..];
-        } else {
-            payload = payload[1..];
+        if (data.len == 0) return error.TruncatedFrame;
+        const method = wireMethod(data[0]) orelse return error.InvalidCompressionMethod;
+        switch (method) {
+            .zlib => {
+                const decompressed = try zlibInflateInto(data[1..], arena_allocator);
+                const packets = try unframe(decompressed, arena_allocator);
+                return .{ .packets = packets };
+            },
+            .snappy => return error.UnsupportedCompression,
+            .none => {
+                const packets = try unframe(data[1..], arena_allocator);
+                return .{ .packets = packets };
+            },
         }
-
-        if (method == .Zlib) {
-            const decompressed = try zlibInflateInto(payload, arena_allocator);
-            const packets = try unframe(decompressed, arena_allocator);
-            return .{ .packets = packets };
-        }
-
-        if (method == .Snappy) {
-            const packets = try arena_allocator.alloc([]const u8, 0);
-            return .{ .packets = packets };
-        }
-
-        const packets = try unframe(payload, arena_allocator);
-        return .{ .packets = packets };
     }
 
     pub fn decompress(
         data: []const u8,
         options: CompressionOptions,
+        framing: Framing,
         allocator: std.mem.Allocator,
     ) !DecompressResult {
         _ = options;
-        if (data.len == 0 or data[0] != 254) {
-            const owned = try allocator.dupe(u8, data);
-            errdefer allocator.free(owned);
-            const packets = try allocator.alloc([]const u8, 1);
-            packets[0] = owned;
-            return .{ .packets = packets, .buffer = owned, .allocator = allocator };
+        if (framing == .initial) return decompressOwned(data, allocator);
+
+        if (data.len == 0) return error.TruncatedFrame;
+        const method = wireMethod(data[0]) orelse return error.InvalidCompressionMethod;
+        switch (method) {
+            .zlib => {
+                const decompressed = try zlibInflate(data[1..], allocator);
+                errdefer allocator.free(decompressed);
+                const packets = try unframe(decompressed, allocator);
+                return .{ .packets = packets, .buffer = decompressed, .allocator = allocator };
+            },
+            .snappy => return error.UnsupportedCompression,
+            .none => return decompressOwned(data[1..], allocator),
         }
+    }
 
-        const method: CompressionMethod = if (data.len > 1) switch (data[1]) {
-            @as(u8, @intFromEnum(CompressionMethod.Zlib)) => .Zlib,
-            @as(u8, @intFromEnum(CompressionMethod.NotPresent)) => .NotPresent,
-            @as(u8, @intFromEnum(CompressionMethod.Snappy)) => .Snappy,
-            @as(u8, @intFromEnum(CompressionMethod.None)) => .None,
-            else => .NotPresent,
-        } else .NotPresent;
-
-        var payload = data;
-        if (method != .NotPresent and data.len > 1) {
-            payload = payload[2..];
-        } else {
-            payload = payload[1..];
-        }
-
-        if (method == .Zlib) {
-            const decompressed = try zlibInflate(payload, allocator);
-            errdefer allocator.free(decompressed);
-            const packets = try unframe(decompressed, allocator);
-            return .{ .packets = packets, .buffer = decompressed, .allocator = allocator };
-        }
-
-        if (method == .Snappy) {
-            const empty = try allocator.alloc(u8, 0);
-            errdefer allocator.free(empty);
-            const packets = try allocator.alloc([]const u8, 0);
-            return .{ .packets = packets, .buffer = empty, .allocator = allocator };
-        }
-
+    fn decompressOwned(payload: []const u8, allocator: std.mem.Allocator) !DecompressResult {
         const owned = try allocator.dupe(u8, payload);
         errdefer allocator.free(owned);
         const packets = try unframe(owned, allocator);
@@ -324,9 +304,22 @@ test "compressInto writes the same wire bytes as compress and rejects short buff
     try @import("compression_test.zig").Suite(test_scope).case_011();
 }
 
+test "the first NetherNet batch decodes without a compression header" {
+    try @import("compression_test.zig").Suite(test_scope).case_012();
+}
+
+test "a negotiated frame carries a compression method and no RakNet id" {
+    try @import("compression_test.zig").Suite(test_scope).case_013();
+}
+
+test "a compressed negotiated frame starts with the zlib method" {
+    try @import("compression_test.zig").Suite(test_scope).case_014();
+}
+
 const codec_owner = @This();
 const codec_scope = struct {
     pub const std = codec_owner.std;
     pub const c = codec_owner.c;
     pub const acquireInflateStream = codec_owner.acquireInflateStream;
+    pub const max_uncompressed_bytes = codec_owner.max_uncompressed_bytes;
 };

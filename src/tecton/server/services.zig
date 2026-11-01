@@ -1,6 +1,6 @@
 const std = @import("std");
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const Connection = @import("../transport/connection.zig").Connection;
 
 const contracts = @import("../core/contracts.zig");
 const CommandContext = @import("../command/context.zig").CommandContext;
@@ -89,10 +89,12 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
             .worlds = query,
             .players = selection,
             .ctx = tecton,
+            .network_stats = networkStats,
             .target_tps = players.targetTps,
             .current_tps = &tecton.current_tps,
             .current_mspt = &tecton.current_mspt,
-            .current_raknet_mspt = &tecton.current_raknet_mspt,
+            .current_network_io_mspt = &tecton.current_network_io_mspt,
+            .current_network_dispatch_mspt = &tecton.current_network_dispatch_mspt,
             .current_game_mspt = &tecton.current_game_mspt,
             .profiler = &tecton.profiler,
         },
@@ -115,6 +117,19 @@ pub fn commandViews(tecton: *Tecton) @import("../command/context.zig").CommandVi
             .queue_load = queueWorldLoad,
             .queue_unload = queueWorldUnload,
         },
+    };
+}
+
+fn networkStats(ctx: *anyopaque) contracts.NetworkStats {
+    const tecton = cast(ctx);
+    const sessions = tecton.network.sessionCounts();
+    return .{
+        .sessions_active = sessions.active,
+        .sessions_total = sessions.total,
+        .reconnects = sessions.reconnects,
+        .inbound_dropped = tecton.network.inboundDroppedCount(),
+        .outbound_backpressure = tecton.network.backpressureSendCount(),
+        .outbound_dropped = tecton.network.outboundDroppedCount(),
     };
 }
 
@@ -184,7 +199,7 @@ const test_scope = struct {
     pub const NetworkHandler = test_owner.NetworkHandler;
     pub const Dimension = test_owner.Dimension;
     pub const World = test_owner.World;
-    pub const Raknet = test_owner.Raknet;
+    pub const Connection = test_owner.Connection;
     pub const Protocol = test_owner.Protocol;
     pub const block_root = test_owner.tecton_mod.block_root;
 };

@@ -1,21 +1,20 @@
-const FrameBuffers = @import("./frame_buffers.zig").FrameBuffers;
-const PayloadBuffers = @import("./payload_buffers.zig").PayloadBuffers;
-
 pub fn Suite(comptime scope: type) type {
     return struct {
         const std = scope.std;
-        const Raknet = scope.Raknet;
+        const Connection = scope.Connection;
         const ThreadedTaskQueue = scope.ThreadedTaskQueue;
-        const queue = scope.queue;
-        const connections_mod = scope.connections_mod;
-        const DecompressWorkPool = scope.DecompressWorkPool;
         const NetworkHandler = scope.NetworkHandler;
         const TestDispatchState = scope.TestDispatchState;
+        const TransportFake = scope.TransportFake;
 
-        fn testDispatch(ctx: *anyopaque, conn: *Raknet.Connection, packets: []const []const u8) void {
+        fn testDispatch(ctx: *anyopaque, conn: *Connection, packets: []const []const u8) void {
             _ = conn;
             const state: *TestDispatchState = @ptrCast(@alignCast(ctx));
             state.dispatched_packets += packets.len;
+            if (packets.len > 0 and packets[0].len > 0) {
+                state.last_packet_head = packets[0][0];
+                if (state.first_packet_head == null) state.first_packet_head = packets[0][0];
+            }
             if (state.expected_fill) |fill| {
                 for (packets) |packet| {
                     for (packet) |byte| {
@@ -25,34 +24,21 @@ pub fn Suite(comptime scope: type) type {
             }
         }
 
-        fn testDisconnected(ctx: *anyopaque, conn: *Raknet.Connection) void {
-            _ = ctx;
-            _ = conn;
+        fn initialFrame(payload: []const u8, buffer: []u8) ![]const u8 {
+            const packets = [_][]const u8{payload};
+            return scope.Compression.compressInto(&packets, .{
+                .compression_method = .NotPresent,
+                .compression_threshold = 255,
+            }, buffer);
         }
 
-        fn buildTestHandler(io: std.Io, allocator: std.mem.Allocator, tasks: *ThreadedTaskQueue, dispatch_ctx: *anyopaque) NetworkHandler {
-            return .{
-                .host = .{ .ctx = dispatch_ctx, .dispatch = testDispatch, .disconnected = testDisconnected },
-                .io = io,
-                .tasks = tasks,
-                .allocator = allocator,
-                .options = .{ .compression_method = .Zlib, .compression_threshold = 255 },
-                .packet_queue = .empty,
-                .packet_queue_mutex = .init,
-                .decompress_pool = DecompressWorkPool.init(io, allocator, 16) catch unreachable,
-                .scratch = undefined,
-                .frame_buffers = null,
-                .payload_buffers = PayloadBuffers.init(allocator),
-                .connections = connections_mod.ConnectionRegistry.init(allocator),
-            };
-        }
-
-        fn releaseTestRing(handler: *NetworkHandler, allocator: std.mem.Allocator) void {
-            for (handler.worker_buffers) |*buffers| buffers.deinit();
-            if (handler.worker_buffers.len > 0) allocator.free(handler.worker_buffers);
-            handler.worker_buffers = &.{};
-            if (handler.inbound_ring) |ring| ring.deinit();
-            handler.inbound_ring = null;
+        fn drainUntilIdle(tasks: *ThreadedTaskQueue, handler: *NetworkHandler, io: std.Io) !void {
+            var attempts: usize = 0;
+            while (handler.decompress_pending.load(.monotonic) != 0 and attempts < 1000) : (attempts += 1) {
+                tasks.drainCompleted(std.math.maxInt(u64));
+                io.sleep(.fromNanoseconds(1_000_000), .awake) catch {};
+            }
+            try std.testing.expectEqual(@as(usize, 0), handler.decompress_pending.load(.monotonic));
         }
 
         pub fn case_000() !void {
@@ -61,27 +47,22 @@ pub fn Suite(comptime scope: type) type {
 
             var tasks = ThreadedTaskQueue.init(io, allocator, 1);
             try tasks.start();
+            defer tasks.deinit();
 
             var dispatch_state = TestDispatchState{};
-            var handler = buildTestHandler(io, allocator, &tasks, &dispatch_state);
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = &dispatch_state,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
 
-            defer handler.decompress_pool.deinit(allocator);
-            defer tasks.deinit();
-            defer handler.connections.deinit();
-            defer {
-                for (handler.packet_queue.items) |entry| allocator.free(entry.payload);
-                handler.packet_queue.deinit(allocator);
-            }
-
-            var conn_storage: u128 align(16) = 0;
-            const conn: *Raknet.Connection = @ptrCast(&conn_storage);
-            handler.connections.register(io, conn);
-            const generation = handler.connections.currentGeneration(io, conn) orelse return error.TestUnexpectedResult;
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
 
             for (0..10) |_| {
+                conn.retain();
                 try handler.packet_queue.append(allocator, .{
                     .conn = conn,
-                    .generation = generation,
                     .payload = try allocator.dupe(u8, "not-a-deflate-stream"),
                 });
             }
@@ -103,22 +84,8 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(usize, 5), drained);
             try std.testing.expectEqual(@as(usize, 0), handler.packet_queue.items.len);
 
-            var attempts: usize = 0;
-            while (handler.decompress_pending.load(.monotonic) != 0 and attempts < 1000) : (attempts += 1) {
-                tasks.drainCompleted(std.math.maxInt(u64));
-                io.sleep(.fromNanoseconds(1_000_000), .awake) catch {};
-            }
-            try std.testing.expectEqual(@as(usize, 0), handler.decompress_pending.load(.monotonic));
-
-            handler.connections.unregister(io, conn);
-            try handler.packet_queue.append(allocator, .{
-                .conn = conn,
-                .generation = generation,
-                .payload = try allocator.dupe(u8, "stale"),
-            });
-            const stale = handler.drainPackets(std.math.maxInt(u64), 4096);
-            try std.testing.expectEqual(@as(usize, 0), stale.processed);
-            try std.testing.expectEqual(@as(usize, 0), stale.remaining);
+            try drainUntilIdle(&tasks, handler, io);
+            handler.connections.closeAndRelease(conn);
         }
 
         pub fn case_001() !void {
@@ -127,32 +94,30 @@ pub fn Suite(comptime scope: type) type {
 
             var tasks = ThreadedTaskQueue.init(io, allocator, 1);
             try tasks.start();
+            defer tasks.deinit();
 
             var dispatch_state = TestDispatchState{};
-            var handler = buildTestHandler(io, allocator, &tasks, &dispatch_state);
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = &dispatch_state,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
             try handler.enableInboundRing(8, 64);
 
-            defer releaseTestRing(&handler, allocator);
-            defer handler.decompress_pool.deinit(allocator);
-            defer tasks.deinit();
-            defer handler.connections.deinit();
-
-            var conn_storage: [2]u128 align(16) = .{ 0, 0 };
-            const live: *Raknet.Connection = @ptrCast(&conn_storage[0]);
-            const resigned: *Raknet.Connection = @ptrCast(&conn_storage[1]);
-            handler.connections.register(io, live);
-            handler.connections.register(io, resigned);
-            const live_generation = handler.connections.currentGeneration(io, live) orelse return error.TestUnexpectedResult;
-            const resigned_generation = handler.connections.currentGeneration(io, resigned) orelse return error.TestUnexpectedResult;
-
             const ring = handler.inbound_ring.?;
-            for (0..4) |i| {
-                const payload = [_]u8{@intCast(i)} ** 16;
-                try std.testing.expectEqual(false, ring.publish(live, live_generation, &payload).?);
-            }
-            try std.testing.expectEqual(false, ring.publish(resigned, resigned_generation, "stale").?);
 
-            handler.connections.unregister(io, resigned);
+            var live_backend: u128 = 0;
+            var closed_backend: u128 = 0;
+            const live = try handler.connections.create(&live_backend);
+            const resigned = try handler.connections.create(&closed_backend);
+
+            var frame_buffer: [32]u8 = undefined;
+            for (0..4) |i| {
+                const payload = [_]u8{@intCast(i + 1)} ** 16;
+                NetworkHandler.onPacket(handler, live, try initialFrame(&payload, &frame_buffer));
+            }
+            NetworkHandler.onPacket(handler, resigned, "stale");
+            handler.connections.closeAndRelease(resigned);
 
             const capped = handler.drainPackets(std.math.maxInt(u64), 2);
             try std.testing.expectEqual(@as(usize, 2), capped.processed);
@@ -176,61 +141,11 @@ pub fn Suite(comptime scope: type) type {
                 io.sleep(.fromNanoseconds(1_000_000), .awake) catch {};
             }
             try std.testing.expectEqual(@as(usize, 4), dispatch_state.dispatched_packets);
-            try std.testing.expectEqual(@as(usize, 0), handler.decompress_pending.load(.monotonic));
+            try drainUntilIdle(&tasks, handler, io);
             try std.testing.expectEqual(@as(usize, 0), ring.depth());
             try std.testing.expectEqual(@as(usize, 0), ring.dropped_full.load(.monotonic));
-        }
 
-        pub fn case_003() !void {
-            const allocator = std.testing.allocator;
-            var failing = std.testing.FailingAllocator.init(allocator, .{});
-            var transport = try Raknet.Server.init(std.testing.io, .{
-                .allocator = failing.allocator(),
-                .address = "127.0.0.1",
-                .port = 0,
-                .output_slab_slots = 4,
-                .transient_slab_slots = 4,
-                .outbound_queue_slots = 8,
-            });
-            defer transport.deinit();
-            var tasks = ThreadedTaskQueue.init(std.testing.io, allocator, 1);
-            defer tasks.deinit();
-            var state = TestDispatchState{};
-            const handler = try NetworkHandler.init(std.testing.io, allocator, &tasks, .{
-                .ctx = &state,
-                .dispatch = testDispatch,
-                .disconnected = testDisconnected,
-            });
-            defer handler.deinit();
-            const conn = try allocator.create(Raknet.Connection);
-            defer allocator.destroy(conn);
-            conn.* = Raknet.Connection.init(&transport, .{ .ip4 = .{ .bytes = .{ 127, 0, 0, 1 }, .port = 1 } }, 1400, 1);
-            defer conn.deinit();
-            const packets = [_][]const u8{ "first", "second" };
-            const allocations = failing.alloc_index;
-            failing.fail_index = allocations;
-            try handler.sendPacketsUncompressedWith(conn, &packets, .immediate);
-            try std.testing.expectEqual(allocations, failing.alloc_index);
-            try std.testing.expect(!failing.has_induced_failure);
-            try std.testing.expectEqual(@as(usize, 1), conn.comm_data.output_backup.count());
-            var iter = conn.comm_data.output_backup.valueIterator();
-            const backup = iter.next().?;
-            var frames: [2]Raknet.Proto.Frame = undefined;
-            const frameset = try Raknet.Proto.FrameSet.deserializeInto(backup.bytes, &frames);
-            try std.testing.expectEqual(@as(usize, 1), frameset.frames.len);
-            const decoded = try scope.Compression.decompress(frameset.frames[0].payload, handler.options, allocator);
-            defer decoded.deinit();
-            try std.testing.expectEqualStrings("first", decoded.packets[0]);
-            try std.testing.expectEqualStrings("second", decoded.packets[1]);
-            var ack_buf: [64]u8 = undefined;
-            const ack = try Raknet.Proto.Ack.serializeInto(&.{frameset.sequence_number}, Raknet.Proto.Packets.Ack, &ack_buf);
-            try conn.handleAck(ack);
-            try std.testing.expectEqual(@as(usize, 4), transport.output_slab.available());
-            failing.fail_index = std.math.maxInt(usize);
-            try handler.sendPacketsUncompressedWith(conn, &packets, .normal);
-            try std.testing.expectEqual(@as(usize, 1), conn.comm_data.output_frame_queue.items.len);
-            try handler.sendPacketWith(conn, "owned by a distinct allocator", .normal);
-            try std.testing.expectEqual(@as(usize, 2), conn.comm_data.output_frame_queue.items.len);
+            handler.connections.closeAndRelease(live);
         }
 
         pub fn case_002() !void {
@@ -239,27 +154,26 @@ pub fn Suite(comptime scope: type) type {
 
             var tasks = ThreadedTaskQueue.init(io, allocator, 1);
             try tasks.start();
+            defer tasks.deinit();
 
             var dispatch_state = TestDispatchState{};
-            var handler = buildTestHandler(io, allocator, &tasks, &dispatch_state);
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = &dispatch_state,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
             try handler.enableInboundRing(4, 64);
 
-            defer releaseTestRing(&handler, allocator);
-            defer handler.decompress_pool.deinit(allocator);
-            defer tasks.deinit();
-            defer handler.connections.deinit();
-
-            var conn_storage: u128 align(16) = 0;
-            const conn: *Raknet.Connection = @ptrCast(&conn_storage);
-            handler.connections.register(io, conn);
-            const generation = handler.connections.currentGeneration(io, conn) orelse return error.TestUnexpectedResult;
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
 
             const ring = handler.inbound_ring.?;
             const fill: u8 = 0x37;
             const slab_payload = [_]u8{fill} ** 32;
             const overflow_payload = [_]u8{fill} ** 100;
-            try std.testing.expectEqual(false, ring.publish(conn, generation, &slab_payload).?);
-            try std.testing.expectEqual(true, ring.publish(conn, generation, &overflow_payload).?);
+            var frame_buffer: [128]u8 = undefined;
+            NetworkHandler.onPacket(handler, conn, try initialFrame(&slab_payload, &frame_buffer));
+            NetworkHandler.onPacket(handler, conn, try initialFrame(&overflow_payload, &frame_buffer));
 
             dispatch_state.expected_fill = fill;
             const result = handler.drainPackets(std.math.maxInt(u64), 4096);
@@ -271,58 +185,41 @@ pub fn Suite(comptime scope: type) type {
                 io.sleep(.fromNanoseconds(1_000_000), .awake) catch {};
             }
             try std.testing.expectEqual(@as(usize, 2), dispatch_state.dispatched_packets);
-            try std.testing.expectEqual(@as(usize, 0), handler.decompress_pending.load(.monotonic));
+            try drainUntilIdle(&tasks, handler, io);
             try std.testing.expect(!dispatch_state.content_mismatch);
             try std.testing.expectEqual(@as(usize, 1), ring.oversize_count.load(.monotonic));
+
+            handler.connections.closeAndRelease(conn);
         }
 
         pub fn case_004() !void {
             const allocator = std.testing.allocator;
             const io = std.testing.io;
 
-            var transport_failing = std.testing.FailingAllocator.init(allocator, .{});
-            var transport = try Raknet.Server.init(io, .{
-                .allocator = transport_failing.allocator(),
-                .address = "127.0.0.1",
-                .port = 0,
-                .output_slab_slots = 4,
-                .transient_slab_slots = 4,
-                .outbound_queue_slots = 8,
-            });
-            defer transport.deinit();
-
             var tasks = ThreadedTaskQueue.init(io, allocator, 1);
             defer tasks.deinit();
 
-            var handler_failing = std.testing.FailingAllocator.init(allocator, .{});
-            var state = TestDispatchState{};
-            const handler = try NetworkHandler.init(io, handler_failing.allocator(), &tasks, .{
-                .ctx = &state,
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+
+            var failing = std.testing.FailingAllocator.init(allocator, .{});
+            const handler = try NetworkHandler.init(io, failing.allocator(), &tasks, .{
+                .ctx = undefined,
                 .dispatch = testDispatch,
-                .disconnected = testDisconnected,
             });
             defer handler.deinit();
+            handler.port = fake.port();
 
-            const conn = try allocator.create(Raknet.Connection);
-            defer allocator.destroy(conn);
-            conn.* = Raknet.Connection.init(&transport, .{ .ip4 = .{ .bytes = .{ 127, 0, 0, 1 }, .port = 1 } }, 1400, 1);
-            defer conn.deinit();
-
-            try conn.comm_data.output_frame_queue.ensureTotalCapacity(transport_failing.allocator(), 64);
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
 
             const warmup = [_]u8{0x5A} ** 900;
             for (0..4) |_| try handler.sendPacket(conn, &warmup);
-            for (conn.comm_data.output_frame_queue.items) |*frame| frame.deinit();
-            conn.comm_data.output_frame_queue.clearRetainingCapacity();
-            try std.testing.expect(handler.frame_buffers != null);
-            try std.testing.expectEqual(@as(usize, FrameBuffers.slot_count), handler.frame_buffers.?.available());
+            const slot_count = handler.send_buffers.available();
+            fake.clear();
 
-            const transport_before = transport_failing.alloc_index;
-            const handler_before = handler_failing.alloc_index;
-            transport_failing.fail_index = transport_before;
-            handler_failing.fail_index = handler_before;
-
-            const queued_before = conn.comm_data.output_frame_queue.items.len;
+            const allocations = failing.alloc_index;
+            failing.fail_index = allocations;
 
             var expected: [4][300]u8 = undefined;
             for (&expected, 0..) |*packet, index| {
@@ -332,38 +229,362 @@ pub fn Suite(comptime scope: type) type {
             try handler.sendUncompressedPacket(conn, "handshake reply");
             try handler.sendPacketsUncompressed(conn, &.{ "first", "second" });
 
-            try std.testing.expectEqual(transport_before, transport_failing.alloc_index);
-            try std.testing.expectEqual(handler_before, handler_failing.alloc_index);
-            try std.testing.expect(!transport_failing.has_induced_failure);
-            try std.testing.expect(!handler_failing.has_induced_failure);
+            try std.testing.expectEqual(allocations, failing.alloc_index);
+            try std.testing.expect(!failing.has_induced_failure);
+            try std.testing.expectEqual(slot_count, handler.send_buffers.available());
 
-            transport_failing.fail_index = std.math.maxInt(usize);
-            handler_failing.fail_index = std.math.maxInt(usize);
+            failing.fail_index = std.math.maxInt(usize);
 
-            const frames = conn.comm_data.output_frame_queue.items[queued_before..];
-            try std.testing.expectEqual(@as(usize, 6), frames.len);
-            for (frames[0..4], 0..) |*frame, index| {
-                const decoded = try scope.Compression.decompress(frame.payload, handler.options, allocator);
+            const sent = fake.sent.items;
+            try std.testing.expectEqual(@as(usize, 6), sent.len);
+            for (sent[0..4], 0..) |*entry, index| {
+                try std.testing.expectEqual(conn.id, entry.conn_id);
+                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, .negotiated, allocator);
                 defer decoded.deinit();
                 try std.testing.expectEqual(@as(usize, 1), decoded.packets.len);
                 try std.testing.expectEqualSlices(u8, &expected[index], decoded.packets[0]);
             }
 
             {
-                const decoded = try scope.Compression.decompress(frames[4].payload, handler.options, allocator);
+                try std.testing.expectEqual(@as(u8, "handshake reply".len), sent[4].bytes[0]);
+                const decoded = try scope.Compression.decompress(sent[4].bytes, handler.options, .initial, allocator);
                 defer decoded.deinit();
                 try std.testing.expectEqualStrings("handshake reply", decoded.packets[0]);
             }
             {
-                const decoded = try scope.Compression.decompress(frames[5].payload, handler.options, allocator);
+                const decoded = try scope.Compression.decompress(sent[5].bytes, handler.options, .negotiated, allocator);
                 defer decoded.deinit();
                 try std.testing.expectEqual(@as(usize, 2), decoded.packets.len);
                 try std.testing.expectEqualStrings("first", decoded.packets[0]);
                 try std.testing.expectEqualStrings("second", decoded.packets[1]);
             }
 
-            for (conn.comm_data.output_frame_queue.items) |*frame| frame.deinit();
-            try std.testing.expectEqual(@as(usize, FrameBuffers.slot_count), handler.frame_buffers.?.available());
+            handler.connections.closeAndRelease(conn);
+        }
+
+        pub fn case_005() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            fake.payload_limit = 300;
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+
+            var wire: [6][100]u8 = undefined;
+            for (&wire, 0..) |*packet, index| @memset(packet, @intCast(index + 1));
+            const packets = [_][]const u8{ &wire[0], &wire[1], &wire[2], &wire[3], &wire[4], &wire[5] };
+
+            try handler.sendPacketsUncompressedWith(conn, &packets, .immediate);
+
+            try std.testing.expect(fake.sent.items.len > 1);
+            for (fake.sent.items) |entry| try std.testing.expect(entry.bytes.len <= fake.payload_limit);
+
+            // Frames must arrive in order: decoding them back-to-back rebuilds the batch.
+            var decoded_count: usize = 0;
+            for (fake.sent.items) |entry| {
+                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, .negotiated, allocator);
+                defer decoded.deinit();
+                for (decoded.packets) |packet| {
+                    try std.testing.expect(decoded_count < packets.len);
+                    try std.testing.expectEqualSlices(u8, packets[decoded_count], packet);
+                    decoded_count += 1;
+                }
+            }
+            try std.testing.expectEqual(packets.len, decoded_count);
+            try std.testing.expectEqual(@as(usize, 0), handler.oversizeSendCount());
+
+            handler.connections.closeAndRelease(conn);
+        }
+
+        pub fn case_006() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            fake.payload_limit = 64;
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+
+            const big = [_]u8{0xA5} ** 4096;
+            try handler.sendPacket(conn, &big);
+            try std.testing.expectError(error.PayloadTooLarge, handler.sendFramed(conn, &big, .normal));
+            try std.testing.expectEqual(@as(usize, 1), handler.oversizeSendCount());
+            try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
+
+            const decoded = try scope.Compression.decompress(fake.sent.items[0].bytes, handler.options, .negotiated, allocator);
+            defer decoded.deinit();
+            try std.testing.expectEqual(@as(usize, 1), decoded.packets.len);
+            try std.testing.expectEqualSlices(u8, &big, decoded.packets[0]);
+
+            handler.connections.closeAndRelease(conn);
+        }
+
+        pub fn case_007() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            fake.payload_limit = 64 * 1024;
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+
+            const slots = handler.send_buffers.capacity();
+            var held: [32][]u8 = undefined;
+            try std.testing.expect(slots <= held.len);
+            for (held[0..slots]) |*slot| slot.* = handler.send_buffers.acquire().?;
+
+            // A small frame still goes out: only frames that need a pool slot are refused.
+            try handler.sendPacket(conn, "inline");
+            try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
+
+            const large = [_]u8{0x5A} ** 5000;
+            try std.testing.expectError(error.Backpressure, handler.sendPacket(conn, &large));
+            try std.testing.expectEqual(@as(usize, 1), handler.backpressureSendCount());
+            try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
+
+            for (held[0..slots]) |slot| handler.send_buffers.release(slot);
+            try handler.sendPacket(conn, &large);
+            try std.testing.expectEqual(@as(usize, 2), fake.sent.items.len);
+
+            handler.connections.closeAndRelease(conn);
+        }
+
+        pub fn case_008() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            fake.payload_limit = 1400;
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+
+            var wire: [24][700]u8 = undefined;
+            var packets: [24][]const u8 = undefined;
+            for (&wire, 0..) |*packet, index| {
+                for (packet, 0..) |*byte, offset| byte.* = @truncate(index * 31 + offset);
+                packets[index] = packet;
+            }
+
+            try handler.sendPackets(conn, &packets);
+
+            try std.testing.expect(fake.sent.items.len > 1);
+            for (fake.sent.items) |entry| try std.testing.expect(entry.bytes.len <= fake.payload_limit);
+
+            var decoded_count: usize = 0;
+            for (fake.sent.items) |entry| {
+                const decoded = try scope.Compression.decompress(entry.bytes, handler.options, .negotiated, allocator);
+                defer decoded.deinit();
+                for (decoded.packets) |packet| {
+                    try std.testing.expect(decoded_count < packets.len);
+                    try std.testing.expectEqualSlices(u8, packets[decoded_count], packet);
+                    decoded_count += 1;
+                }
+            }
+            try std.testing.expectEqual(packets.len, decoded_count);
+
+            handler.connections.closeAndRelease(conn);
+        }
+
+        pub fn case_009() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+            fake.payload_limit = 1024;
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+
+            fake.fail_next_send = error.Backpressure;
+            try std.testing.expectError(error.Backpressure, handler.sendPacket(conn, "frame"));
+            try std.testing.expectEqual(@as(usize, 1), handler.backpressureSendCount());
+
+            fake.fail_next_send = error.Closed;
+            try std.testing.expectError(error.Closed, handler.sendPacket(conn, "frame"));
+            try std.testing.expectEqual(@as(usize, 1), handler.outboundDroppedCount());
+
+            try handler.enableInboundRing(64, 64);
+            const frame = [_]u8{0} ** 32;
+            for (0..65) |_| NetworkHandler.onPacket(handler, conn, &frame);
+            try std.testing.expectEqual(@as(usize, 1), handler.inboundDroppedCount());
+
+            handler.connections.closeAndRelease(conn);
+        }
+
+        pub fn case_010() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            defer tasks.deinit();
+
+            var fake = TransportFake.init(allocator);
+            defer fake.deinit();
+
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = undefined,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            handler.port = fake.port();
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+            defer handler.connections.closeAndRelease(conn);
+
+            fake.payload_limit = 4;
+            try std.testing.expectError(error.PayloadTooLarge, handler.sendFramed(conn, "12345", .normal));
+            try std.testing.expectEqual(@as(usize, 1), handler.oversizeSendCount());
+            try std.testing.expectEqual(@as(usize, 1), handler.outboundDroppedCount());
+
+            fake.payload_limit = 0;
+            try std.testing.expectError(error.Closed, handler.sendFramed(conn, "1234", .normal));
+            try std.testing.expectEqual(@as(usize, 2), handler.outboundDroppedCount());
+
+            fake.payload_limit = 1024;
+            try handler.sendFramed(conn, "frame", .normal);
+            try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
+            try std.testing.expectEqual(@as(usize, 2), handler.outboundDroppedCount());
+
+            fake.payload_limit = 4;
+            try std.testing.expectError(error.PayloadTooLarge, handler.sendPacket(conn, "compressed frame"));
+            try std.testing.expectEqual(@as(usize, 2), handler.oversizeSendCount());
+            try std.testing.expectEqual(@as(usize, 3), handler.outboundDroppedCount());
+
+            handler.port = null;
+            try std.testing.expectError(error.Closed, handler.sendFramed(conn, "frame", .normal));
+            try std.testing.expectEqual(@as(usize, 4), handler.outboundDroppedCount());
+        }
+
+        pub fn case_011() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            try tasks.start();
+            defer tasks.deinit();
+
+            var dispatch_state = TestDispatchState{};
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = &dispatch_state,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            try handler.enableInboundRing(4, 64);
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+            defer handler.connections.closeAndRelease(conn);
+
+            const corrupt = [_]u8{ 0x05, 0x00 };
+            NetworkHandler.onPacket(handler, conn, &corrupt);
+            _ = handler.drainPackets(std.math.maxInt(u64), 4096);
+            try drainUntilIdle(&tasks, handler, io);
+
+            try std.testing.expectEqual(@as(usize, 1), handler.decompress_failures.load(.monotonic));
+            try std.testing.expectEqual(@as(usize, 1), handler.inboundDroppedCount());
+            try std.testing.expectEqual(@as(usize, 0), dispatch_state.dispatched_packets);
+        }
+
+        pub fn case_012() !void {
+            const allocator = std.testing.allocator;
+            const io = std.testing.io;
+
+            var tasks = ThreadedTaskQueue.init(io, allocator, 1);
+            try tasks.start();
+            defer tasks.deinit();
+
+            var dispatch_state = TestDispatchState{};
+            const handler = try NetworkHandler.init(io, allocator, &tasks, .{
+                .ctx = &dispatch_state,
+                .dispatch = testDispatch,
+            });
+            defer handler.deinit();
+            try handler.enableInboundRing(8, 64);
+
+            var backend: u128 = 0;
+            const conn = try handler.connections.create(&backend);
+            defer handler.connections.closeAndRelease(conn);
+
+            const request = [_]u8{ 0x06, 0xC1, 0x01, 0x00, 0x00, 0x08, 0xB1 };
+            NetworkHandler.onPacket(handler, conn, &request);
+            _ = handler.drainPackets(std.math.maxInt(u64), 4096);
+            try drainUntilIdle(&tasks, handler, io);
+
+            try std.testing.expectEqual(@as(usize, 1), dispatch_state.dispatched_packets);
+            try std.testing.expectEqual(@as(?u8, 0xC1), dispatch_state.first_packet_head);
+
+            conn.markCompressionReady();
+            const login = [_]u8{ 0x01, 0x00 };
+            const packets = [_][]const u8{&login};
+            const framed = try scope.Compression.compress(&packets, handler.options, allocator);
+            defer allocator.free(framed);
+            NetworkHandler.onPacket(handler, conn, framed);
+            _ = handler.drainPackets(std.math.maxInt(u64), 4096);
+            try drainUntilIdle(&tasks, handler, io);
+
+            try std.testing.expectEqual(@as(usize, 2), dispatch_state.dispatched_packets);
+            try std.testing.expectEqual(@as(?u8, 0x01), dispatch_state.last_packet_head);
         }
     };
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 const builtin = @import("builtin");
 
-const Raknet = @import("Raknet");
 const Protocol = @import("protocol");
 
 const identity = @import("identity.zig");
@@ -164,7 +164,7 @@ pub const AuthService = struct {
         self.keys = keys;
         self.keys_fetched_at = now;
         if (!builtin.is_test) {
-            Raknet.Logger.INFO("Refreshed {d} signing key(s) from the Minecraft authorization service", .{keys.kidCount()});
+            log.info("Refreshed {d} signing key(s) from the Minecraft authorization service", .{keys.kidCount()});
         }
     }
 };

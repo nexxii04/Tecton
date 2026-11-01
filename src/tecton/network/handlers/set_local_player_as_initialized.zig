@@ -1,5 +1,6 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../../core/log.zig");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -26,7 +27,7 @@ const PlayerInitTask = struct {
 pub fn handleSetLocalPlayerAsInitialized(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     _: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;
@@ -58,7 +59,7 @@ fn queuePlayerInit(tecton: *Tecton, network: *NetworkHandler, player: *Player) !
 fn runPlayerInitTask(ctx: *anyopaque) bool {
     const state: *PlayerInitTask = @ptrCast(@alignCast(ctx));
     return runPlayerInitTaskImpl(state) catch |err| {
-        Raknet.Logger.ERROR("Player init failed for {s} at stage {s}: {any}", .{
+        log.err("Player init failed for {s} at stage {s}: {any}", .{
             state.player.username,
             @tagName(state.stage),
             err,
@@ -69,7 +70,7 @@ fn runPlayerInitTask(ctx: *anyopaque) bool {
 
 fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
     const player = state.player;
-    if (!player.connection.isActive() or state.tecton.getPlayerByConnection(player.connection) == null) {
+    if (!player.connection.isOpen() or state.tecton.getPlayerByConnection(player.connection) == null) {
         return true;
     }
 
@@ -89,12 +90,16 @@ fn runPlayerInitTaskImpl(state: *PlayerInitTask) !bool {
             return false;
         },
         .send_existing_players => {
-            try sendExistingPlayers(state);
+            sendExistingPlayers(state) catch |err| {
+                log.warn("Could not send the player list to {s}: {s}", .{ player.username, @errorName(err) });
+            };
             state.stage = .broadcast_new_player;
             return false;
         },
         .broadcast_new_player => {
-            try broadcastNewPlayer(state);
+            broadcastNewPlayer(state) catch |err| {
+                log.warn("Could not announce {s} to the other players: {s}", .{ player.username, @errorName(err) });
+            };
             player.spawned = true;
             return true;
         },
@@ -124,6 +129,8 @@ fn sendExistingPlayers(state: *PlayerInitTask) !void {
             .entity_unique_id = p.entity.unique_id,
             .username = p.username,
             .xuid = p.xuid,
+            .play_fab_id = p.login_data.client_data.play_fab_id,
+            .platform_online_id = p.login_data.client_data.platform_online_id,
             .skin = &p.login_data.client_data,
             .build_platform = @intCast(p.login_data.client_data.device_os),
         };
@@ -154,6 +161,8 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
         .entity_unique_id = state.player.entity.unique_id,
         .username = state.player.username,
         .xuid = state.player.xuid,
+        .play_fab_id = state.player.login_data.client_data.play_fab_id,
+        .platform_online_id = state.player.login_data.client_data.platform_online_id,
         .skin = &state.player.login_data.client_data,
         .build_platform = @intCast(state.player.login_data.client_data.device_os),
     }};
@@ -165,11 +174,7 @@ fn broadcastNewPlayer(state: *PlayerInitTask) !void {
     };
     const serialized = try packet.serialize(&stream, temp_allocator);
 
-    var broadcast = try SharedBroadcast.begin(
-        &state.network.payload_buffers,
-        serialized,
-        state.network.options,
-    );
+    var broadcast = try SharedBroadcast.begin(state.network, serialized);
     defer broadcast.deinit();
 
     for (snapshots) |other| {

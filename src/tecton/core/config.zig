@@ -1,8 +1,13 @@
 const std = @import("std");
+const log = @import("log.zig");
 const builtin = @import("builtin");
-const Raknet = @import("Raknet");
 const Protocol = @import("protocol");
 const WorkerLayout = @import("../tasks/threaded_tasks.zig").WorkerLayout;
+
+pub const default_jwks_uri = "https://authorization.franchise.minecraft-services.net/.well-known/keys";
+
+/// How signaling TLS is provided: `proxy` uses an external terminator, `native` terminates here.
+pub const TlsMode = enum { off, proxy, native };
 
 pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
     return mode == .Debug;
@@ -15,26 +20,39 @@ pub fn shouldEmitStartupLogs() bool {
 pub const ServerProperties = struct {
     address: []const u8 = "0.0.0.0",
     port: u16 = 19132,
+    signaling_bind: []const u8 = "",
+    tls_mode: TlsMode = .off,
+    tls_cert: []const u8 = "",
+    tls_key: []const u8 = "",
+    motd_port: u16 = 0,
     motd: []const u8 = "Tecton Server",
+    level_name: []const u8 = "Bedrock level",
     gamemode: []const u8 = "survival",
     max_players: u32 = 120,
     online_mode: bool = false,
     online_mode_offline_fallback: bool = false,
+    jwks_uri: []const u8 = default_jwks_uri,
+    identity_key: []const u8 = "server.key",
+    require_client_identity: bool = false,
+    lan_discovery: bool = true,
+    lan_port: u16 = 7551,
+    public_candidate: []const u8 = "",
+    ice_servers: []const u8 = "",
+    max_sessions: u32 = 0,
+    max_message_size: u32 = 256 * 1024,
+    transport_tick_ms: u32 = 10,
     max_tps: u32 = 20,
     worker_threads: u32 = 0,
     worker_layout: WorkerLayout = .split,
     parallel_visibility: bool = true,
     max_view_distance: u32 = 8,
     simulation_distance: u32 = 4,
-    max_mtu: u16 = max_max_mtu,
     movement_send_priority: []const u8 = "immediate",
+    movement_channel: []const u8 = "reliable",
     movement_distance_bands: bool = true,
     network_inbound_ring: bool = true,
     inbound_ring_slots: u32 = 512,
     inbound_ring_slot_size: u32 = 1536,
-    output_slab_slots: u32 = 512,
-    transient_slab_slots: u32 = 128,
-    outbound_queue_slots: u32 = 1024,
     ecs_capacity: u32 = 1024,
     count_allocations: bool = false,
     mob_broadcast_interval: u8 = 2,
@@ -43,11 +61,64 @@ pub const ServerProperties = struct {
     allocator: std.mem.Allocator,
     _allocated_strings: std.ArrayList([]const u8) = .empty,
 
-    pub const min_max_mtu: u16 = 576;
-    pub const max_max_mtu: u16 = Raknet.MAX_MTU_SIZE;
+    pub fn plainSignalingHost(self: *const ServerProperties) []const u8 {
+        return if (self.signaling_bind.len > 0) self.signaling_bind else self.address;
+    }
 
-    pub fn clampMaxMtu(requested: u16) u16 {
-        return @min(@max(requested, min_max_mtu), max_max_mtu);
+    pub fn motdPort(self: *const ServerProperties) u16 {
+        return if (self.motd_port == 0) self.port else self.motd_port;
+    }
+
+    pub fn plainSignalingLoopback(self: *const ServerProperties) bool {
+        return isLoopbackHost(self.plainSignalingHost());
+    }
+
+    pub fn isLoopbackHost(host: []const u8) bool {
+        const address = std.Io.net.IpAddress.parse(host, 0) catch return false;
+        return switch (address) {
+            .ip4 => |ip4| ip4.bytes[0] == 127,
+            .ip6 => |ip6| std.mem.eql(u8, &ip6.bytes, &std.Io.net.Ip6Address.loopback(0).bytes),
+        };
+    }
+
+    pub const TlsProblem = enum { missing_certificate, missing_key, plain_listener_exposed, zero_port };
+
+    /// First reason `tls-mode` cannot be honoured; TLS requires a loopback plain listener.
+    pub fn tlsProblem(self: *const ServerProperties) ?TlsProblem {
+        if (self.tls_mode == .off) return null;
+        if (!self.plainSignalingLoopback()) return .plain_listener_exposed;
+        if (self.tls_mode == .proxy) return null;
+        if (self.tls_cert.len == 0) return .missing_certificate;
+        if (self.tls_key.len == 0) return .missing_key;
+        if (self.port == 0) return .zero_port;
+        return null;
+    }
+
+    pub const min_transport_tick_ms: u32 = 5;
+    pub const max_transport_tick_ms: u32 = 50;
+
+    pub fn clampTransportTickMs(requested: u32) u32 {
+        return std.math.clamp(requested, min_transport_tick_ms, max_transport_tick_ms);
+    }
+
+    pub const min_max_sessions: u32 = 64;
+    pub const max_max_sessions: u32 = 4096;
+
+    pub fn clampMaxSessions(requested: u32) u32 {
+        return std.math.clamp(requested, min_max_sessions, max_max_sessions);
+    }
+
+    /// `max-sessions=0` follows the player limit, which keeps a queue of joining clients.
+    pub fn effectiveMaxSessions(self: *const ServerProperties) u32 {
+        if (self.max_sessions != 0) return clampMaxSessions(self.max_sessions);
+        return clampMaxSessions(@max(min_max_sessions, self.max_players +| 32));
+    }
+
+    pub const min_max_message_size: u32 = 1024;
+    pub const max_max_message_size: u32 = 256 * 1024;
+
+    pub fn clampMaxMessageSize(requested: u32) u32 {
+        return std.math.clamp(requested, min_max_message_size, max_max_message_size);
     }
 
     pub const max_view_distance_limit: u32 = 32;
@@ -84,28 +155,41 @@ pub const ServerProperties = struct {
     }
 
     const comments = .{
-        .address = "What address should the server run on",
-        .port = "What port should the server run on",
+        .address = "Address the signaling listener binds to when signaling-bind is empty; empty means all interfaces",
+        .port = "Signaling port (the LAN discovery listener advertises this port)",
+        .signaling_bind = "Host the plain signaling listener binds to instead of address (empty follows address; with tls-mode=native it gets a kernel-chosen port)",
+        .tls_mode = "Signaling TLS: off leaves signaling plain, proxy is terminated in front of the server, native terminates in the server",
+        .tls_cert = "PEM certificate chain served when tls-mode=native (empty refuses to start)",
+        .tls_key = "PEM private key matching tls-cert, keep it private (native mode only)",
+        .motd_port = "UDP port that answers the external server list ping (0 follows port)",
         .motd = "What motd should server display in the server list",
+        .level_name = "Level name shown to clients before they join",
         .gamemode = "Default game mode: survival, creative, adventure or spectator",
         .max_players = "Max Player count on the server",
         .online_mode = "Verify logins against the Minecraft authorization service; an unverifiable login is refused (see online-mode-offline-fallback)",
         .online_mode_offline_fallback = "With online-mode=true, let unverified logins in as offline identities instead of refusing them",
+        .jwks_uri = "JWKS endpoint that verifies player identity tokens; must be https (empty trusts only the operator key)",
+        .identity_key = "Path to the operator key that signs signaling answers (created on first start, keep it secret)",
+        .require_client_identity = "Reject client identity tokens that do not chain to the operator or a JWKS key",
+        .lan_discovery = "Answer LAN discovery pings on UDP",
+        .lan_port = "LAN discovery port",
+        .public_candidate = "Host advertised to clients for ICE (empty uses the address the client reached)",
+        .ice_servers = "Comma-separated ICE servers as stun:<host>:<port> or turn:<host>:<port>@<user>:<pass> (empty disables STUN and TURN)",
+        .max_sessions = "Concurrent NetherNet sessions per listener (0 follows max-players; clamped to 64-4096)",
+        .max_message_size = "Largest NetherNet message accepted from a client, in bytes (clamped to 1024-262144; each session's outbox buffer is sized to this, with a 64 KiB floor and 512 descriptor slots)",
+        .transport_tick_ms = "Milliseconds between NetherNet transport ticks (clamped to 5-50)",
         .max_tps = "Max tps",
         .worker_threads = "Tecton worker threads (0 = auto, higher values are clamped)",
         .worker_layout = "Worker layout: split dedicates max(1, cpu/4) workers to input and the rest to world; shared restores the single queue",
         .parallel_visibility = "Run the per-viewer player visibility pass on the world workers instead of inline in the player tick (false restores the serial pass)",
         .max_view_distance = "Max view distance in chunks",
         .simulation_distance = "Simulation distance in chunks (chunks within this range are kept loaded)",
-        .max_mtu = "Max RakNet MTU (clamped to 576-1400; clients still negotiate the minimum with this cap)",
-        .movement_send_priority = "Movement broadcast priority: immediate or normal",
+        .movement_send_priority = "Movement broadcast priority: immediate or normal (the NetherNet outbox is FIFO; neither changes reliability)",
+        .movement_channel = "Movement broadcast channel: reliable (ordered, may fragment) or unreliable (no retransmits, must fit one message)",
         .movement_distance_bands = "Rate-limit player movement updates by distance to the nearest viewer (false restores a delta every tick)",
         .network_inbound_ring = "Use the zero-alloc SPSC inbound ring instead of the per-packet heap queue (false restores the legacy path)",
         .inbound_ring_slots = "Inbound ring slots (clamped to 64-1048576 and rounded up to a power of two)",
         .inbound_ring_slot_size = "Bytes per inbound ring slot (clamped to 512-65536; larger payloads use bounded overflow slots)",
-        .output_slab_slots = "Reliable output datagram slots reserved at startup (minimum 64)",
-        .transient_slab_slots = "Transient output datagram slots reserved at startup (minimum 64)",
-        .outbound_queue_slots = "Outbound queue slots reserved at startup (minimum 64, rounded to a power of two)",
         .ecs_capacity = "Entity slots reserved at startup (minimum 64; exhaustion never grows storage in the tick)",
         .count_allocations = "Count allocations made by the tick thread and warn when a tick allocates (diagnostics)",
         .mob_broadcast_interval = "Ticks between in-air mob movement broadcasts (clamped to 1-20; 1 is the old every-tick behavior)",
@@ -113,14 +197,13 @@ pub const ServerProperties = struct {
     };
 
     pub fn load(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !ServerProperties {
-        Raknet.Logger.init(allocator);
         var self = ServerProperties{ .allocator = allocator };
         errdefer self.deinit();
 
         const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 if (shouldEmitStartupLogs()) {
-                    Raknet.Logger.INFO("server.properties not found, creating with defaults", .{});
+                    log.info("server.properties not found, creating with defaults", .{});
                 }
                 try self.save(io, path);
                 return self;
@@ -130,7 +213,7 @@ pub const ServerProperties = struct {
         defer file.close(io);
 
         if (shouldEmitStartupLogs()) {
-            Raknet.Logger.INFO("Loading server.properties", .{});
+            log.info("Loading server.properties", .{});
         }
 
         var read_buf: [4096]u8 = undefined;
@@ -148,7 +231,7 @@ pub const ServerProperties = struct {
             const value = line[sep + 1 ..];
 
             self.setField(key, value) catch |err| {
-                Raknet.Logger.WARN("Unknown or invalid property: {s} ({any})", .{ key, err });
+                log.warn("Unknown or invalid property: {s} ({any})", .{ key, err });
             };
         }
 
@@ -165,6 +248,12 @@ pub const ServerProperties = struct {
 
     pub fn gameMode(self: *const ServerProperties) Protocol.GameMode {
         return parseGamemode(self.gamemode) orelse .Survival;
+    }
+
+    /// A verified login identity is part of the online-mode contract, so the explicit
+    /// switch can only tighten it.
+    pub fn clientIdentityRequired(self: *const ServerProperties) bool {
+        return self.require_client_identity or self.online_mode;
     }
 
     fn setField(self: *ServerProperties, key: []const u8, value: []const u8) !void {
@@ -219,6 +308,8 @@ const test_scope = struct {
     pub const std = test_owner.std;
     pub const Protocol = test_owner.Protocol;
     pub const WorkerLayout = test_owner.WorkerLayout;
+    pub const TlsMode = test_owner.TlsMode;
+    pub const default_jwks_uri = test_owner.default_jwks_uri;
     pub const shouldEmitVerboseStartupLogs = test_owner.shouldEmitVerboseStartupLogs;
     pub const shouldEmitStartupLogs = test_owner.shouldEmitStartupLogs;
     pub const ServerProperties = test_owner.ServerProperties;
@@ -232,7 +323,7 @@ test "gamemode survives saving and loading properties" {
     try @import("config_test.zig").Suite(test_scope).case_001();
 }
 
-test "max mtu clamps to the range RakNet supports" {
+test "transport tick clamps to the supported range" {
     try @import("config_test.zig").Suite(test_scope).case_002();
 }
 
@@ -260,15 +351,15 @@ test "the mob broadcast interval clamps to the supported range" {
     try @import("config_test.zig").Suite(test_scope).case_008();
 }
 
-test "max mtu defaults to the RakNet ceiling" {
+test "max sessions defaults to following the player limit" {
     try @import("config_test.zig").Suite(test_scope).case_009();
 }
 
-test "an existing max-mtu line overrides the default and rejects garbage" {
+test "an existing max-sessions line overrides the default and rejects garbage" {
     try @import("config_test.zig").Suite(test_scope).case_010();
 }
 
-test "a saved properties file carries max-mtu and loads it back" {
+test "a saved properties file carries max-sessions and loads it back" {
     try @import("config_test.zig").Suite(test_scope).case_011();
 }
 
@@ -296,13 +387,9 @@ test "memory capacities survive saving and loading properties" {
     const allocator = std.testing.allocator;
     var properties = ServerProperties{ .allocator = allocator };
     defer properties.deinit();
-    try std.testing.expectEqual(@as(u32, 512), properties.output_slab_slots);
-    try std.testing.expectEqual(@as(u32, 128), properties.transient_slab_slots);
-    try std.testing.expectEqual(@as(u32, 1024), properties.outbound_queue_slots);
+    try std.testing.expectEqual(@as(u32, 256 * 1024), properties.max_message_size);
     try std.testing.expectEqual(@as(u32, 1024), properties.ecs_capacity);
-    try properties.setField("output-slab-slots", "2048");
-    try properties.setField("transient-slab-slots", "256");
-    try properties.setField("outbound-queue-slots", "4096");
+    try properties.setField("max-message-size", "524288");
     try properties.setField("ecs-capacity", "8192");
     try properties.setField("count-allocations", "true");
     var tmp = std.testing.tmpDir(.{});
@@ -312,13 +399,35 @@ test "memory capacities survive saving and loading properties" {
     try properties.save(std.testing.io, path);
     var loaded = try ServerProperties.load(std.testing.io, allocator, path);
     defer loaded.deinit();
-    try std.testing.expectEqual(@as(u32, 2048), loaded.output_slab_slots);
-    try std.testing.expectEqual(@as(u32, 256), loaded.transient_slab_slots);
-    try std.testing.expectEqual(@as(u32, 4096), loaded.outbound_queue_slots);
+    try std.testing.expectEqual(@as(u32, 524288), loaded.max_message_size);
     try std.testing.expectEqual(@as(u32, 8192), loaded.ecs_capacity);
     try std.testing.expect(loaded.count_allocations);
 }
 
 test "the client chunk radius clamps to the supported range" {
     try @import("config_test.zig").Suite(test_scope).case_017();
+}
+
+test "the signaling keys parse and only accept known values" {
+    try @import("config_test.zig").Suite(test_scope).case_018();
+}
+
+test "a properties file with the removed keys still loads" {
+    try @import("config_test.zig").Suite(test_scope).case_019();
+}
+
+test "NAT and identity overrides parse" {
+    try @import("config_test.zig").Suite(test_scope).case_020();
+}
+
+test "movement-channel keeps whatever the file says and defaults to reliable" {
+    try @import("config_test.zig").Suite(test_scope).case_021();
+}
+
+test "TLS keys parse and reject an exposed plain listener" {
+    try @import("config_test.zig").Suite(test_scope).case_022();
+}
+
+test "a saved properties file carries the TLS keys and loads them back" {
+    try @import("config_test.zig").Suite(test_scope).case_023();
 }

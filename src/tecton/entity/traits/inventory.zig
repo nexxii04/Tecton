@@ -1,7 +1,7 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
 const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Player = @import("../../player/player.zig").Player;
@@ -253,7 +253,7 @@ pub fn equipFromSlot(network: *NetworkHandler, player: *Player, state: *State, s
     sendEquipmentTo(player, player, state);
     if (!applied) return false;
 
-    Raknet.Logger.INFO("Player {s} put on {s} from hotbar slot {d}", .{
+    log.info("Player {s} put on {s} from hotbar slot {d}", .{
         player.username,
         item_type.identifier,
         slot,

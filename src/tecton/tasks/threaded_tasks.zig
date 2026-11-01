@@ -270,7 +270,7 @@ test "configured worker count is respected" {
     try @import("threaded_tasks_test.zig").Suite(test_scope).case_001();
 }
 
-test "server thread count includes main raknet and workers" {
+test "server thread count includes the game clock, the transport ticker and workers" {
     try @import("threaded_tasks_test.zig").Suite(test_scope).case_002();
 }
 

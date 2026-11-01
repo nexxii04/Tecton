@@ -20,7 +20,7 @@ const trait_mod = @import("./trait.zig");
 const serialization = @import("../../provider/serialization.zig");
 const ItemStack = @import("../../../items/item_stack.zig").ItemStack;
 const ItemType = @import("../../../items/item_type.zig").ItemType;
-const Logger = @import("Raknet").Logger;
+const log = @import("../../../core/log.zig");
 
 pub const State = struct {
     container: ?BlockContainer = null,
@@ -360,7 +360,7 @@ fn tryPairAdjacent(state: *State, block: *Block) void {
             }
         },
         else => {
-            Logger.ERROR(
+            log.err(
                 "ChestTrait expected minecraft:cardinal_direction to be string, got '{s}' at ({d},{d},{d}) for {s}",
                 .{ @tagName(direction), block.position.x, block.position.y, block.position.z, block.getIdentifier() },
             );
@@ -383,7 +383,7 @@ fn tryPairAdjacent(state: *State, block: *Block) void {
         const adj_perm = adj_block.getPermutation(0) catch continue;
         const adj_dir = adj_perm.state.get("minecraft:cardinal_direction") orelse continue;
         if (adj_dir != .string) {
-            Logger.ERROR(
+            log.err(
                 "ChestTrait adjacent minecraft:cardinal_direction was '{s}' at ({d},{d},{d}) for {s}",
                 .{ @tagName(adj_dir), adj_pos.x, adj_pos.y, adj_pos.z, adj_block.getIdentifier() },
             );

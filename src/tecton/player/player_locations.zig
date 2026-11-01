@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../core/log.zig");
 
 pub const Location = struct {
     world: []const u8,
@@ -51,7 +51,7 @@ pub const PlayerLocations = struct {
         defer self.allocator.free(data);
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, data, .{}) catch |err| {
-            Raknet.Logger.ERROR("Failed to parse {s}: {any}", .{ self.path, err });
+            log.err("Failed to parse {s}: {any}", .{ self.path, err });
             return;
         };
         defer parsed.deinit();
@@ -88,7 +88,7 @@ pub const PlayerLocations = struct {
             .options = .{ .whitespace = .indent_2 },
         };
         self.writeJson(&stringify) catch |err| {
-            Raknet.Logger.ERROR("Failed to encode {s}: {any}", .{ self.path, err });
+            log.err("Failed to encode {s}: {any}", .{ self.path, err });
             return;
         };
 
@@ -96,7 +96,7 @@ pub const PlayerLocations = struct {
             .sub_path = self.path,
             .data = out.written(),
         }) catch |err| {
-            Raknet.Logger.ERROR("Failed to write {s}: {any}", .{ self.path, err });
+            log.err("Failed to write {s}: {any}", .{ self.path, err });
             return;
         };
         self.dirty = false;

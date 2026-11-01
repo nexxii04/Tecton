@@ -1,7 +1,8 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const Events = @import("../../events/root.zig");
 const Player = @import("../../player/player.zig").Player;
@@ -97,7 +98,7 @@ fn resolveIdentity(
         .client_data_token = client_data_token,
     }, now) catch |err| {
         if (policyFor(true, config.online_mode_offline_fallback) == .reject) return err;
-        Raknet.Logger.WARN("Unverified login let in as an offline identity: {s}", .{@errorName(err)});
+        log.warn("Unverified login let in as an offline identity: {s}", .{@errorName(err)});
         try applyOfflineIdentity(network.allocator, data);
         return .offline;
     };
@@ -109,7 +110,7 @@ fn resolveIdentity(
 
 fn sendPlayStatus(
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     status: Protocol.PlayStatusEnum,
 ) void {
     var str = BinaryStream.init(network.allocator, null, null);
@@ -123,7 +124,7 @@ fn sendPlayStatus(
 pub fn handleLogin(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const login = try Protocol.LoginPacket.deserialize(stream);
@@ -165,7 +166,7 @@ pub fn handleLogin(
     }
 
     const resolution = resolveIdentity(tecton, network, &data, login.client) catch |err| {
-        Raknet.Logger.WARN("Rejected login: {s}", .{@errorName(err)});
+        log.warn("Rejected login: {s}", .{@errorName(err)});
         data.deinit();
         sendPlayStatus(network, connection, .FailedClient);
         return;

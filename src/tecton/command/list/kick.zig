@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../../core/log.zig");
 const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
@@ -39,8 +39,8 @@ fn handle(raw: *anyopaque) void {
 
     const source = if (ctx.player) |p| p.username else "Console";
     for (targets) |player| {
-        Raknet.Logger.INFO("{s} kicked {s}: {s}", .{ source, player.username, reason });
-        player.disconnect(reason) catch {};
+        log.info("{s} kicked {s}: {s}", .{ source, player.username, reason });
+        player.disconnect(reason);
     }
 
     var buf: [128]u8 = undefined;

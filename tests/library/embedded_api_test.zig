@@ -223,6 +223,76 @@ test "the public API is organized as module namespaces" {
     _ = tecton.binary_stream;
 }
 
+test "stop wakes run and the game tick advances without the transport" {
+    const io = std.testing.io;
+    var server = try tecton.Server.init(.{
+        .io = io,
+        .allocator = std.testing.allocator,
+        .composition = tecton.composition,
+        .properties = tecton.ServerProperties{
+            .allocator = std.testing.allocator,
+            .address = "127.0.0.1",
+            .port = 0,
+        },
+        .enable_console = false,
+        .discover_native_plugins = false,
+        .auto_load_worlds = false,
+        .create_default_world = false,
+    });
+    defer server.deinit();
+    try server.start();
+
+    var run_future = try io.concurrent(runServer, .{&server});
+    const target_tick = server.tick_count + 3;
+    while (server.tick_count < target_tick) {
+        try io.sleep(.fromNanoseconds(std.time.ns_per_ms * 5), .awake);
+    }
+
+    try server.stop();
+    try run_future.await(io);
+    try std.testing.expect(server.tick_count >= target_tick);
+}
+
+fn runServer(server: *tecton.Server) anyerror!void {
+    try server.run();
+}
+
+test "an embedded server starts, ticks and stops on the nethernet transport" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var key_buf: [512]u8 = undefined;
+    const key_path = try std.fmt.bufPrint(&key_buf, ".zig-cache/tmp/{s}/server.key", .{tmp.sub_path});
+
+    var server = try tecton.Server.init(.{
+        .io = io,
+        .allocator = std.testing.allocator,
+        .composition = tecton.composition,
+        .properties = tecton.ServerProperties{
+            .allocator = std.testing.allocator,
+            .address = "127.0.0.1",
+            .port = 0,
+            .identity_key = key_path,
+        },
+        .enable_console = false,
+        .discover_native_plugins = false,
+        .auto_load_worlds = false,
+        .create_default_world = false,
+    });
+    defer server.deinit();
+    try server.start();
+
+    var run_future = try io.concurrent(runServer, .{&server});
+    const target_tick = server.tick_count + 3;
+    while (server.tick_count < target_tick) {
+        try io.sleep(.fromNanoseconds(std.time.ns_per_ms * 5), .awake);
+    }
+
+    try server.stop();
+    try run_future.await(io);
+    try std.testing.expect(server.tick_count >= target_tick);
+}
+
 test "an embedded server does not allocate on the tick thread in steady state" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;

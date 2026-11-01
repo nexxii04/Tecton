@@ -1,4 +1,5 @@
-const Raknet = @import("Raknet");
+const log = @import("../../core/log.zig");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -12,7 +13,7 @@ const Player = @import("../../player/player.zig").Player;
 pub fn handlePlayerAction(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;
@@ -26,7 +27,7 @@ pub fn handlePlayerAction(
             const dim = player.pending_dimension orelse return;
             if (dim.world.unloading) {
                 player.pending_dimension = null;
-                Raknet.Logger.ERROR("Dimension change ack for unloading world '{s}' from {s}", .{ dim.world.identifier, player.username });
+                log.err("Dimension change ack for unloading world '{s}' from {s}", .{ dim.world.identifier, player.username });
                 return;
             }
 
@@ -73,7 +74,7 @@ pub fn handlePlayerAction(
             });
         },
         else => {
-            Raknet.Logger.DEBUG("Unhandled PlayerAction: {any}", .{packet.action});
+            log.debug("Unhandled PlayerAction: {any}", .{packet.action});
         },
     }
 }

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../core/log.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const NBT = @import("nbt");
 const Protocol = @import("protocol");
@@ -125,7 +125,7 @@ fn createDimensions(tecton: Host, worlds_dir: []const u8, world: *World) !void {
     if (readLevelDatSpawn(tecton.io, tecton.allocator, level_dat_path)) |spawn| {
         if (world.getDimension("overworld")) |dim| {
             dim.spawn_position = spawn;
-            Raknet.Logger.INFO("World '{s}' spawn: {d}, {d}, {d}", .{ world.identifier, spawn.x, spawn.y, spawn.z });
+            log.info("World '{s}' spawn: {d}, {d}, {d}", .{ world.identifier, spawn.x, spawn.y, spawn.z });
         }
     } else |_| {}
 }

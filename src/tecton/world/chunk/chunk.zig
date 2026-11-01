@@ -167,10 +167,17 @@ pub const Chunk = struct {
                 try stream.writeInt8(@intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))));
             }
         }
-        for (0..send_count) |i| {
-            if (self.subchunks[i]) |sc| {
-                try sc.biomes.serialize(stream);
-            }
+        // Biomes cover the dimension's entire height, independently of how many
+        // terrain sections were sent. Missing terrain still needs a biome palette.
+        const biome_count: usize = switch (self.dimension) {
+            .Overworld => 24,
+            .Nether => 8,
+            .End => 16,
+        };
+        const empty_biomes = BiomeStorage.init(self.allocator);
+        for (0..biome_count) |i| {
+            const biomes = if (self.subchunks[i]) |sc| &sc.biomes else &empty_biomes;
+            try biomes.serialize(stream);
         }
         try stream.writeUint8(0);
     }
@@ -393,6 +400,54 @@ test "chunk serialization borrows a fixed output buffer without allocating" {
     stream.reset();
     try chunk.serialize(&stream);
     try testing.expect(stream.getBuffer().len > 0);
+}
+
+test "chunk network payload includes every biome section even without terrain" {
+    for ([_]DimensionType{ .Overworld, .Nether, .End }, [_]usize{ 24, 8, 16 }) |dimension, biome_count| {
+        var chunk = Chunk.init(testing.allocator, 0, 0, dimension);
+        defer chunk.deinit();
+        try testing.expectEqual(@as(usize, 0), chunk.getSubChunkSendCount());
+
+        var bytes: [128]u8 = undefined;
+        var stream = BinaryStream.init(testing.failing_allocator, &bytes, null);
+        stream.reset();
+        try chunk.serialize(&stream);
+
+        var reader = BinaryStream.init(testing.failing_allocator, stream.getBuffer(), null);
+        for (0..biome_count) |_| {
+            try testing.expectEqual(@as(u8, 0x01), try reader.readUint8());
+            try testing.expectEqual(@as(i32, 0), try reader.readZigZag());
+        }
+        try testing.expectEqual(@as(u8, 0), try reader.readUint8());
+        try testing.expect(reader.isEof());
+    }
+}
+
+test "chunk network payload keeps biome sections for sparse terrain" {
+    const blocks = try registerTestBlocks(testing.allocator);
+    defer deinitTestBlocks();
+    var chunk = Chunk.init(testing.allocator, 0, 0, .Overworld);
+    defer chunk.deinit();
+    try chunk.setPermutation(0, -32, 0, blocks.stone, 0);
+    const above_terrain = try chunk.getOrCreateSubChunk(20);
+    try above_terrain.biomes.palette.append(testing.allocator, 300);
+    try testing.expectEqual(@as(usize, 3), chunk.getSubChunkSendCount());
+
+    var stream = BinaryStream.init(testing.allocator, null, null);
+    defer stream.deinit();
+    try chunk.serialize(&stream);
+
+    var reader = BinaryStream.init(testing.failing_allocator, stream.getBuffer(), null);
+    for (0..chunk.getSubChunkSendCount()) |_| {
+        var sub = try SubChunk.deserialize(&reader, testing.allocator);
+        sub.deinit();
+    }
+    for (0..MAX_SUBCHUNKS) |i| {
+        try testing.expectEqual(@as(u8, 0x01), try reader.readUint8());
+        try testing.expectEqual(@as(i32, if (i == 20) 300 else 0), try reader.readZigZag());
+    }
+    try testing.expectEqual(@as(u8, 0), try reader.readUint8());
+    try testing.expect(reader.isEof());
 }
 
 test "a chunk without the overworld offset keeps its own build range" {

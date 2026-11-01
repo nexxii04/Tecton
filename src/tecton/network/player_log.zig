@@ -1,5 +1,5 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../core/log.zig");
 
 pub fn formatJoinMessage(buf: []u8, username: []const u8, verified: bool) ![]const u8 {
     return std.fmt.bufPrint(
@@ -20,19 +20,19 @@ pub fn formatDisconnectMessage(buf: []u8, username: []const u8) ![]const u8 {
 pub fn logJoin(username: []const u8, verified: bool) void {
     var buf: [256]u8 = undefined;
     const msg = formatJoinMessage(&buf, username, verified) catch "Player joined.";
-    Raknet.Logger.INFO("{s}", .{msg});
+    log.info("{s}", .{msg});
 }
 
 pub fn logChat(username: []const u8, message: []const u8) void {
     var buf: [512]u8 = undefined;
     const msg = formatChatMessage(&buf, username, message) catch "Player chat message.";
-    Raknet.Logger.INFO("{s}", .{msg});
+    log.info("{s}", .{msg});
 }
 
 pub fn logDisconnect(username: []const u8) void {
     var buf: [256]u8 = undefined;
     const msg = formatDisconnectMessage(&buf, username) catch "Player left.";
-    Raknet.Logger.INFO("{s}", .{msg});
+    log.info("{s}", .{msg});
 }
 
 test "formats a verified join log message" {

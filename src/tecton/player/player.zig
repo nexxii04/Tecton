@@ -1,9 +1,12 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const LoginData = Protocol.Login.Decoder.LoginData;
-const Raknet = @import("Raknet");
+const connection_mod = @import("../transport/connection.zig");
+const Connection = connection_mod.Connection;
+const port_mod = @import("../transport/port.zig");
 
 const Container = @import("../container/container.zig").Container;
 const AnvilWindowTrait = @import("../entity/traits/anvil_window.zig").AnvilWindowTrait;
@@ -70,6 +73,12 @@ pub fn fallDamage(blocks_fallen: f32) f32 {
     return @ceil((blocks_fallen - FALL_DAMAGE_GRACE) * FALL_DAMAGE_PER_BLOCK);
 }
 
+/// What the client is told when the server ends the session.
+pub const CloseReason = struct {
+    code: Protocol.DisconnectReason = .Disconnected,
+    message: ?[]const u8 = null,
+};
+
 pub const MAX_TICK_DESCENT: f32 = 4.0;
 
 /// A drop bigger than any tick of falling is a teleport, not a fall.
@@ -93,7 +102,7 @@ pub fn playerDropVelocity(rotation: Protocol.Vector2f) Protocol.Vector3f {
 
 pub const Player = struct {
     entity: Entity,
-    connection: *Raknet.Connection,
+    connection: *Connection,
     network: *NetworkHandler,
     tecton: Host,
     login_data: LoginData,
@@ -114,6 +123,7 @@ pub const Player = struct {
     pending_removal: std.atomic.Value(bool) = .init(false),
     spawned: bool = false,
     join_startup_started: bool = false,
+    spawn_chunks_started: bool = false,
     pending_dimension: ?*Dimension = null,
     opened_container: ?*Container = null,
     block_target: ?Protocol.BlockPosition = null,
@@ -154,7 +164,7 @@ pub const Player = struct {
     pub fn init(
         self: *Player,
         allocator: std.mem.Allocator,
-        connection: *Raknet.Connection,
+        connection: *Connection,
         network: *NetworkHandler,
         tecton: Host,
         loginData: LoginData,
@@ -235,6 +245,9 @@ pub const Player = struct {
             .initialized = false,
         });
         try self.entity.addTrait(anvil_window);
+
+        // The player owns a reference for its whole life; a failed init must not take one.
+        self.connection.retain();
     }
 
     pub fn deinit(self: *Player) void {
@@ -249,26 +262,44 @@ pub const Player = struct {
 
     pub fn getCommandPermission(_: *Player) void {}
 
-    pub fn disconnect(self: *Player, reason: ?[]const u8) !void {
-        if (reason) |msg| {
+    /// Server-initiated close: queues the disconnect message, asks the transport to deliver
+    /// and retire the session, then marks the player for removal. The tick frees the player,
+    /// so the transport can still be flushing its queue. Repeating it is a no-op.
+    pub fn close(self: *Player, mode: port_mod.CloseMode, reason: CloseReason) void {
+        if (self.pending_removal.load(.acquire)) return;
+
+        if (mode == .flush and self.connection.isOpen()) {
             var stream = BinaryStream.init(self.entity.allocator, null, null);
             defer stream.deinit();
-            var dp = Protocol.DisconnectPacket{
-                .reason = .Kicked,
-                .messages = .{
-                    .message = msg,
-                    .filtered_message = msg,
-                },
+            var packet = Protocol.DisconnectPacket{
+                .reason = reason.code,
+                .messages = if (reason.message) |message| .{
+                    .message = message,
+                    .filtered_message = message,
+                } else null,
             };
-            if (dp.serialize(&stream)) |data| {
-                self.network.sendImmediate(self.connection, data) catch {};
-            } else |_| {}
+            const serialized: ?[]const u8 = packet.serialize(&stream) catch |err| blk: {
+                log.debug("Player {s}: could not serialize the disconnect packet: {s}", .{ self.username, @errorName(err) });
+                break :blk null;
+            };
+            if (serialized) |bytes| {
+                self.network.sendImmediate(self.connection, bytes) catch |err| {
+                    log.debug("Player {s}: could not queue the disconnect packet: {s}", .{ self.username, @errorName(err) });
+                };
+            }
         }
 
-        if (!self.beginRemoval()) return;
-        self.finalizeRemoval();
+        // A connection the transport already retired has nothing left to close.
+        if (self.connection.isOpen()) self.network.closeConnection(self.connection, mode);
+        self.disconnectFromNetwork();
     }
 
+    pub fn disconnect(self: *Player, reason: ?[]const u8) void {
+        self.close(.flush, .{ .code = .Kicked, .message = reason });
+    }
+
+    /// Marks the player once and hands it to the removal drain. It never touches the transport:
+    /// the session is either already gone or the caller closed it.
     pub fn disconnectFromNetwork(self: *Player) void {
         if (!self.beginRemoval()) return;
 
@@ -277,7 +308,6 @@ pub const Player = struct {
 
     fn beginRemoval(self: *Player) bool {
         if (self.pending_removal.swap(true, .acq_rel)) return false;
-        self.connection.deactivate();
         self.tecton.removeConnectionMapping(self.connection);
         return true;
     }
@@ -306,11 +336,7 @@ pub const Player = struct {
             const serialized = remove.serialize(&stream) catch null;
             if (serialized) |data| {
                 if (self.entity.dimension) |dimension| {
-                    if (SharedBroadcast.begin(
-                        &self.network.payload_buffers,
-                        data,
-                        self.network.options,
-                    )) |begun| {
+                    if (SharedBroadcast.begin(self.network, data)) |begun| {
                         var broadcast = begun;
                         defer broadcast.deinit();
                         for (snapshots) |other| {
@@ -342,11 +368,7 @@ pub const Player = struct {
             };
             const serialized = packet.serialize(&stream, allocator) catch null;
             if (serialized) |data| {
-                if (SharedBroadcast.begin(
-                    &self.network.payload_buffers,
-                    data,
-                    self.network.options,
-                )) |begun| {
+                if (SharedBroadcast.begin(self.network, data)) |begun| {
                     var broadcast = begun;
                     defer broadcast.deinit();
                     for (snapshots) |other| {
@@ -363,6 +385,7 @@ pub const Player = struct {
         }
         self.tecton.removePlayer(self);
         self.tecton.unregisterEcsEntity(&self.entity);
+        self.connection.release();
         self.deinit();
         self.entity.allocator.destroy(self);
     }
@@ -370,7 +393,7 @@ pub const Player = struct {
     pub fn savePlayerData(self: *Player) void {
         const dimension = self.entity.dimension orelse return;
         dimension.world.provider.writePlayer(self.uuid, self) catch |err| {
-            Raknet.Logger.ERROR("Failed to save player {s}: {any}", .{ self.username, err });
+            log.err("Failed to save player {s}: {any}", .{ self.username, err });
         };
     }
 
@@ -381,7 +404,7 @@ pub const Player = struct {
 
     pub fn transferToDimension(self: *Player, dimension: *Dimension) void {
         if (self.pending_dimension != null) {
-            Raknet.Logger.WARN("Player {s} already has a pending dimension transfer", .{self.username});
+            log.warn("Player {s} already has a pending dimension transfer", .{self.username});
             return;
         }
 
@@ -480,6 +503,7 @@ pub const Player = struct {
     }
 
     fn releaseChunks(self: *Player) void {
+        self.spawn_chunks_started = false;
         const dimension = self.entity.dimension orelse return;
         const allocator = self.entity.allocator;
 
@@ -495,7 +519,7 @@ pub const Player = struct {
     }
 
     pub fn onSpawn(self: *Player) !void {
-        Raknet.Logger.DEBUG("Player {s} has spawned.", .{self.username});
+        log.debug("Player {s} has spawned.", .{self.username});
 
         self.last_broadcast.reset();
 
@@ -537,7 +561,8 @@ pub const Player = struct {
         }
     }
 
-    fn sendSpawnChunks(self: *Player) !void {
+    pub fn sendSpawnChunks(self: *Player) !void {
+        self.spawn_chunks_started = true;
         const allocator = self.entity.allocator;
 
         var pub_stream = BinaryStream.init(allocator, null, null);
@@ -599,4 +624,117 @@ test "a fall shorter than three blocks costs nothing" {
 
 test "the fall tracker only counts the descent and clears on landing" {
     try @import("player_test.zig").Suite(test_scope).case_004();
+}
+
+const CloseProbe = struct {
+    removals: usize = 0,
+    mappings: usize = 0,
+
+    fn removeConnectionMapping(ctx: *anyopaque, _: *anyopaque) void {
+        const self: *CloseProbe = @ptrCast(@alignCast(ctx));
+        self.mappings += 1;
+    }
+
+    fn enqueueRemoval(ctx: *anyopaque, _: *Player) void {
+        const self: *CloseProbe = @ptrCast(@alignCast(ctx));
+        self.removals += 1;
+    }
+};
+
+const CloseFixture = struct {
+    probe: CloseProbe = .{},
+    network: NetworkHandler,
+    fake: @import("../transport/fake_port.zig").TransportFake,
+    connection: *Connection,
+    player: Player,
+
+    fn init(self: *CloseFixture) !void {
+        const allocator = std.testing.allocator;
+
+        const conn = try allocator.create(Connection);
+        conn.* = .{
+            .id = 7,
+            .backend = undefined,
+            .allocator = allocator,
+            .refs = std.atomic.Value(u32).init(1),
+            .state = std.atomic.Value(connection_mod.State).init(.open),
+        };
+
+        self.* = .{
+            .network = undefined,
+            .fake = @import("../transport/fake_port.zig").TransportFake.init(allocator),
+            .connection = conn,
+            .player = undefined,
+        };
+        self.network.allocator = allocator;
+        self.network.send_buffers = .empty;
+        self.network.options = .{ .compression_method = .NotPresent, .compression_threshold = 255 };
+        self.network.port = self.fake.port();
+
+        var host: Host = undefined;
+        host.ctx = &self.probe;
+        host.remove_connection_mapping = CloseProbe.removeConnectionMapping;
+        host.enqueue_player_removal = CloseProbe.enqueueRemoval;
+
+        self.player = undefined;
+        self.player.entity.allocator = allocator;
+        self.player.connection = conn;
+        self.player.network = &self.network;
+        self.player.tecton = host;
+        self.player.username = "tester";
+        self.player.pending_removal = .init(false);
+    }
+
+    fn deinit(self: *CloseFixture) void {
+        self.fake.deinit();
+        self.connection.release();
+    }
+};
+
+test "a server-side close queues the message, flushes and marks the player once" {
+    var fixture: CloseFixture = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+
+    fixture.player.disconnect("bye");
+    try std.testing.expectEqual(@as(usize, 1), fixture.fake.sentTo(fixture.connection.id));
+    try std.testing.expectEqual(@as(usize, 1), fixture.fake.closed.items.len);
+    try std.testing.expectEqual(port_mod.CloseMode.flush, fixture.fake.closed.items[0].mode);
+    try std.testing.expectEqual(@as(usize, 1), fixture.probe.removals);
+    try std.testing.expectEqual(@as(usize, 1), fixture.probe.mappings);
+    try std.testing.expect(fixture.player.pending_removal.load(.acquire));
+
+    // The transport decides when the session is gone; the game only asked it to flush.
+    try std.testing.expect(fixture.connection.isOpen());
+
+    fixture.player.disconnect("again");
+    try std.testing.expectEqual(@as(usize, 1), fixture.fake.sentTo(fixture.connection.id));
+    try std.testing.expectEqual(@as(usize, 1), fixture.fake.closed.items.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.probe.removals);
+}
+
+test "an abort drops the message and closes without it" {
+    var fixture: CloseFixture = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+
+    fixture.player.close(.abort, .{});
+    try std.testing.expectEqual(@as(usize, 0), fixture.fake.sent.items.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.fake.closed.items.len);
+    try std.testing.expectEqual(port_mod.CloseMode.abort, fixture.fake.closed.items[0].mode);
+    try std.testing.expectEqual(@as(usize, 1), fixture.probe.removals);
+}
+
+test "a transport-reported close only marks the player, never the transport" {
+    var fixture: CloseFixture = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+
+    fixture.connection.markClosed();
+    fixture.player.disconnectFromNetwork();
+
+    try std.testing.expectEqual(@as(usize, 0), fixture.fake.sent.items.len);
+    try std.testing.expectEqual(@as(usize, 0), fixture.fake.closed.items.len);
+    try std.testing.expectEqual(@as(usize, 1), fixture.probe.removals);
+    try std.testing.expect(fixture.player.pending_removal.load(.acquire));
 }

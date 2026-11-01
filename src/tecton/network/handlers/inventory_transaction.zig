@@ -1,8 +1,9 @@
 const std = @import("std");
+const log = @import("../../core/log.zig");
 
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const inventory = @import("../../entity/traits/inventory.zig");
 const InventoryTrait = inventory.InventoryTrait;
@@ -28,7 +29,7 @@ const Tecton = @import("../../tecton.zig").Tecton;
 pub fn handleInventoryTransaction(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const player = tecton.getPlayerByConnection(connection) orelse return;
@@ -40,7 +41,7 @@ pub fn handleInventoryTransaction(
             const written = std.fmt.bufPrint(hex[pos..], "{x:0>2} ", .{b}) catch break;
             pos += written.len;
         }
-        Raknet.Logger.ERROR(
+        log.err(
             "InventoryTransaction deserialize failed: {any} (len={d}, offset={d}) hex: {s}",
             .{ err, raw.len, stream.offset, hex[0..pos] },
         );
@@ -181,7 +182,7 @@ pub fn handleInventoryTransaction(
             _ = bow.release(tecton, player);
         },
         else => {
-            Raknet.Logger.WARN("Unhandled InventoryTransaction from {s}: {any}", .{
+            log.warn("Unhandled InventoryTransaction from {s}: {any}", .{
                 player.username,
                 packet.transaction_type,
             });

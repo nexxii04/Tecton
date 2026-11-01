@@ -26,8 +26,8 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_002() !void {
-            try std.testing.expectEqual(@as(usize, 13), totalServerThreadCount(10));
-            try std.testing.expectEqual(@as(usize, 4), totalServerThreadCount(1));
+            try std.testing.expectEqual(@as(usize, 14), totalServerThreadCount(10));
+            try std.testing.expectEqual(@as(usize, 5), totalServerThreadCount(1));
         }
 
         pub fn case_003() !void {

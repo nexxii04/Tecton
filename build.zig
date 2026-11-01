@@ -52,21 +52,32 @@ pub fn build(b: *std.Build) void {
 
     const binarystream_dep = b.dependency("BinaryStream", .{ .target = target, .optimize = optimize });
     const binarystream_mod = binarystream_dep.module("BinaryStream");
-    const raknet_dep = b.dependency("ZigNet", .{ .target = target, .optimize = optimize });
-    const raknet_mod = raknet_dep.module("Raknet");
     const nbt_dep = b.dependency("nbt", .{ .target = target, .optimize = optimize });
     const nbt_mod = nbt_dep.module("nbt");
     const protocol_dep = b.dependency("protocol", .{ .target = target, .optimize = optimize });
     const protocol_mod = protocol_dep.module("Protocol");
 
     nbt_mod.addImport("BinaryStream", binarystream_mod);
-    raknet_mod.addImport("BinaryStream", binarystream_mod);
     protocol_mod.addImport("BinaryStream", binarystream_mod);
 
     const leveldb_mod = b.addModule("leveldb", .{ .root_source_file = b.path("libs/leveldb/leveldb.zig"), .target = target });
+    const nethernet_mod = b.dependency("nethernet_zig", .{ .target = target, .optimize = optimize }).module("nethernet-zig");
+    // Pin mbedTLS to the revision webrtc resolves, so the C build is shared.
+    const mbedtls_dep = b.dependency("mbedtls", .{ .target = target, .optimize = .ReleaseFast });
+    const mbedtls = mbedtls_dep.artifact("mbedtls");
+    const mbedtls_translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/tecton/server/tls_mbedtls.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // Translate with the library's config; mbedTLS sizes its contexts from those macros.
+    mirrorModule(mbedtls_translate, mbedtls.root_module);
+    const mbedtls_mod = mbedtls_translate.createModule();
     const tecton_mod = b.addModule("tecton", .{ .root_source_file = b.path("src/tecton/root.zig"), .target = target });
     tecton_mod.addImport("BinaryStream", binarystream_mod);
-    tecton_mod.addImport("Raknet", raknet_mod);
+    tecton_mod.addImport("nethernet", nethernet_mod);
+    tecton_mod.addImport("mbedtls", mbedtls_mod);
+    tecton_mod.linkLibrary(mbedtls);
     tecton_mod.addImport("protocol", protocol_mod);
     tecton_mod.addImport("nbt", nbt_mod);
     tecton_mod.addImport("leveldb", leveldb_mod);
@@ -94,6 +105,7 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.linkLibrary(zlib_dep.artifact("z"));
     exe.root_module.linkLibrary(leveldb_lib);
+    exe.root_module.linkLibrary(mbedtls);
     if (is_windows) exe.root_module.linkSystemLibrary("winmm", .{});
     b.installArtifact(exe);
 
@@ -114,9 +126,33 @@ pub fn build(b: *std.Build) void {
     });
     embedded_example.root_module.linkLibrary(zlib_dep.artifact("z"));
     embedded_example.root_module.linkLibrary(leveldb_lib);
+    embedded_example.root_module.linkLibrary(mbedtls);
     if (is_windows) embedded_example.root_module.linkSystemLibrary("winmm", .{});
     const embedded_example_step = b.step("embedded-example", "Build the embedded vanilla server example");
     embedded_example_step.dependOn(&embedded_example.step);
+
+    const soak_exe = b.addExecutable(.{
+        .name = "TectonSoak",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/soak/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libcpp = true,
+            .imports = &.{
+                .{ .name = "tecton", .module = tecton_mod },
+            },
+        }),
+    });
+
+    soak_exe.root_module.linkLibrary(leveldb_lib);
+    soak_exe.root_module.linkLibrary(zlib_dep.artifact("z"));
+    soak_exe.root_module.linkLibrary(mbedtls);
+
+    if (is_windows) soak_exe.root_module.linkSystemLibrary("winmm", .{});
+    const soak_step = b.step("soak", "Run the transport load, lifecycle and soak scenarios");
+    const run_soak = b.addRunArtifact(soak_exe);
+    if (b.args) |args| run_soak.addArgs(args);
+    soak_step.dependOn(&run_soak.step);
 
     const native_example = addPluginExample(b, target, optimize);
     const native_example_step = b.step("plugin-example", "Build the minimal C ABI plugin");
@@ -140,13 +176,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libcpp = true,
-        .imports = &.{ .{ .name = "BinaryStream", .module = binarystream_mod }, .{ .name = "Raknet", .module = raknet_mod }, .{ .name = "protocol", .module = protocol_mod }, .{ .name = "nbt", .module = nbt_mod }, .{ .name = "leveldb", .module = leveldb_mod } },
+        .imports = &.{ .{ .name = "BinaryStream", .module = binarystream_mod }, .{ .name = "nethernet", .module = nethernet_mod }, .{ .name = "mbedtls", .module = mbedtls_mod }, .{ .name = "protocol", .module = protocol_mod }, .{ .name = "nbt", .module = nbt_mod }, .{ .name = "leveldb", .module = leveldb_mod } },
     });
     chest_test_mod.linkLibrary(zlib_dep.artifact("z"));
     if (is_windows) chest_test_mod.linkSystemLibrary("psapi", .{});
     const chest_tests = b.addTest(.{ .root_module = chest_test_mod });
     chest_tests.root_module.linkLibrary(leveldb_lib);
     chest_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
+    chest_tests.root_module.linkLibrary(mbedtls);
     const run_chest_tests = b.addRunArtifact(chest_tests);
 
     const library_test_mod = b.createModule(.{
@@ -158,6 +195,7 @@ pub fn build(b: *std.Build) void {
     const library_tests = b.addTest(.{ .root_module = library_test_mod });
     library_tests.root_module.linkLibrary(leveldb_lib);
     library_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
+    library_tests.root_module.linkLibrary(mbedtls);
     const run_library_tests = b.addRunArtifact(library_tests);
 
     const plugin_options = b.addOptions();
@@ -179,6 +217,24 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_plugin_tests.step);
     const chest_test_step = b.step("test-chest", "Run chest regression tests");
     chest_test_step.dependOn(&run_chest_tests.step);
+}
+
+/// Copies include dirs and macros so translate-c matches the compiled library.
+fn mirrorModule(translate_c: *std.Build.Step.TranslateC, from: *std.Build.Module) void {
+    for (from.include_dirs.items) |include_dir| switch (include_dir) {
+        .path => |path| translate_c.addIncludePath(path),
+        .path_system => |path| translate_c.addSystemIncludePath(path),
+        .path_after => |path| translate_c.addAfterIncludePath(path),
+        .config_header_step => |header| translate_c.addConfigHeader(header),
+        .other_step => |comp| if (comp.installed_headers_include_tree) |tree|
+            translate_c.addIncludePath(tree.getDirectory()),
+        else => {},
+    };
+    for (from.c_macros.items) |macro| {
+        // Module stores `-DNAME=VALUE`; translate-c adds the `-D` itself.
+        const definition = if (std.mem.startsWith(u8, macro, "-D")) macro[2..] else macro;
+        translate_c.defineCMacroRaw(definition);
+    }
 }
 
 fn addLevelDb(

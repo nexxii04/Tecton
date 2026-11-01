@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 const Timestamp = std.Io.Timestamp;
 
 const Tecton = @import("../tecton.zig").Tecton;
@@ -6,12 +7,12 @@ const entities = @import("../world/dimension/entities.zig");
 const ecs_pipeline = @import("../ecs/pipeline.zig");
 const Events = @import("../events/root.zig");
 const alloc_counter = @import("../core/alloc_counter.zig");
-const Raknet = @import("Raknet");
 
 const packet_drain_budget_pct: u64 = 5;
 const drain_completed_budget_pct: u64 = 15;
 const main_tasks_budget_pct: u64 = 50;
 const save_pass_interval_ticks: u64 = 6000;
+const transport_summary_interval_ticks: u64 = 6000;
 
 pub fn onTick(context: ?*anyopaque) void {
     const tecton = @as(*Tecton, @ptrCast(@alignCast(context)));
@@ -39,10 +40,6 @@ pub fn onTick(context: ?*anyopaque) void {
     _ = tecton.events.emit(.ServerTick, &tick_event);
     tecton.ecs.tick();
 
-    const raknet_ns: u64 = @intCast(@max(0, tecton.raknet.last_connection_tick_ns.nanoseconds));
-    tecton.raknet_time_accumulator += raknet_ns;
-    tecton.profiler.record(.raknet_tick, raknet_ns);
-
     // Fallback for the shared layout and the pump-less tick: four waves per tick bound the gap between drains to roughly a quarter of the tick.
     const tick_drains_input = !tecton.network.inputPumpActive();
     const packet_drain_budget = (tick_budget_ns * packet_drain_budget_pct / 100) / 4;
@@ -60,13 +57,30 @@ pub fn onTick(context: ?*anyopaque) void {
     const dropped_packets = dropped_total - tecton.last_dropped_packets;
     if ((decompress_pending > 256 or dropped_packets > 0) and tecton.tick_count % target_tps_u64 == 0) {
         tecton.last_dropped_packets = dropped_total;
-        Raknet.Logger.WARN("Network packet backlog: pending={d} queued={d} dropped={d}", .{
+        log.warn("Network packet backlog: pending={d} queued={d} dropped={d}", .{
             decompress_pending,
             tecton.network.queuedInputDepth(),
             dropped_packets,
         });
     }
 
+    if (tecton.tick_count % transport_summary_interval_ticks == 0) {
+        const sessions = tecton.network.sessionCounts();
+        log.info("Transport: {d}/{d} sessions, {d} reconnects, {d} inbound dropped, {d} outbound backpressure, {d} outbound dropped", .{
+            sessions.active,
+            sessions.total,
+            sessions.reconnects,
+            tecton.network.inboundDroppedCount(),
+            tecton.network.backpressureSendCount(),
+            tecton.network.outboundDroppedCount(),
+        });
+    }
+
+    // Transport callbacks only publish ids; opening and closing sessions happens here.
+    const net_dispatch_start = Timestamp.now(tecton.io, .awake);
+    tecton.drainTransportEvents();
+    tecton.reconcileClosedConnections();
+    var net_dispatch_ns: u64 = @intCast(@max(0, net_dispatch_start.durationTo(.now(tecton.io, .awake)).nanoseconds));
     tecton.drainPendingPlayerRemovals();
     tecton.rebuildPlayerSnapshot();
 
@@ -143,9 +157,14 @@ pub fn onTick(context: ?*anyopaque) void {
         tecton.profiler.record(.packet_drain, packet_drain_ns);
     }
 
+    // What this tick spent on the network: transport bookkeeping plus any inline drain.
+    net_dispatch_ns += packet_drain_ns;
+    tecton.network_dispatch_accumulator += net_dispatch_ns;
+    tecton.profiler.record(.net_dispatch, net_dispatch_ns);
+
     const work_end = work_start.durationTo(.now(tecton.io, .awake));
     const work_ns: u64 = @intCast(@max(0, work_end.nanoseconds));
-    const total_tick_ns = raknet_ns + work_ns;
+    const total_tick_ns = work_ns;
     tecton.work_time_accumulator += work_ns;
     tecton.profiler.recordTick(total_tick_ns);
 
@@ -160,7 +179,7 @@ pub fn onTick(context: ?*anyopaque) void {
         const recorded = alloc_counter.since(mark);
         tecton.recordTickAllocations(recorded.allocations);
         if (recorded.allocations > 0 and tecton.tick_count % target_tps_u64 == 0) {
-            Raknet.Logger.WARN("Tick allocations: {d} allocations, {d} bytes on the tick thread (peak {d} per tick)", .{
+            log.warn("Tick allocations: {d} allocations, {d} bytes on the tick thread (peak {d} per tick)", .{
                 recorded.allocations,
                 recorded.bytes,
                 tecton.peakTickAllocations(),

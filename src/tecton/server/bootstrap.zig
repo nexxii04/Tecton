@@ -1,7 +1,7 @@
 const std = @import("std");
+const log = @import("../core/log.zig");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
 
 const Tecton = @import("../tecton.zig").Tecton;
 const shouldEmitStartupLogs = @import("../core/config.zig").shouldEmitStartupLogs;
@@ -40,7 +40,7 @@ pub fn prepare(tecton: *Tecton) !void {
     try WallConnectionTrait.register();
     const count = try loadBlockPermutations(tecton.allocator);
     if (shouldEmitStartupLogs()) {
-        Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+        log.info("Loaded {d} block permutations", .{count});
     }
     try BlockPermutation.initNbtHashLookup(tecton.allocator);
 
@@ -53,11 +53,11 @@ pub fn prepare(tecton: *Tecton) !void {
     try ItemPalette.initRegistry(tecton.allocator);
     const item_count = try ItemPalette.loadItemTypes(tecton.allocator);
     if (shouldEmitStartupLogs()) {
-        Raknet.Logger.INFO("Loaded {d} item types", .{item_count});
+        log.info("Loaded {d} item types", .{item_count});
     }
     const enchantment_count = try EnchantmentRegistry.load();
     if (shouldEmitStartupLogs()) {
-        Raknet.Logger.INFO("Loaded {d} enchantments", .{enchantment_count});
+        log.info("Loaded {d} enchantments", .{enchantment_count});
     }
     {
         const entries = try ItemPalette.getItemRegistry(tecton.allocator);
@@ -68,45 +68,45 @@ pub fn prepare(tecton: *Tecton) !void {
         const raw = try pkt.serialize(&stream);
         tecton.serialized_item_registry = try tecton.allocator.dupe(u8, raw);
         if (shouldEmitStartupLogs()) {
-            Raknet.Logger.INFO("Pre-serialized item registry ({d} bytes)", .{tecton.serialized_item_registry.?.len});
+            log.info("Pre-serialized item registry ({d} bytes)", .{tecton.serialized_item_registry.?.len});
         }
     }
 
     {
         tecton.serialized_biome_definitions = Protocol.BiomeDefinitionsLoader.loadVanillaSerialized(tecton.allocator) catch |err| blk: {
-            Raknet.Logger.ERROR("Failed to serialize biome definitions: {any}", .{err});
+            log.err("Failed to serialize biome definitions: {any}", .{err});
             break :blk null;
         };
         if (tecton.serialized_biome_definitions) |raw| {
             if (shouldEmitStartupLogs()) {
-                Raknet.Logger.INFO("Pre-serialized biome definitions ({d} bytes)", .{raw.len});
+                log.info("Pre-serialized biome definitions ({d} bytes)", .{raw.len});
             }
         }
     }
 
     const entity_type_count = try EntityTypeRegistry.initRegistry(tecton.allocator);
     if (shouldEmitStartupLogs()) {
-        Raknet.Logger.INFO("Loaded {d} entity types", .{entity_type_count});
+        log.info("Loaded {d} entity types", .{entity_type_count});
     }
 
     tecton.creative_content = CreativeContentLoader.loadCreativeContent(tecton.allocator) catch |err| blk: {
-        Raknet.Logger.ERROR("Failed to load creative content: {any}", .{err});
+        log.err("Failed to load creative content: {any}", .{err});
         break :blk null;
     };
     if (tecton.creative_content) |cc| {
         if (shouldEmitStartupLogs()) {
-            Raknet.Logger.INFO("Loaded {d} creative groups and {d} creative items", .{ cc.group_count, cc.item_count });
+            log.info("Loaded {d} creative groups and {d} creative items", .{ cc.group_count, cc.item_count });
         }
     }
 
     {
         tecton.pre_spawn_data = Protocol.PreSpawnData.load(tecton.allocator) catch |err| blk: {
-            Raknet.Logger.ERROR("Failed to load pre-spawn data: {any}", .{err});
+            log.err("Failed to load pre-spawn data: {any}", .{err});
             break :blk null;
         };
         if (tecton.pre_spawn_data) |psd| {
             if (shouldEmitStartupLogs()) {
-                Raknet.Logger.INFO("Loaded pre-spawn data ({d} block palette entries, {d} voxel shapes)", .{ psd.block_palette.len, psd.voxel_shapes.len });
+                log.info("Loaded pre-spawn data ({d} block palette entries, {d} voxel shapes)", .{ psd.block_palette.len, psd.voxel_shapes.len });
             }
         }
     }
@@ -119,17 +119,17 @@ pub fn prepare(tecton: *Tecton) !void {
             while (dir_it.next(tecton.io) catch null) |entry| {
                 if (entry.kind != .directory) continue;
                 _ = worlds.load(services.host(tecton), tecton.paths.worlds, entry.name) catch |err| {
-                    Raknet.Logger.ERROR("Failed to load world '{s}': {any}", .{ entry.name, err });
+                    log.err("Failed to load world '{s}': {any}", .{ entry.name, err });
                     continue;
                 };
-                Raknet.Logger.INFO("Loaded world: {s}", .{entry.name});
+                log.info("Loaded world: {s}", .{entry.name});
             }
         } else |_| {
             std.Io.Dir.cwd().createDir(tecton.io, tecton.paths.worlds, .default_dir) catch {};
         }
 
         if (tecton.worlds.count() == 0 and tecton.create_default_world) {
-            Raknet.Logger.INFO("No worlds found, creating default world", .{});
+            log.info("No worlds found, creating default world", .{});
             _ = try worlds.load(services.host(tecton), tecton.paths.worlds, "world");
         }
     }
@@ -144,12 +144,12 @@ pub fn prepare(tecton: *Tecton) !void {
     while (world_instances.next()) |world| {
         if (world.*.getDimension("overworld")) |dimension| {
             _ = tecton.instances.create(world.*.identifier, world.*, dimension) catch |err| {
-                Raknet.Logger.ERROR("Failed to create instance for world '{s}': {any}", .{ world.*.identifier, err });
+                log.err("Failed to create instance for world '{s}': {any}", .{ world.*.identifier, err });
             };
         }
     }
     if (shouldEmitStartupLogs()) {
-        Raknet.Logger.INFO("Loaded {d} player locations", .{tecton.player_locations.count()});
+        log.info("Loaded {d} player locations", .{tecton.player_locations.count()});
     }
 
     const commands = .{
@@ -179,7 +179,6 @@ pub fn prepare(tecton: *Tecton) !void {
 
 test "op and deop persist permission changes across a reload" {
     const Op = @import("../command/list/op.zig");
-    Raknet.Logger.init(std.heap.page_allocator);
     const PermissionManager = @TypeOf(@as(Tecton, undefined).permission_manager);
     const CommandRegistry = @TypeOf(@as(Tecton, undefined).command_registry);
     const CommandViews = @typeInfo(@TypeOf(services.commandViews)).@"fn".return_type.?;
@@ -230,7 +229,6 @@ test "op and deop persist permission changes across a reload" {
 
 test "op and deop refresh the target's abilities exactly once per successful change" {
     const Op = @import("../command/list/op.zig");
-    Raknet.Logger.init(std.heap.page_allocator);
     const PermissionManager = @TypeOf(@as(Tecton, undefined).permission_manager);
     const CommandRegistry = @TypeOf(@as(Tecton, undefined).command_registry);
     const CommandViews = @typeInfo(@TypeOf(services.commandViews)).@"fn".return_type.?;

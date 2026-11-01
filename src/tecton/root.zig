@@ -3,6 +3,7 @@ const std = @import("std");
 pub const binary_stream = @import("BinaryStream");
 pub const nbt = @import("nbt");
 pub const protocol = @import("protocol");
+pub const log = @import("./core/log.zig");
 
 pub const pool_allocator = @import("./core/pool_allocator.zig");
 pub const alloc_counter = @import("./core/alloc_counter.zig");
@@ -22,6 +23,7 @@ pub const entity = @import("./entity/root.zig");
 pub const events = @import("./events/root.zig");
 pub const items = @import("./items/root.zig");
 pub const network = @import("./network/root.zig");
+pub const transport = @import("./transport/root.zig");
 pub const SendPriority = network.SendPriority;
 pub const player = @import("./player/root.zig");
 pub const plugins = @import("./plugins/root.zig");

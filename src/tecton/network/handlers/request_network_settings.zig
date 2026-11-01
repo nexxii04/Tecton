@@ -1,4 +1,4 @@
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const Tecton = @import("../../tecton.zig").Tecton;
 const BinaryStream = @import("BinaryStream").BinaryStream;
@@ -7,7 +7,7 @@ const Protocol = @import("protocol");
 pub fn handleNetworkSettings(
     _: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const request = try Protocol.RequestNetworkSettingsPacket.deserialize(stream);
@@ -22,7 +22,7 @@ pub fn handleNetworkSettings(
             .reason = reason,
         };
         const serialized = try disconnect.serialize(&str);
-        try network.sendPacket(connection, serialized);
+        try network.sendUncompressedPacket(connection, serialized);
         return;
     }
 
@@ -38,4 +38,5 @@ pub fn handleNetworkSettings(
     };
     const packet = try response.serialize(&write);
     try network.sendUncompressedPacket(connection, packet);
+    connection.markCompressionReady();
 }

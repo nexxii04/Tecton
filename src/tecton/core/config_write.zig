@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn Methods(comptime ServerProperties: type, comptime comments: anytype) type {
     return struct {
         pub fn save(self: *const ServerProperties, io: std.Io, path: []const u8) !void {
-            var buf: [4096]u8 = undefined;
+            var buf: [8192]u8 = undefined;
             var pos: usize = 0;
 
             inline for (@typeInfo(ServerProperties).@"struct".fields) |field| {
@@ -38,7 +38,7 @@ pub fn Methods(comptime ServerProperties: type, comptime comments: anytype) type
 
             const file = try std.Io.Dir.cwd().createFile(io, path, .{});
             defer file.close(io);
-            var write_buf: [4098]u8 = undefined;
+            var write_buf: [8194]u8 = undefined;
             var writer = file.writer(io, &write_buf);
             writer.interface.writeAll(buf[0..pos]) catch return error.WriteError;
             writer.interface.flush() catch |err| {

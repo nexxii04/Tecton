@@ -1,6 +1,6 @@
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
-const Raknet = @import("Raknet");
+const transport = @import("../../transport/root.zig");
 
 const inventory = @import("../../entity/traits/inventory.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
@@ -9,7 +9,7 @@ const Tecton = @import("../../tecton.zig").Tecton;
 pub fn handleMobEquipment(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     _ = try stream.readVarInt();

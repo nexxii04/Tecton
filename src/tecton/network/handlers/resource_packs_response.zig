@@ -1,5 +1,6 @@
 const std = @import("std");
-const Raknet = @import("Raknet");
+const log = @import("../../core/log.zig");
+const transport = @import("../../transport/root.zig");
 const NetworkHandler = @import("../../transport/network_handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
@@ -29,12 +30,13 @@ const JoinStartupTask = struct {
     spawn_pos: Protocol.BlockPosition = Protocol.BlockPosition.init(0, 100, 0),
 };
 
-const JOIN_STAGE_DELAY_TICKS: u8 = 20;
+/// One tick preserves the client's packet order without stretching the join.
+const JOIN_STAGE_DELAY_TICKS: u8 = 1;
 
 pub fn handleResourcePack(
     tecton: *Tecton,
     network: *NetworkHandler,
-    connection: *Raknet.Connection,
+    connection: *transport.Connection,
     stream: *BinaryStream,
 ) !void {
     const response = try Protocol.ResourcePackResponsePacket.deserialize(stream, network.allocator);
@@ -61,7 +63,7 @@ pub fn handleResourcePack(
         },
         .Refused => {
             if (tecton.getPlayerByConnection(connection)) |player| {
-                try player.disconnect(null);
+                player.disconnect(null);
             }
         },
         .None => {},
@@ -98,7 +100,7 @@ fn queueJoinStartup(tecton: *Tecton, network: *NetworkHandler, player: *Player) 
 fn runJoinStartupTask(ctx: *anyopaque) bool {
     const state: *JoinStartupTask = @ptrCast(@alignCast(ctx));
     return runJoinStartupTaskImpl(state) catch |err| {
-        Raknet.Logger.ERROR("Join startup failed for {s}: {any}", .{ state.player.username, err });
+        log.err("Join startup failed for {s}: {any}", .{ state.player.username, err });
         state.player.join_startup_started = false;
         return true;
     };
@@ -106,7 +108,7 @@ fn runJoinStartupTask(ctx: *anyopaque) bool {
 
 fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
     const player = state.player;
-    if (!player.connection.isActive() or state.tecton.getPlayerByConnection(player.connection) == null) {
+    if (!player.connection.isOpen() or state.tecton.getPlayerByConnection(player.connection) == null) {
         player.join_startup_started = false;
         return true;
     }
@@ -120,13 +122,13 @@ fn runJoinStartupTaskImpl(state: *JoinStartupTask) !bool {
         .prepare_player => {
             const location = state.tecton.resolvePlayerLocation(player.uuid);
             const world = resolveJoinWorld(state.tecton, location) orelse {
-                Raknet.Logger.ERROR("Join startup failed for {s}: no world available", .{player.username});
+                log.err("Join startup failed for {s}: no world available", .{player.username});
                 player.join_startup_started = false;
                 return true;
             };
 
             const dimension = resolveJoinDimension(world, location) orelse {
-                Raknet.Logger.ERROR("Join startup failed for {s}: no dimension available", .{player.username});
+                log.err("Join startup failed for {s}: no dimension available", .{player.username});
                 player.join_startup_started = false;
                 return true;
             };
@@ -331,7 +333,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .server_editor_connection_policy = 0,
         .allow_anonimous_block_drops_in_editor_worlds = false,
         .level_identifier = "Tecton",
-        .level_name = state.tecton.raknet.options.advertisement.level_name,
+        .level_name = state.tecton.config.level_name,
         .premium_world_template_id = "00000000-0000-0000-0000-000000000000",
         .is_trial = false,
         .rewind_history_size = 0,
@@ -339,7 +341,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .current_tick = 0,
         .enchantment_seed = 0,
         .block_type_definitions = block_definitions,
-        .multiplayer_correlation_id = "<raknet>",
+        .multiplayer_correlation_id = "<nethernet>",
         .server_authoritative_inventory = true,
         .engine = "Tecton",
         .properties = properties,
@@ -352,7 +354,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
         .server_telemetry_data = Protocol.ServerTelemetryData.init(
             "Tecton",
             "tecton.default",
-            state.tecton.raknet.options.advertisement.level_name,
+            state.tecton.config.level_name,
             player.username,
         ),
     };
