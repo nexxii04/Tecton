@@ -136,9 +136,9 @@ pub fn prepare(tecton: *Tecton) !void {
 
     tecton.player_locations.load();
     tecton.ecs.setDropCallback(@ptrCast(tecton), ecsDrop);
-    tecton.plugin_runtime.attach(tecton, &tecton.events, Protocol.PROTOCOL);
+    tecton.plugin_runtime.attach(tecton, &tecton.events);
     if (tecton.discover_native_plugins) {
-        tecton.plugin_runtime.discover(tecton.io, Protocol.PROTOCOL, tecton.paths.plugins);
+        tecton.plugin_runtime.discover(tecton.io, tecton.paths.plugins);
     }
     var world_instances = tecton.worlds.valueIterator();
     while (world_instances.next()) |world| {

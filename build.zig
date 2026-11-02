@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const plugin_abi = @import("src/tecton/plugins/abi.zig");
 
 const leveldb_sources = &[_][]const u8{
     "db/builder.cc",
@@ -155,6 +156,8 @@ pub fn build(b: *std.Build) void {
     soak_step.dependOn(&run_soak.step);
 
     const native_example = addPluginExample(b, target, optimize);
+    const native_mismatch = addTestPlugin(b, target, optimize, "tecton-c-fingerprint-mismatch", "tests/plugins/fingerprint_mismatch_plugin.c");
+    const native_legacy = addTestPlugin(b, target, optimize, "tecton-c-legacy", "tests/plugins/legacy_plugin.c");
     const native_example_step = b.step("plugin-example", "Build the minimal C ABI plugin");
     native_example_step.dependOn(b.getInstallStep());
     native_example_step.dependOn(&native_example.step);
@@ -199,8 +202,9 @@ pub fn build(b: *std.Build) void {
     const run_library_tests = b.addRunArtifact(library_tests);
 
     const plugin_options = b.addOptions();
-    const plugin_library_path = if (is_windows) b.pathFromRoot("zig-out/bin/tecton-c-example.dll") else if (is_macos) b.pathFromRoot("zig-out/lib/libtecton-c-example.dylib") else b.pathFromRoot("zig-out/lib/libtecton-c-example.so");
-    plugin_options.addOption([]const u8, "path", plugin_library_path);
+    plugin_options.addOptionPath("path", native_example.getEmittedBin());
+    plugin_options.addOptionPath("mismatch_path", native_mismatch.getEmittedBin());
+    plugin_options.addOptionPath("legacy_path", native_legacy.getEmittedBin());
     const plugin_test_mod = b.createModule(.{ .root_source_file = b.path("tests/plugins/plugin_test.zig"), .target = target, .optimize = optimize, .link_libc = true });
     const plugin_loader_mod = b.createModule(.{ .root_source_file = b.path("src/tecton/plugins/dynamic_loader.zig"), .target = target, .optimize = optimize });
     plugin_test_mod.addImport("tecton-plugin-loader", plugin_loader_mod);
@@ -208,13 +212,18 @@ pub fn build(b: *std.Build) void {
     const plugin_tests = b.addTest(.{ .root_module = plugin_test_mod });
     const run_plugin_tests = b.addRunArtifact(plugin_tests);
     run_plugin_tests.step.dependOn(&native_example.step);
+    run_plugin_tests.step.dependOn(&native_mismatch.step);
+    run_plugin_tests.step.dependOn(&native_legacy.step);
     run_plugin_tests.step.dependOn(b.getInstallStep());
+
+    const conformance = addPluginConformance(b, target, optimize);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_chest_tests.step);
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_plugin_tests.step);
+    test_step.dependOn(conformance);
     const chest_test_step = b.step("test-chest", "Run chest regression tests");
     chest_test_step.dependOn(&run_chest_tests.step);
 }
@@ -272,13 +281,114 @@ fn addPluginExample(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    const native_example = b.addLibrary(.{
-        .name = "tecton-c-example",
+    const native_example = addTestPlugin(b, target, optimize, "tecton-c-example", "tests/plugins/minimal_plugin.c");
+    b.installArtifact(native_example);
+    return native_example;
+}
+
+fn addTestPlugin(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    name: []const u8,
+    source: []const u8,
+) *std.Build.Step.Compile {
+    const plugin = b.addLibrary(.{
+        .name = name,
         .linkage = .dynamic,
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
     });
-    native_example.root_module.addIncludePath(b.path("include"));
-    native_example.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/minimal_plugin.c"), .flags = &.{"-std=c11"} });
-    b.installArtifact(native_example);
-    return native_example;
+    plugin.root_module.addIncludePath(b.path("include"));
+    plugin.root_module.addCSourceFile(.{ .file = b.path(source), .flags = &.{"-std=c11"} });
+    return plugin;
+}
+
+fn addPluginConformance(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step {
+    const generated = b.addWriteFiles();
+    _ = generated.add("abi_layout_expected.h", expectedLayoutHeader(b) catch @panic("OOM"));
+
+    const probe = b.addExecutable(.{
+        .name = "abi-layout-probe",
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    probe.root_module.addIncludePath(b.path("include"));
+    probe.root_module.addIncludePath(generated.getDirectory());
+    probe.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/abi_layout_probe.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wpedantic" } });
+    const run_probe = b.addRunArtifact(probe);
+
+    const cpp_check = b.addObject(.{
+        .name = "abi-header-cpp-check",
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    cpp_check.root_module.addIncludePath(b.path("include"));
+    cpp_check.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/abi_header_check.cpp"), .flags = &.{ "-std=c++17", "-Wall", "-Wextra", "-Werror", "-Wpedantic" } });
+
+    const step = b.step("plugin-conformance", "Compile and run the ABI layout probe");
+    step.dependOn(&run_probe.step);
+    step.dependOn(&cpp_check.step);
+    return step;
+}
+
+const layout_types = .{
+    .{ "tecton_string_view", plugin_abi.StringView },
+    .{ "tecton_api_version", plugin_abi.ApiVersion },
+    .{ "tecton_host_query", plugin_abi.HostQuery },
+    .{ "tecton_plugin_info", plugin_abi.PluginInfo },
+    .{ "tecton_plugin_metadata", plugin_abi.Metadata },
+    .{ "tecton_plugin_descriptor", plugin_abi.Descriptor },
+    .{ "tecton_plugin_context", plugin_abi.Context },
+    .{ "tecton_allocator", plugin_abi.Allocator },
+    .{ "tecton_host_api", plugin_abi.HostApi },
+    .{ "tecton_interface_header", plugin_abi.InterfaceHeader },
+    .{ "tecton_event_view", plugin_abi.EventView },
+    .{ "tecton_server_tick_event", plugin_abi.ServerTickEvent },
+    .{ "tecton_player_event", plugin_abi.PlayerEvent },
+    .{ "tecton_snapshot_header", plugin_abi.SnapshotHeader },
+    .{ "tecton_world_snapshot", plugin_abi.WorldSnapshot },
+    .{ "tecton_player_snapshot", plugin_abi.PlayerSnapshot },
+    .{ "tecton_entity_snapshot", plugin_abi.EntitySnapshot },
+    .{ "tecton_item_snapshot", plugin_abi.ItemSnapshot },
+    .{ "tecton_block_snapshot", plugin_abi.BlockSnapshot },
+    .{ "tecton_inventory_item_snapshot", plugin_abi.InventoryItemSnapshot },
+    .{ "tecton_world_api", plugin_abi.WorldApi },
+    .{ "tecton_players_api", plugin_abi.PlayersApi },
+    .{ "tecton_entities_api", plugin_abi.EntitiesApi },
+    .{ "tecton_items_api", plugin_abi.ItemsApi },
+    .{ "tecton_blocks_api", plugin_abi.BlocksApi },
+    .{ "tecton_inventories_api", plugin_abi.InventoriesApi },
+    .{ "tecton_core_api", plugin_abi.CoreApi },
+    .{ "tecton_scheduler_api", plugin_abi.SchedulerApi },
+    .{ "tecton_network_api", plugin_abi.NetworkApi },
+};
+
+fn expectedLayoutHeader(b: *std.Build) ![]const u8 {
+    const allocator = b.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(allocator, "#ifndef TECTON_ABI_LAYOUT_EXPECTED_H\n#define TECTON_ABI_LAYOUT_EXPECTED_H\n#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n");
+    const fingerprint = try std.fmt.allocPrint(allocator, "#define TECTON_ABI_EXPECTED_FINGERPRINT UINT64_C(0x{x})\n", .{plugin_abi.abi_fingerprint});
+    try out.appendSlice(allocator, fingerprint);
+    try out.appendSlice(allocator, "#define TECTON_ABI_EXPECT_SIZE(type, expected) TECTON_STATIC_ASSERT(sizeof(type) == (expected), #type \" sizeof drift\")\n#define TECTON_ABI_EXPECT_OFFSET(type, field, expected) TECTON_STATIC_ASSERT(offsetof(type, field) == (expected), #type \".\" #field \" offset drift\")\n");
+    inline for (layout_types) |entry| {
+        const line = try std.fmt.allocPrint(allocator, "TECTON_ABI_EXPECT_SIZE({s}, {d});\n", .{ entry[0], @sizeOf(entry[1]) });
+        try out.appendSlice(allocator, line);
+        inline for (@typeInfo(entry[1]).@"struct".fields) |field| {
+            const offset = try std.fmt.allocPrint(allocator, "TECTON_ABI_EXPECT_OFFSET({s}, {s}, {d});\n", .{ entry[0], field.name, @offsetOf(entry[1], field.name) });
+            try out.appendSlice(allocator, offset);
+        }
+    }
+    try out.appendSlice(allocator, "TECTON_STATIC_ASSERT(TECTON_ABI_FINGERPRINT == TECTON_ABI_EXPECTED_FINGERPRINT, \"TECTON_ABI_FINGERPRINT drift between header and abi.zig\");\nstatic void tecton_probe_print_layout(void) {\n");
+    inline for (layout_types) |entry| {
+        const size = try std.fmt.allocPrint(allocator, "  printf(\"{s}.size %zu\\n\", sizeof({s}));\n", .{ entry[0], entry[0] });
+        try out.appendSlice(allocator, size);
+        inline for (@typeInfo(entry[1]).@"struct".fields) |field| {
+            const offset = try std.fmt.allocPrint(allocator, "  printf(\"{s}.{s} %zu\\n\", offsetof({s}, {s}));\n", .{ entry[0], field.name, entry[0], field.name });
+            try out.appendSlice(allocator, offset);
+        }
+    }
+    try out.appendSlice(allocator, "  printf(\"fingerprint %016llx\\n\", (unsigned long long)TECTON_ABI_FINGERPRINT);\n}\n#endif\n");
+    return out.toOwnedSlice(allocator);
 }

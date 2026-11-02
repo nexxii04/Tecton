@@ -6,7 +6,8 @@ const Tecton = @import("../tecton.zig").Tecton;
 const Events = @import("../events/root.zig");
 const World = @import("../world/world.zig").World;
 const abi = @import("abi.zig");
-const NativePlugin = @import("dynamic_loader.zig").NativePlugin;
+const native_loader = @import("dynamic_loader.zig");
+const NativePlugin = native_loader.NativePlugin;
 const Handles = @import("handles.zig");
 const SendPriority = @import("../network/root.zig").SendPriority;
 const Player = @import("../player/player.zig").Player;
@@ -20,8 +21,7 @@ pub const PluginRuntime = struct {
     events: ?*Events.Events = null,
     host: abi.HostApi,
     handles: Handles.Table,
-    plugins: std.ArrayList(NativePlugin),
-    plugin_labels: std.ArrayList(PluginLabel),
+    plugins: std.ArrayList(PluginEntry),
     subscriptions: std.ArrayList(Subscription),
     bridges: [event_count][3]bool,
     next_id: u32 = 1,
@@ -43,9 +43,16 @@ pub const PluginRuntime = struct {
 
     pub const NATIVE_BRIDGE_OWNER_ID: u16 = 0xC001;
 
-    const PluginLabel = struct {
-        id: u32,
-        name: []u8,
+    pub const HostSlot = struct {
+        runtime: *PluginRuntime,
+        plugin_id: u32,
+        name: []const u8,
+        host: abi.HostApi,
+    };
+
+    const PluginEntry = struct {
+        native: NativePlugin,
+        slot: *HostSlot,
     };
 
     const ScheduledTask = struct {
@@ -60,7 +67,7 @@ pub const PluginRuntime = struct {
     const Subscription = struct {
         id: u64,
         event_id: u32,
-        phase: u32,
+        phase: u16,
         priority: i16,
         callback: abi.EventCallbackFn,
         userdata: ?*anyopaque,
@@ -73,7 +80,6 @@ pub const PluginRuntime = struct {
             .host = undefined,
             .handles = Handles.Table.init(allocator),
             .plugins = .empty,
-            .plugin_labels = .empty,
             .subscriptions = .empty,
             .bridges = std.mem.zeroes([event_count][3]bool),
             .scheduled_tasks = .empty,
@@ -88,82 +94,76 @@ pub const PluginRuntime = struct {
             .network_api = undefined,
         };
         runtime.core_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.CoreApi), .major = 1, .minor = 0, .interface_id = abi.interface_core, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.CoreApi), .major = 1, .minor = 0, .interface_id = abi.interface_core, .reserved = 0, .features = 0 },
             .get_tick = coreGetTick,
             .get_state = coreGetState,
         };
         runtime.world_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.WorldApi), .major = 1, .minor = 0, .interface_id = abi.interface_world, .features = 0 },
-            .find = worldFindInterface,
+            .header = .{ .struct_size = @sizeOf(abi.WorldApi), .major = 1, .minor = 0, .interface_id = abi.interface_world, .reserved = 0, .features = 0 },
+            .find = worldFind,
             .get_snapshot = worldGetSnapshot,
+            .set_block = worldSetBlock,
         };
         runtime.players_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.PlayersApi), .major = 1, .minor = 0, .interface_id = abi.interface_players, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.PlayersApi), .major = 1, .minor = 0, .interface_id = abi.interface_players, .reserved = 0, .features = 0 },
             .count = playersCount,
             .get_snapshot = playersGetSnapshot,
         };
         runtime.entities_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.EntitiesApi), .major = 1, .minor = 0, .interface_id = abi.interface_entities, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.EntitiesApi), .major = 1, .minor = 0, .interface_id = abi.interface_entities, .reserved = 0, .features = 0 },
             .count = entitiesCount,
             .get_snapshot = entitiesGetSnapshot,
         };
         runtime.items_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.ItemsApi), .major = 1, .minor = 0, .interface_id = abi.interface_items, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.ItemsApi), .major = 1, .minor = 0, .interface_id = abi.interface_items, .reserved = 0, .features = 0 },
             .count = itemsCount,
             .get_snapshot = itemsGetSnapshot,
         };
         runtime.blocks_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.BlocksApi), .major = 1, .minor = 0, .interface_id = abi.interface_blocks, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.BlocksApi), .major = 1, .minor = 0, .interface_id = abi.interface_blocks, .reserved = 0, .features = 0 },
             .get_snapshot = blocksGetSnapshot,
         };
         runtime.inventories_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.InventoriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_inventories, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.InventoriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_inventories, .reserved = 0, .features = 0 },
             .get_size = inventoryGetSize,
             .get_item = inventoryGetItem,
         };
         runtime.scheduler_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .reserved = 0, .features = 0 },
             .schedule = schedulerSchedule,
             .cancel = schedulerCancel,
             .cancel_owner = schedulerCancelOwner,
         };
         runtime.network_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.NetworkApi), .major = 1, .minor = 0, .interface_id = abi.interface_network, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.NetworkApi), .major = 1, .minor = 0, .interface_id = abi.interface_network, .reserved = 0, .features = 0 },
             .send = networkSend,
             .broadcast = networkBroadcast,
         };
         runtime.host = .{
             .struct_size = @sizeOf(abi.HostApi),
-            .api = .{ .major = abi.abi_major, .minor = abi.abi_minor, .protocol = 0 },
+            .abi_major = abi.abi_major,
+            .abi_minor = abi.abi_minor,
+            .plugin_id = 0,
             .userdata = null,
-            .allocator = .{ .userdata = null, .alloc = allocate, .free = free },
+            .allocator = .{ .userdata = null, .alloc = allocate, .free = free, .realloc = reallocate, .alloc_zeroed = allocateZeroed },
             .log = log,
-            .world_find = worldFind,
-            .player_snapshot = playerSnapshot,
-            .world_set_block = worldSetBlock,
             .event_subscribe = eventSubscribe,
             .event_unsubscribe = eventUnsubscribe,
-            .features = abi.feature_events | abi.feature_world | abi.feature_logging | abi.feature_allocator | abi.feature_interfaces | abi.feature_core | abi.feature_scheduler | abi.feature_players | abi.feature_entities | abi.feature_items | abi.feature_blocks | abi.feature_inventories | abi.feature_network,
-            .log_debug = logDebug,
-            .log_info = logInfo,
-            .log_warn = logWarn,
-            .log_error = logError,
+            .emit_custom = emitCustom,
             .get_interface = getInterface,
+            .every = schedulerEvery,
+            .features = abi.host_features,
         };
         return runtime;
     }
 
-    pub fn attach(self: *PluginRuntime, tecton: *Tecton, events: *Events.Events, protocol: u32) void {
+    pub fn attach(self: *PluginRuntime, tecton: *Tecton, events: *Events.Events) void {
         self.tecton = tecton;
         self.events = events;
-        self.host.userdata = @ptrCast(self);
-        self.host.allocator.userdata = @ptrCast(self);
-        self.host.api.protocol = protocol;
-        self.host.api.minor = abi.abi_minor;
         self.server_state = 0;
     }
 
-    pub fn discover(self: *PluginRuntime, io: std.Io, protocol: u32, directory_path: []const u8) void {
+    pub fn discover(self: *PluginRuntime, io: std.Io, directory_path: []const u8) void {
         const directory = std.Io.Dir.cwd().openDir(io, directory_path, .{ .iterate = true }) catch |err| {
             std.Io.Dir.cwd().createDir(io, directory_path, .default_dir) catch {};
             if (err != error.FileNotFound) logger.warn("Unable to open plugins directory: {s}", .{@errorName(err)});
@@ -203,27 +203,28 @@ pub const PluginRuntime = struct {
                 continue;
             };
             defer self.allocator.free(path);
-            self.load(path, protocol);
+            self.load(path);
         }
     }
 
     pub fn deinit(self: *PluginRuntime) void {
         self.cancelAllScheduled();
         if (self.events) |events| events.removeOwner(NATIVE_BRIDGE_OWNER_ID);
+        if (self.tecton) |tecton| {
+            for (self.plugins.items) |entry| {
+                tecton.tasks.cancelByOwner("plugin", @intCast(entry.slot.plugin_id), null);
+            }
+        }
         var index = self.plugins.items.len;
         while (index > 0) {
             index -= 1;
-            self.plugins.items[index].deinit();
-        }
-        if (self.tecton) |tecton| {
-            for (self.plugin_labels.items) |label| {
-                tecton.tasks.cancelByOwner("plugin", @intCast(label.id), null);
-            }
+            const entry = &self.plugins.items[index];
+            entry.native.deinit();
+            self.allocator.free(entry.slot.name);
+            self.allocator.destroy(entry.slot);
         }
         self.plugins.deinit(self.allocator);
         self.handles.deinit();
-        for (self.plugin_labels.items) |label| self.allocator.free(label.name);
-        self.plugin_labels.deinit(self.allocator);
         self.subscriptions.deinit(self.allocator);
         self.scheduled_tasks.deinit(self.allocator);
         self.events = null;
@@ -238,47 +239,56 @@ pub const PluginRuntime = struct {
         self.server_state = state;
     }
 
-    fn load(self: *PluginRuntime, path: []const u8, protocol: u32) void {
+    fn load(self: *PluginRuntime, path: []const u8) void {
         const plugin_id = self.next_id;
-        var plugin = NativePlugin.open(self.allocator, path, &self.host, plugin_id, protocol) catch |err| {
+        const slot = self.allocator.create(HostSlot) catch {
             self.discovery_error_count += 1;
-            logger.err("Unable to load plugin {s}: {s}", .{ path, @errorName(err) });
+            logger.err("Unable to allocate plugin slot for {s}", .{path});
+            return;
+        };
+        slot.* = .{ .runtime = self, .plugin_id = plugin_id, .name = "", .host = self.host };
+        slot.host.userdata = @ptrCast(slot);
+        slot.host.plugin_id = plugin_id;
+        slot.host.allocator.userdata = @ptrCast(slot);
+
+        var plugin = NativePlugin.open(self.allocator, path, &slot.host, plugin_id) catch |err| {
+            self.discovery_error_count += 1;
+            logger.err("Unable to load plugin {s}: {s} ({s})", .{ path, @errorName(err), native_loader.reasonName(err) });
+            self.allocator.destroy(slot);
             return;
         };
 
-        self.next_id += 1;
         const label = self.allocator.dupe(u8, abi.metadataName(plugin.descriptor)) catch {
             self.discovery_error_count += 1;
             plugin.deinit();
+            self.allocator.destroy(slot);
             logger.err("Unable to allocate plugin label for {s}", .{path});
             return;
         };
-
-        self.plugin_labels.append(self.allocator, .{ .id = plugin_id, .name = label }) catch {
-            self.allocator.free(label);
-            self.discovery_error_count += 1;
-            plugin.deinit();
-            logger.err("Unable to register plugin label for {s}", .{path});
-            return;
-        };
+        slot.name = label;
 
         logger.info("Loading native plugin: {s}", .{path});
         plugin.start() catch |err| {
             plugin.deinit();
+            self.allocator.free(label);
+            self.allocator.destroy(slot);
             logger.err("Unable to start plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
 
-        self.plugins.append(self.allocator, plugin) catch |err| {
+        self.plugins.append(self.allocator, .{ .native = plugin, .slot = slot }) catch |err| {
             plugin.deinit();
+            self.allocator.free(label);
+            self.allocator.destroy(slot);
             logger.err("Unable to register plugin {s}: {s}", .{ path, @errorName(err) });
             return;
         };
+        self.next_id += 1;
     }
 
-    fn eventSubscribe(context: ?*anyopaque, event_id: u32, phase: u32, priority: i16, callback: ?abi.EventCallbackFn, userdata: ?*anyopaque, subscription: ?*u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return -1));
-        if (phase >= 3 or self.dispatching) return -1;
+    fn eventSubscribe(context: ?*anyopaque, event_id: u32, phase: u16, priority: i16, callback: ?abi.EventCallbackFn, userdata: ?*anyopaque, subscription: ?*u64) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        if (phase >= 3 or self.dispatching) return abi.result_invalid_argument;
         if (callback == null or subscription == null) return abi.result_invalid_argument;
         const internal_event = internalEvent(event_id) orelse return abi.result_not_found;
         self.ensureBridge(@intFromEnum(internal_event), phase) catch return abi.result_unsupported;
@@ -302,7 +312,7 @@ pub const PluginRuntime = struct {
     }
 
     fn eventUnsubscribe(context: ?*anyopaque, subscription: u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         if (subscription == 0) return abi.result_invalid_argument;
         for (self.subscriptions.items) |*item| {
             if (item.id == subscription and item.active) {
@@ -313,7 +323,7 @@ pub const PluginRuntime = struct {
         return abi.result_not_found;
     }
 
-    fn ensureBridge(self: *PluginRuntime, event_id: u32, phase: u32) !void {
+    fn ensureBridge(self: *PluginRuntime, event_id: u32, phase: u16) !void {
         if (self.bridges[event_id][phase]) return;
         const events = self.events orelse return error.EventBusUnavailable;
         const event: Events.Event = @enumFromInt(event_id);
@@ -346,7 +356,7 @@ pub const PluginRuntime = struct {
         self.dispatching = true;
         defer self.dispatching = false;
 
-        var result: u32 = @intFromEnum(abi.EventResult.continue_);
+        var result: i32 = @intFromEnum(abi.EventResult.continue_);
         var payload: abi.ServerTickEvent = undefined;
         var player_payload: abi.PlayerEvent = undefined;
         var payload_ptr: ?*const anyopaque = null;
@@ -365,15 +375,13 @@ pub const PluginRuntime = struct {
 
         const payload_version: u32 = if (event == .ServerTick or event == .PlayerJoin or event == .PlayerDisconnect) 1 else 0;
         const view = abi.EventView{
-            .event_id = external_event_id,
-            .phase = phase,
             .data = payload_ptr,
             .data_size = payload_size,
             .result = &result,
-            .payload_version = payload_version,
-            .struct_size = @sizeOf(abi.EventView),
-            .flags = if (event == .ServerTick or event == .PlayerJoin or event == .PlayerDisconnect) abi.event_flag_cancelable | abi.event_flag_callback_only else abi.event_flag_callback_only,
-            .payload_schema = if (event == .ServerTick) 0x10001 else if (event == .PlayerJoin or event == .PlayerDisconnect) 0x10002 else 0,
+            .schema = (external_event_id << 8) | payload_version,
+            .event_id = external_event_id,
+            .phase = @intCast(phase),
+            .flags = if (event == .ServerTick or event == .PlayerJoin or event == .PlayerDisconnect) abi.event_flag_cancelable | abi.event_flag_callback_only | abi.event_flag_borrowed else abi.event_flag_callback_only | abi.event_flag_borrowed,
         };
         for (self.subscriptions.items) |subscription| {
             if (!subscription.active or subscription.event_id != external_event_id or subscription.phase != phase) continue;
@@ -388,10 +396,10 @@ pub const PluginRuntime = struct {
     }
 
     fn getInterface(context: ?*anyopaque, interface_id: u32, major: u16, minor: u16, interface: ?*?abi.InterfacePtr) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = interface orelse return abi.result_invalid_argument;
         output.* = null;
-        if (major != 1 or minor > 0) return abi.result_unsupported;
+        if (major != 1 or minor > 0) return abi.result_version;
         switch (interface_id) {
             abi.interface_core => {
                 output.* = @ptrCast(&self.core_api);
@@ -434,21 +442,21 @@ pub const PluginRuntime = struct {
     }
 
     fn coreGetTick(context: ?*anyopaque, tick: ?*u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = tick orelse return abi.result_invalid_argument;
         output.* = (self.tecton orelse return abi.result_not_found).tick_count;
         return abi.result_ok;
     }
 
     fn coreGetState(context: ?*anyopaque, state: ?*u32) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = state orelse return abi.result_invalid_argument;
         output.* = self.server_state;
         return abi.result_ok;
     }
 
     fn schedulerSchedule(context: ?*anyopaque, owner_id: u32, callback: ?abi.SchedulerCallbackFn, callback_userdata: ?*anyopaque, task: ?*u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const callback_value = callback orelse return abi.result_invalid_argument;
         const output = task orelse return abi.result_invalid_argument;
         if (output.* != 0) return abi.result_invalid_argument;
@@ -470,7 +478,7 @@ pub const PluginRuntime = struct {
     }
 
     fn schedulerCancel(context: ?*anyopaque, handle: u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         for (self.scheduled_tasks.items) |scheduled| {
             if (scheduled.handle == handle and !scheduled.cancelled) {
                 scheduled.cancelled = true;
@@ -481,7 +489,7 @@ pub const PluginRuntime = struct {
     }
 
     fn schedulerCancelOwner(context: ?*anyopaque, owner_id: u32) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         var found = false;
         for (self.scheduled_tasks.items) |scheduled| {
             if (scheduled.owner_id == owner_id and !scheduled.cancelled) {
@@ -567,60 +575,56 @@ pub const PluginRuntime = struct {
     }
 
     fn allocate(context: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return null));
+        const self = runtimeFrom(context) orelse return null;
         if (size == 0) return null;
         return self.allocator.rawAlloc(size, .fromByteUnits(@max(alignment, 1)), @returnAddress());
     }
 
     fn free(context: ?*anyopaque, memory: ?*anyopaque, size: usize, alignment: usize) callconv(.c) void {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return));
+        const self = runtimeFrom(context) orelse return;
         if (size == 0) return;
         const ptr = memory orelse return;
         self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..size], .fromByteUnits(@max(alignment, 1)), @returnAddress());
     }
 
-    fn log(context: ?*anyopaque, level: u32, message: abi.StringView) callconv(.c) void {
-        const label = switch (level) {
-            0 => "DEBUG",
-            1 => "INFO",
-            2 => "WARN",
-            else => "ERROR",
-        };
-        writePluginLog(context, 0, label, message);
-    }
-
-    fn logDebug(context: ?*anyopaque, plugin_id: u32, message: abi.StringView) callconv(.c) void {
-        writePluginLog(context, plugin_id, "DEBUG", message);
-    }
-
-    fn logInfo(context: ?*anyopaque, plugin_id: u32, message: abi.StringView) callconv(.c) void {
-        writePluginLog(context, plugin_id, "INFO", message);
-    }
-
-    fn logWarn(context: ?*anyopaque, plugin_id: u32, message: abi.StringView) callconv(.c) void {
-        writePluginLog(context, plugin_id, "WARN", message);
-    }
-
-    fn logError(context: ?*anyopaque, plugin_id: u32, message: abi.StringView) callconv(.c) void {
-        writePluginLog(context, plugin_id, "ERROR", message);
-    }
-
-    fn writePluginLog(context: ?*anyopaque, plugin_id: u32, level: []const u8, message: abi.StringView) void {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return));
-        const text = message.data orelse return;
-        const name = for (self.plugin_labels.items) |label| {
-            if (label.id == plugin_id) break label.name;
-        } else "unknown";
-        const value = text[0..message.length];
-        if (std.mem.eql(u8, level, "DEBUG")) {
-            logger.debug("[plugin:{s}] {s}", .{ name, value });
-        } else if (std.mem.eql(u8, level, "INFO")) {
-            logger.info("[plugin:{s}] {s}", .{ name, value });
-        } else if (std.mem.eql(u8, level, "WARN")) {
-            logger.warn("[plugin:{s}] {s}", .{ name, value });
-        } else {
-            logger.err("[plugin:{s}] {s}", .{ name, value });
+    fn reallocate(context: ?*anyopaque, memory: ?*anyopaque, old_size: usize, new_size: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const self = runtimeFrom(context) orelse return null;
+        if (new_size == 0) {
+            if (memory) |ptr| self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..old_size], .fromByteUnits(@max(alignment, 1)), @returnAddress());
+            return null;
         }
+        const replacement = self.allocator.rawAlloc(new_size, .fromByteUnits(@max(alignment, 1)), @returnAddress()) orelse return null;
+        if (memory) |ptr| {
+            const copy_size = @min(old_size, new_size);
+            @memcpy(@as([*]u8, @ptrCast(replacement))[0..copy_size], @as([*]const u8, @ptrCast(ptr))[0..copy_size]);
+            self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..old_size], .fromByteUnits(@max(alignment, 1)), @returnAddress());
+        }
+        return replacement;
+    }
+
+    fn allocateZeroed(context: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        const memory = allocate(context, size, alignment) orelse return null;
+        @memset(@as([*]u8, @ptrCast(memory))[0..size], 0);
+        return memory;
+    }
+
+    fn log(context: ?*anyopaque, level: u32, message: abi.StringView) callconv(.c) void {
+        const slot: *HostSlot = @ptrCast(@alignCast(context orelse return));
+        const text = message.slice();
+        switch (level) {
+            abi.log_trace, abi.log_debug => logger.debug("[plugin:{s}] {s}", .{ slot.name, text }),
+            abi.log_info => logger.info("[plugin:{s}] {s}", .{ slot.name, text }),
+            abi.log_warn => logger.warn("[plugin:{s}] {s}", .{ slot.name, text }),
+            else => logger.err("[plugin:{s}] {s}", .{ slot.name, text }),
+        }
+    }
+
+    fn emitCustom(_: ?*anyopaque, _: u32, _: ?*const anyopaque, _: usize, _: u32) callconv(.c) i32 {
+        return abi.result_unsupported;
+    }
+
+    fn schedulerEvery(_: ?*anyopaque, _: u32, _: ?abi.SchedulerCallbackFn, _: ?*anyopaque, _: ?*u64) callconv(.c) i32 {
+        return abi.result_unsupported;
     }
 
     fn itemsCount(_: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
@@ -630,7 +634,7 @@ pub const PluginRuntime = struct {
     }
 
     fn itemsGetSnapshot(context: ?*anyopaque, index: usize, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
         const ItemType = @import("../items/item_type.zig").ItemType;
@@ -650,7 +654,7 @@ pub const PluginRuntime = struct {
     }
 
     fn blocksGetSnapshot(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, x: i32, y: i32, z: i32, snapshot: ?*abi.BlockSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.BlockSnapshot)) return abi.result_invalid_argument;
         const tecton = self.tecton orelse return abi.result_not_found;
@@ -672,14 +676,14 @@ pub const PluginRuntime = struct {
     }
 
     fn inventoryGetSize(context: ?*anyopaque, player_handle: u64, size_output: *u32) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const state = self.inventoryState(player_handle) orelse return abi.result_invalid_handle;
         size_output.* = state.container.base.getSize();
         return abi.result_ok;
     }
 
     fn inventoryGetItem(context: ?*anyopaque, player_handle: u64, slot: u32, snapshot: ?*abi.InventoryItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.InventoryItemSnapshot)) return abi.result_invalid_argument;
         const state = self.inventoryState(player_handle) orelse return abi.result_invalid_handle;
@@ -693,12 +697,8 @@ pub const PluginRuntime = struct {
         return abi.result_ok;
     }
 
-    fn worldFindInterface(context: ?*anyopaque, name: abi.StringView, handle: *u64) callconv(.c) i32 {
-        return worldFind(context, name, handle);
-    }
-
     fn worldGetSnapshot(context: ?*anyopaque, handle: u64, snapshot: ?*abi.WorldSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.WorldSnapshot)) return abi.result_invalid_argument;
         const tecton = self.tecton orelse return abi.result_not_found;
@@ -708,7 +708,7 @@ pub const PluginRuntime = struct {
     }
 
     fn playersCount(context: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = count_output;
         const tecton = self.tecton orelse return abi.result_not_found;
         output.* = tecton.getPlayerCount();
@@ -716,7 +716,7 @@ pub const PluginRuntime = struct {
     }
 
     fn playersGetSnapshot(context: ?*anyopaque, index: usize, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) return abi.result_invalid_argument;
         const tecton = self.tecton orelse return abi.result_not_found;
@@ -731,7 +731,7 @@ pub const PluginRuntime = struct {
     }
 
     fn entitiesCount(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, count_output: *usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = count_output;
         const tecton = self.tecton orelse return abi.result_not_found;
         const world = self.findWorldByHandle(tecton, world_handle) orelse return abi.result_invalid_handle;
@@ -741,7 +741,7 @@ pub const PluginRuntime = struct {
     }
 
     fn entitiesGetSnapshot(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, index: usize, snapshot: ?*abi.EntitySnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.EntitySnapshot)) return abi.result_invalid_argument;
         const tecton = self.tecton orelse return abi.result_not_found;
@@ -763,29 +763,25 @@ pub const PluginRuntime = struct {
     }
 
     fn worldFind(context: ?*anyopaque, name: abi.StringView, handle: *u64) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
-        const tecton = self.tecton orelse return -1;
-        const world = tecton.worlds.get(name.slice()) orelse return -1;
-        handle.* = self.handles.put(.world, @intFromPtr(world)) catch return -8;
-        return 0;
-    }
-
-    fn playerSnapshot(_: ?*anyopaque, _: u64, _: ?*anyopaque, _: usize) callconv(.c) i32 {
-        return -3;
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const tecton = self.tecton orelse return abi.result_not_found;
+        const world = tecton.worlds.get(name.slice()) orelse return abi.result_not_found;
+        handle.* = self.handles.put(.world, @intFromPtr(world)) catch return abi.result_out_of_memory;
+        return abi.result_ok;
     }
 
     fn worldSetBlock(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, x: i32, y: i32, z: i32, block: abi.StringView) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context.?));
-        const tecton = self.tecton orelse return -1;
-        const world = self.findWorldByHandle(tecton, world_handle) orelse return -1;
-        const dimension_value = world.getDimension(dimension.slice()) orelse return -2;
-        const permutation = @import("../world/block/block_permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return -3;
-        dimension_value.setPermutation(.{ .x = x, .y = y, .z = z }, permutation, 0) catch return -3;
-        return 0;
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const tecton = self.tecton orelse return abi.result_not_found;
+        const world = self.findWorldByHandle(tecton, world_handle) orelse return abi.result_invalid_handle;
+        const dimension_value = world.getDimension(dimension.slice()) orelse return abi.result_not_found;
+        const permutation = @import("../world/block/block_permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return abi.result_not_found;
+        dimension_value.setPermutation(.{ .x = x, .y = y, .z = z }, permutation, 0) catch return abi.result_not_found;
+        return abi.result_ok;
     }
 
     fn networkSend(context: ?*anyopaque, player_handle: u64, bytes: abi.StringView, priority: u32) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const send_priority = sendPriority(priority) orelse return abi.result_invalid_argument;
         const payload = bytes.slice();
         if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) return abi.result_invalid_argument;
@@ -797,7 +793,7 @@ pub const PluginRuntime = struct {
     }
 
     fn networkBroadcast(context: ?*anyopaque, bytes: abi.StringView, priority: u32) callconv(.c) i32 {
-        const self: *PluginRuntime = @ptrCast(@alignCast(context orelse return abi.result_invalid_argument));
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const send_priority = sendPriority(priority) orelse return abi.result_invalid_argument;
         const payload = bytes.slice();
         if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) return abi.result_invalid_argument;
@@ -841,6 +837,11 @@ pub const PluginRuntime = struct {
     }
 };
 
+fn runtimeFrom(context: ?*anyopaque) ?*PluginRuntime {
+    const slot: *PluginRuntime.HostSlot = @ptrCast(@alignCast(context orelse return null));
+    return slot.runtime;
+}
+
 const test_owner = @This();
 const test_scope = struct {
     pub const std = test_owner.std;
@@ -848,6 +849,7 @@ const test_scope = struct {
     pub const SendPriority = test_owner.SendPriority;
     pub const MAX_PLUGIN_PACKET_BYTES = test_owner.MAX_PLUGIN_PACKET_BYTES;
     pub const PluginRuntime = test_owner.PluginRuntime;
+    pub const HostSlot = test_owner.PluginRuntime.HostSlot;
     pub const private_pluginruntime_getInterface = test_owner.PluginRuntime.getInterface;
     pub const private_pluginruntime_networkBroadcast = test_owner.PluginRuntime.networkBroadcast;
     pub const private_pluginruntime_networkSend = test_owner.PluginRuntime.networkSend;
