@@ -289,6 +289,5 @@ pub fn Suite(comptime scope: type) type {
                 return error.TestUnexpectedResult;
             }
         }
-
     };
 }

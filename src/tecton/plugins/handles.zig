@@ -55,7 +55,7 @@ pub const Table = struct {
                 if (slot.owner_plugin_id == owner_plugin_id or slot.owner_plugin_id == 0) {
                     return encode(kind, existing, slot.generation);
                 }
-                
+
                 // Cross-owner reuse becomes runtime-owned so one plugin's unload cannot invalidate another's handle.
                 self.promote(existing);
                 return encode(kind, existing, slot.generation);

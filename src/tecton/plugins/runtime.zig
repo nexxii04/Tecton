@@ -132,14 +132,43 @@ pub const PluginRuntime = struct {
     const CustomSchema = struct {
         name: ?[]u8,
         schema: u32,
-        plugin_id: u32,
+        version: u8,
+        live: bool,
+        refs: u32 = 0,
+        owners: [8]u32 = std.mem.zeroes([8]u32),
+        owner_len: u8 = 0,
+
+        fn hasOwner(self: *const CustomSchema, plugin_id: u32) bool {
+            for (self.owners[0..self.owner_len]) |owner| {
+                if (owner == plugin_id) return true;
+            }
+            return false;
+        }
+
+        fn addOwner(self: *CustomSchema, plugin_id: u32) void {
+            if (self.hasOwner(plugin_id)) return;
+            if (self.owner_len < self.owners.len) {
+                self.owners[self.owner_len] = plugin_id;
+                self.owner_len += 1;
+            }
+        }
+
+        fn removeOwner(self: *CustomSchema, plugin_id: u32) void {
+            for (self.owners[0..self.owner_len], 0..) |owner, index| {
+                if (owner != plugin_id) continue;
+                const last = self.owner_len - 1;
+                self.owners[index] = self.owners[last];
+                self.owner_len = last;
+                return;
+            }
+        }
     };
 
     const DeferredEmit = extern struct {
         schema: u32,
         size: u16,
         flags: u16,
-        payload: [abi.custom_payload_max]u8,
+        payload: [abi.custom_payload_max]u8 align(8),
     };
 
     const TimerSlot = struct {
@@ -646,7 +675,7 @@ pub const PluginRuntime = struct {
         const event_index: usize = if (event_id >= abi.event_custom_base) blk: {
             const custom = event_id - abi.event_custom_base;
             if (custom >= abi.max_custom_events) return abi.result_not_found;
-            if (custom >= self.custom_schemas.items.len or self.custom_schemas.items[custom].name == null) return abi.result_not_found;
+            if (custom >= self.custom_schemas.items.len or !self.custom_schemas.items[custom].live) return abi.result_not_found;
             break :blk event_count + custom;
         } else blk: {
             if (event_id >= event_count) return abi.result_not_found;
@@ -931,32 +960,183 @@ pub const PluginRuntime = struct {
         if (self.active[event_index][phase] == 0) return .continue_;
 
         var result: i32 = @intFromEnum(abi.EventResult.continue_);
-        var payload: abi.ServerTickEvent = undefined;
-        var player_payload: abi.PlayerEvent = undefined;
+        var payload: abi.EventPayload = undefined;
         var payload_ptr: ?*const anyopaque = null;
         var payload_size: usize = 0;
-        switch (meta.payload) {
-            .tick => {
-                payload.tick = data.tick;
-                payload_ptr = @ptrCast(&payload);
-                payload_size = @sizeOf(abi.ServerTickEvent);
+        switch (event) {
+            .ServerStart, .ServerShutdown => {},
+            .ServerTick => {
+                payload = .{ .server_tick = .{ .tick = data.tick } };
+                payload_ptr = @ptrCast(&payload.server_tick);
+                payload_size = meta.payload_size;
             },
-            .player_join => {
-                player_payload.handle = self.playerHandle(data.player);
-                if (player_payload.handle != 0) {
-                    payload_ptr = @ptrCast(&player_payload);
-                    payload_size = @sizeOf(abi.PlayerEvent);
-                }
+            .PlayerJoin => {
+                payload = .{ .player_join = .{ .handle = self.playerHandle(data.player), .runtime_id = data.player.entity.runtime_id } };
+                payload_ptr = @ptrCast(&payload.player_join);
+                payload_size = meta.payload_size;
             },
-            .player_disconnect => {
-                player_payload.handle = self.handles.handleFor(.player, @intFromPtr(data.player)) orelse 0;
-                if (player_payload.handle != 0) {
-                    payload_ptr = @ptrCast(&player_payload);
-                    payload_size = @sizeOf(abi.PlayerEvent);
-                }
+            .PlayerDisconnect => {
+                payload = .{ .player_ref = .{ .handle = self.handles.handleFor(.player, @intFromPtr(data.player)) orelse 0, .runtime_id = data.player.entity.runtime_id } };
+                payload_ptr = @ptrCast(&payload.player_ref);
+                payload_size = meta.payload_size;
             },
-            .none => {},
+            .PlayerChat => {
+                payload = .{ .player_chat = .{ .runtime_id = data.player.entity.runtime_id, .message = .{ .data = if (data.message.len == 0) null else data.message.ptr, .length = data.message.len }, .flags = 0, .reserved = 0 } };
+                payload_ptr = @ptrCast(&payload.player_chat);
+                payload_size = meta.payload_size;
+            },
+            .ItemUse => {
+                payload = .{ .item_use = .{ .runtime_id = data.player.entity.runtime_id, .identifier = .{ .data = if (data.identifier.len == 0) null else data.identifier.ptr, .length = data.identifier.len }, .flags = 0, .reserved = 0 } };
+                payload_ptr = @ptrCast(&payload.item_use);
+                payload_size = meta.payload_size;
+            },
+            .PlayerMove => {
+                payload = .{ .player_move = .{
+                    .runtime_id = data.player.entity.runtime_id,
+                    .from_x = data.from.x,
+                    .from_y = data.from.y,
+                    .from_z = data.from.z,
+                    .to_x = data.to.x,
+                    .to_y = data.to.y,
+                    .to_z = data.to.z,
+                    .on_ground = if (data.player.on_ground) 1 else 0,
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.player_move);
+                payload_size = meta.payload_size;
+            },
+            .Damage => {
+                payload = .{ .damage = .{
+                    .victim_runtime = data.victim.runtime_id,
+                    .attacker_runtime = if (data.attacker) |attacker| attacker.runtime_id else 0,
+                    .amount = data.amount,
+                    .cause = @intFromEnum(data.cause),
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.damage);
+                payload_size = meta.payload_size;
+            },
+            .EntityCombust => {
+                payload = .{ .entity_combust = .{
+                    .runtime_id = data.entity.runtime_id,
+                    .instigator_runtime = if (data.instigator) |instigator| instigator.runtime_id else 0,
+                    .duration = data.duration,
+                    .source = @intFromEnum(data.source),
+                } };
+                payload_ptr = @ptrCast(&payload.entity_combust);
+                payload_size = meta.payload_size;
+            },
+            .BlockPlace => {
+                payload = .{ .block_place = .{
+                    .runtime_id = data.player.entity.runtime_id,
+                    .x = data.position.x,
+                    .y = data.position.y,
+                    .z = data.position.z,
+                    .network_id = data.permutation.network_id,
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.block_place);
+                payload_size = meta.payload_size;
+            },
+            .BlockBreak => {
+                payload = .{ .block_break = .{
+                    .runtime_id = data.player.entity.runtime_id,
+                    .x = data.position.x,
+                    .y = data.position.y,
+                    .z = data.position.z,
+                    .network_id = data.permutation.network_id,
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.block_break);
+                payload_size = meta.payload_size;
+            },
+            .InventoryOpen, .InventoryClose => {
+                payload = .{ .inventory = .{ .handle = self.playerHandle(data.player), .container_id = data.container_id, .reserved = 0 } };
+                payload_ptr = @ptrCast(&payload.inventory);
+                payload_size = meta.payload_size;
+            },
+            .InventoryClick => {
+                payload = .{ .inventory_click = .{ .handle = self.playerHandle(data.player), .slot = data.slot, .button = data.button, .reserved = 0, .reserved2 = 0 } };
+                payload_ptr = @ptrCast(&payload.inventory_click);
+                payload_size = meta.payload_size;
+            },
+            .TransactionPrepare, .TransactionCommit, .TransactionAbort => {
+                payload = .{ .transaction = .{ .handle = self.playerHandle(data.player), .transaction_id = data.transaction_id, .committed = if (data.committed) 1 else 0, .reserved = 0 } };
+                payload_ptr = @ptrCast(&payload.transaction);
+                payload_size = meta.payload_size;
+            },
+            .EnchantmentApply => {
+                payload = .{ .enchant = .{
+                    .item_handle = self.itemHandle(@ptrCast(data.stack)),
+                    .actor_runtime = if (data.actor) |actor| actor.entity.runtime_id else 0,
+                    .enchantment_id = data.definition.id,
+                    .previous_level = data.previous_level orelse 0,
+                    .level = data.level,
+                    .source = @intFromEnum(data.source),
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.enchant);
+                payload_size = meta.payload_size;
+            },
+            .EnchantmentRemove => {
+                payload = .{ .enchant = .{
+                    .item_handle = self.itemHandle(@ptrCast(data.stack)),
+                    .actor_runtime = if (data.actor) |actor| actor.entity.runtime_id else 0,
+                    .enchantment_id = if (data.definition) |definition| definition.id else data.definition_id,
+                    .previous_level = data.previous_level,
+                    .level = 0,
+                    .source = @intFromEnum(data.source),
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.enchant);
+                payload_size = meta.payload_size;
+            },
+            .EntitySpawn => {
+                payload = .{ .entity_spawn = .{ .runtime_id = data.runtime_id, .reserved = 0 } };
+                payload_ptr = @ptrCast(&payload.entity_spawn);
+                payload_size = meta.payload_size;
+            },
+            .EntityDespawn => {
+                payload = .{ .entity_despawn = .{ .runtime_id = data.runtime_id, .cause = @intFromEnum(data.cause), .reserved = 0 } };
+                payload_ptr = @ptrCast(&payload.entity_despawn);
+                payload_size = meta.payload_size;
+            },
+            .EntityDamage => {
+                payload = .{ .entity_damage = .{
+                    .target_runtime = data.target_runtime,
+                    .source_runtime = data.source_runtime orelse 0,
+                    .amount = data.amount,
+                    .cause = @intFromEnum(data.cause),
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.entity_damage);
+                payload_size = meta.payload_size;
+            },
+            .EntityDeath => {
+                payload = .{ .entity_death = .{
+                    .runtime_id = data.runtime_id,
+                    .killer_runtime = data.killer_runtime orelse 0,
+                    .x = data.position.x,
+                    .y = data.position.y,
+                    .z = data.position.z,
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.entity_death);
+                payload_size = meta.payload_size;
+            },
+            .EntityInteract => {
+                payload = .{ .entity_interact = .{
+                    .target_runtime = data.target_runtime,
+                    .player_runtime = data.player.entity.runtime_id,
+                    .action = @intFromEnum(data.action),
+                    .reserved = 0,
+                } };
+                payload_ptr = @ptrCast(&payload.entity_interact);
+                payload_size = meta.payload_size;
+            },
         }
+
+        defer if (builtin.mode == .Debug and payload_ptr != null) @memset(@as([*]u8, @ptrCast(&payload))[0..payload_size], 0xDD);
 
         const view = abi.EventView{
             .data = payload_ptr,
@@ -990,14 +1170,47 @@ pub const PluginRuntime = struct {
             if (!subscription.active or subscription.pending) continue;
             if (subscription.slot) |slot| slot.events_dispatched +%= 1;
             subscription.callback(subscription.userdata, &view);
+            if (context.phase == .pre and (meta.flags & abi.event_flag_mutable) != 0) {
+                switch (event) {
+                    .PlayerChat => self.applyChatWriteBack(data, &payload.player_chat),
+                    .PlayerMove => {
+                        data.to.x = payload.player_move.to_x;
+                        data.to.y = payload.player_move.to_y;
+                        data.to.z = payload.player_move.to_z;
+                    },
+                    .Damage => data.amount = payload.damage.amount,
+                    .EntityCombust => data.duration = payload.entity_combust.duration,
+                    .EnchantmentApply => data.level = payload.enchant.level,
+                    .EntityDamage => data.amount = payload.entity_damage.amount,
+                    else => {},
+                }
+            }
             if (result != @intFromEnum(abi.EventResult.continue_) and (meta.flags & abi.event_flag_cancelable) != 0) return .cancel;
         }
         return .continue_;
     }
 
+    // text.zig frees owned_message with network.allocator, which is the same allocator the runtime holds.
+    fn applyChatWriteBack(self: *PluginRuntime, data: *Events.types.PlayerChatEvent, payload: *abi.PlayerChatEvent) void {
+        const text = payload.message.slice();
+        if (text.ptr == data.message.ptr and text.len == data.message.len) return;
+        const copy = self.allocator.dupe(u8, text) catch return;
+        if (data.owned_message) |previous| self.allocator.free(previous);
+        data.message = copy;
+        data.owned_message = copy;
+        payload.message = .{ .data = copy.ptr, .length = copy.len };
+    }
+
     fn playerHandle(self: *PluginRuntime, player: *Player) u64 {
         if (self.handles.handleFor(.player, @intFromPtr(player))) |handle| return handle;
         return self.handles.put(.player, @intFromPtr(player), 0, &self.handles.runtime_head) catch 0;
+    }
+
+    // Item handles are address-keyed and runtime-owned: ItemStack has no destruction hook in this
+    // phase, so an address reused by a new stack resolves to that stack until the runtime exits.
+    fn itemHandle(self: *PluginRuntime, item: *const anyopaque) u64 {
+        if (self.handles.handleFor(.item, @intFromPtr(item))) |handle| return handle;
+        return self.handles.put(.item, @intFromPtr(item), 0, &self.handles.runtime_head) catch 0;
     }
 
     const InterfaceSpec = struct {
@@ -1278,13 +1491,20 @@ pub const PluginRuntime = struct {
             @intFromEnum(abi.EventId.transaction_prepare) => .TransactionPrepare,
             @intFromEnum(abi.EventId.transaction_commit) => .TransactionCommit,
             @intFromEnum(abi.EventId.transaction_abort) => .TransactionAbort,
+            @intFromEnum(abi.EventId.entity_combust) => .EntityCombust,
+            @intFromEnum(abi.EventId.enchantment_apply) => .EnchantmentApply,
+            @intFromEnum(abi.EventId.enchantment_remove) => .EnchantmentRemove,
+            @intFromEnum(abi.EventId.entity_spawn) => .EntitySpawn,
+            @intFromEnum(abi.EventId.entity_despawn) => .EntityDespawn,
+            @intFromEnum(abi.EventId.entity_damage) => .EntityDamage,
+            @intFromEnum(abi.EventId.entity_death) => .EntityDeath,
+            @intFromEnum(abi.EventId.entity_interact) => .EntityInteract,
             else => null,
         };
     }
 
     fn externalEventId(event: Events.Event) ?abi.EventId {
         return switch (event) {
-            .EntityCombust, .EnchantmentApply, .EnchantmentRemove, .EntitySpawn, .EntityDespawn, .EntityDamage, .EntityDeath, .EntityInteract => null,
             .ServerStart => .server_start,
             .ServerShutdown => .server_shutdown,
             .ServerTick => .server_tick,
@@ -1302,6 +1522,14 @@ pub const PluginRuntime = struct {
             .TransactionPrepare => .transaction_prepare,
             .TransactionCommit => .transaction_commit,
             .TransactionAbort => .transaction_abort,
+            .EntityCombust => .entity_combust,
+            .EnchantmentApply => .enchantment_apply,
+            .EnchantmentRemove => .enchantment_remove,
+            .EntitySpawn => .entity_spawn,
+            .EntityDespawn => .entity_despawn,
+            .EntityDamage => .entity_damage,
+            .EntityDeath => .entity_death,
+            .EntityInteract => .entity_interact,
         };
     }
 
@@ -1385,37 +1613,37 @@ pub const PluginRuntime = struct {
         slot.scope_len = @intCast(length);
     }
 
+    // The low byte of flags is the version; the upper bits are reserved and rejected instead of truncated.
     fn schemaOf(context: ?*anyopaque, name: abi.StringView, flags: u32, out_schema: ?*u32) callconv(.c) i32 {
         const slot = slotFrom(context) orelse return abi.result_invalid_argument;
         const self = slot.runtime;
         const output = out_schema orelse return abi.result_invalid_argument;
         const text = name.slice();
         if (text.len == 0 or text.len > 96) return abi.result_invalid_argument;
-        for (self.custom_schemas.items) |schema| {
-            if (schema.name) |existing| {
-                if (std.mem.eql(u8, existing, text)) {
-                    output.* = schema.schema;
-                    return abi.result_ok;
-                }
+        if ((flags & ~@as(u32, 0xff)) != 0) return abi.result_invalid_argument;
+        const version: u8 = if ((flags & 0xff) == 0) 1 else @truncate(flags);
+        for (self.custom_schemas.items) |*schema| {
+            if (!schema.live) continue;
+            const existing = schema.name orelse continue;
+            if (schema.version != version or !std.mem.eql(u8, existing, text)) continue;
+            if (!schema.hasOwner(slot.plugin_id)) {
+                if (schema.owner_len == schema.owners.len) return abi.result_limit;
+                schema.addOwner(slot.plugin_id);
+                schema.refs += 1;
             }
+            output.* = schema.schema;
+            return abi.result_ok;
         }
-        var slot_index: ?usize = null;
-        for (self.custom_schemas.items, 0..) |schema, index| {
-            if (schema.name == null) {
-                slot_index = index;
-                break;
-            }
-        }
-        const index = slot_index orelse blk: {
-            if (self.custom_schemas.items.len >= abi.max_custom_events) return abi.result_limit;
-            const new_index = self.custom_schemas.items.len;
-            self.custom_schemas.append(self.allocator, .{ .name = null, .schema = 0, .plugin_id = 0 }) catch return abi.result_out_of_memory;
-            break :blk new_index;
-        };
+        if (self.custom_schemas.items.len >= abi.max_custom_events) return abi.result_limit;
         const copy = self.allocator.dupe(u8, text) catch return abi.result_out_of_memory;
-        const version: u32 = if ((flags & 0xff) == 0) 1 else flags & 0xff;
+        const index = self.custom_schemas.items.len;
         const schema = ((abi.event_custom_base + @as(u32, @intCast(index))) << 8) | version;
-        self.custom_schemas.items[index] = .{ .name = copy, .schema = schema, .plugin_id = slot.plugin_id };
+        var entry = CustomSchema{ .name = copy, .schema = schema, .version = version, .live = true, .refs = 1 };
+        entry.addOwner(slot.plugin_id);
+        self.custom_schemas.append(self.allocator, entry) catch {
+            self.allocator.free(copy);
+            return abi.result_out_of_memory;
+        };
         output.* = schema;
         return abi.result_ok;
     }
@@ -1425,14 +1653,45 @@ pub const PluginRuntime = struct {
         if (event_id < abi.event_custom_base) return false;
         const index = event_id - abi.event_custom_base;
         if (index >= self.custom_schemas.items.len) return false;
-        return self.custom_schemas.items[index].name != null;
+        const entry = &self.custom_schemas.items[index];
+        if (!entry.live or entry.schema != schema) return false;
+        return entry.version == @as(u8, @truncate(schema));
     }
 
     fn releaseSchemas(self: *PluginRuntime, plugin_id: u32) void {
-        for (self.custom_schemas.items) |*schema| {
-            if (schema.plugin_id != plugin_id) continue;
-            if (schema.name) |name| self.allocator.free(name);
-            schema.* = .{ .name = null, .schema = 0, .plugin_id = 0 };
+        for (self.custom_schemas.items, 0..) |*schema, index| {
+            if (!schema.live or !schema.hasOwner(plugin_id)) continue;
+            schema.removeOwner(plugin_id);
+            schema.refs -= 1;
+            if (schema.refs > 0) continue;
+            const schema_id = schema.schema;
+            self.allocator.free(schema.name.?);
+            schema.name = null;
+            schema.live = false;
+            self.retireCustom(index, schema_id);
+        }
+    }
+
+    fn retireCustom(self: *PluginRuntime, index: usize, schema: u32) void {
+        const event_index = event_count + index;
+        for (0..3) |phase| {
+            var changed = false;
+            for (self.buckets[event_index][phase].items) |*subscription| {
+                if (!subscription.active) continue;
+                subscription.active = false;
+                self.dead[event_index][phase] += 1;
+                self.dead_total += 1;
+                if (self.active[event_index][phase] > 0) self.active[event_index][phase] -= 1;
+                if (self.depth > 0 and self.active[event_index][phase] == 0) self.markRetire(event_index, phase);
+                changed = true;
+            }
+            if (changed and self.depth == 0) self.compactBucket(event_index, phase, false);
+        }
+        const ring = self.deferred_ring orelse return;
+        for (ring) |*entry| {
+            if (entry.schema != schema) continue;
+            entry.schema = 0;
+            entry.size = 0;
         }
     }
 
@@ -1447,7 +1706,7 @@ pub const PluginRuntime = struct {
         const slot = slotFrom(context) orelse return abi.result_invalid_argument;
         const self = slot.runtime;
         if (!self.schemaLive(schema)) return abi.result_not_found;
-        if (payload_size > abi.custom_payload_max) return abi.result_limit;
+        if (payload_size > abi.custom_payload_max) return abi.result_invalid_argument;
         if (payload_size > 0 and payload == null) return abi.result_invalid_argument;
         const ring = self.ensureDeferredRing() catch return abi.result_out_of_memory;
         if (self.deferred_len >= deferred_capacity) return abi.result_busy;
@@ -1465,7 +1724,6 @@ pub const PluginRuntime = struct {
         const slot = slotFrom(context) orelse return abi.result_invalid_argument;
         const self = slot.runtime;
         if (!self.schemaLive(schema)) return abi.result_not_found;
-        if (payload_size > abi.custom_payload_max) return abi.result_limit;
         if (payload_size > 0 and payload == null) return abi.result_invalid_argument;
         if (self.depth >= max_emit_depth) return abi.result_busy;
         self.dispatchCustom(schema, payload, payload_size, @truncate(flags));
@@ -1520,11 +1778,12 @@ pub const PluginRuntime = struct {
         const pending = self.deferred_len;
         var processed: usize = 0;
         while (processed < pending) : (processed += 1) {
-            const entry = ring[self.deferred_head];
+            var entry = ring[self.deferred_head];
             self.deferred_head = (self.deferred_head + 1) % deferred_capacity;
             self.deferred_len -= 1;
             const payload: ?*const anyopaque = if (entry.size == 0) null else @ptrCast(&entry.payload);
-            self.dispatchCustom(entry.schema, payload, entry.size, entry.flags);
+            if (self.schemaLive(entry.schema)) self.dispatchCustom(entry.schema, payload, entry.size, entry.flags);
+            if (builtin.mode == .Debug) @memset(entry.payload[0..entry.size], 0xDD);
         }
     }
 
@@ -1876,6 +2135,8 @@ const test_scope = struct {
     pub const private_pluginruntime_networkBroadcast = test_owner.PluginRuntime.networkBroadcast;
     pub const private_pluginruntime_networkSend = test_owner.PluginRuntime.networkSend;
     pub const private_pluginruntime_sendPriority = test_owner.PluginRuntime.sendPriority;
+    pub const private_pluginruntime_dispatch = test_owner.PluginRuntime.dispatch;
+    pub const private_pluginruntime_itemHandle = test_owner.PluginRuntime.itemHandle;
 };
 
 test "core and scheduler interfaces are independently discoverable" {
@@ -1940,6 +2201,86 @@ test "core subscription from a custom callback installs the bridge at depth zero
 
 test "core unsubscribe from a custom callback retires the bridge at depth zero" {
     try @import("runtime_test.zig").Suite(test_scope).case_015();
+}
+
+test "all 25 event schemas flags and payload sizes are stable" {
+    try @import("runtime_test.zig").Suite(test_scope).case_016();
+}
+
+test "all 25 event payloads expose the expected fields" {
+    try @import("runtime_test.zig").Suite(test_scope).case_017();
+}
+
+test "custom deferred payloads cap at 56 bytes while immediate payloads stay borrowed" {
+    try @import("runtime_test.zig").Suite(test_scope).case_018();
+}
+
+test "custom schema identity includes the version" {
+    try @import("runtime_test.zig").Suite(test_scope).case_019();
+}
+
+test "player move does not materialize handles" {
+    try @import("runtime_test.zig").Suite(test_scope).case_020();
+}
+
+test "hot event payloads do not allocate" {
+    try @import("runtime_test.zig").Suite(test_scope).case_021();
+}
+
+test "a mutated chat message is copied back to the core" {
+    try @import("runtime_test.zig").Suite(test_scope).case_022();
+}
+
+test "a mutated move target reaches the core only from pre" {
+    try @import("runtime_test.zig").Suite(test_scope).case_023();
+}
+
+test "a mutated damage amount reaches the core" {
+    try @import("runtime_test.zig").Suite(test_scope).case_024();
+}
+
+test "a mutated combust duration reaches the core" {
+    try @import("runtime_test.zig").Suite(test_scope).case_025();
+}
+
+test "a mutated enchantment level reaches the core" {
+    try @import("runtime_test.zig").Suite(test_scope).case_026();
+}
+
+test "a mutated entity damage amount reaches the core" {
+    try @import("runtime_test.zig").Suite(test_scope).case_027();
+}
+
+test "a canceled chat is not forwarded by the text handler" {
+    try @import("runtime_test.zig").Suite(test_scope).case_028();
+}
+
+test "schema versions reject bits above the low byte" {
+    try @import("runtime_test.zig").Suite(test_scope).case_029();
+}
+
+test "a shared custom schema survives the unload of its first owner" {
+    try @import("runtime_test.zig").Suite(test_scope).case_030();
+}
+
+test "item handles stay address-keyed for the runtime lifetime" {
+    try @import("runtime_test.zig").Suite(test_scope).case_031();
+}
+
+test "deferred custom payloads are eight byte aligned" {
+    try @import("runtime_test.zig").Suite(test_scope).case_032();
+}
+
+test "unloading the last owner drops deferred emits and subscriptions for its schema" {
+    try @import("runtime_test.zig").Suite(test_scope).case_033();
+}
+
+test "a freed custom schema stays tombstoned after the name is registered again" {
+    try @import("runtime_test.zig").Suite(test_scope).case_034();
+}
+
+test "a ninth owner is rejected at the fixed owner capacity" {
+    try @import("runtime_test.zig").Suite(test_scope).case_035();
 }
 
 test "dispatch with zero subscribers installs no bridge" {

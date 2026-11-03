@@ -60,6 +60,8 @@ pub fn Suite(comptime scope: type) type {
         const private_pluginruntime_networkBroadcast = scope.private_pluginruntime_networkBroadcast;
         const private_pluginruntime_networkSend = scope.private_pluginruntime_networkSend;
         const private_pluginruntime_sendPriority = scope.private_pluginruntime_sendPriority;
+        const private_pluginruntime_dispatch = scope.private_pluginruntime_dispatch;
+        const private_pluginruntime_itemHandle = scope.private_pluginruntime_itemHandle;
         pub fn case_000() !void {
             var runtime = PluginRuntime.init(std.testing.allocator);
             defer runtime.deinit();
@@ -482,20 +484,22 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.cancel, &probe, &first));
             try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.observe, &probe, &second));
 
-            var chat = Events.types.PlayerChatEvent{ .player = undefined, .message = "hello" };
-            try std.testing.expect(events.emit(.PlayerChat, &chat));
-            try std.testing.expectEqual(@as(usize, 2), probe.len);
+            var player: @import("../player/player.zig").Player = undefined;
+            player.entity.runtime_id = 7;
+            var chat = Events.types.PlayerChatEvent{ .player = &player, .message = "hello" };
+            try std.testing.expect(!events.emit(.PlayerChat, &chat));
+            try std.testing.expectEqual(@as(usize, 1), probe.len);
             try std.testing.expectEqual(@as(u8, 1), probe.calls[0]);
-            try std.testing.expectEqual(@as(u8, 2), probe.calls[1]);
 
             probe.len = 0;
             try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.cancel, &probe, &first));
             try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.observe, &probe, &second));
 
             var tick = Events.types.ServerTickEvent{ .tick = 1 };
-            try std.testing.expect(!events.emit(.ServerTick, &tick));
-            try std.testing.expectEqual(@as(usize, 1), probe.len);
+            try std.testing.expect(events.emit(.ServerTick, &tick));
+            try std.testing.expectEqual(@as(usize, 2), probe.len);
             try std.testing.expectEqual(@as(u8, 1), probe.calls[0]);
+            try std.testing.expectEqual(@as(u8, 2), probe.calls[1]);
         }
 
         pub fn case_011() !void {
@@ -774,6 +778,735 @@ pub fn Suite(comptime scope: type) type {
             var start = Events.types.ServerStartEvent{};
             _ = events.emit(.ServerStart, &start);
             try std.testing.expectEqual(@as(u32, 0), probe.core_calls);
+        }
+
+        pub fn case_016() !void {
+            const sizes = [_]usize{ 0, 0, 8, 16, 16, 32, 32, 40, 32, 32, 32, 16, 16, 16, 32, 32, 32, 24, 24, 24, 16, 16, 32, 32, 24 };
+            const cancelable = [_]bool{ false, false, false, true, false, true, true, true, true, true, true, false, false, false, false, false, false, true, true, true, false, false, true, false, false };
+            const mutable = [_]bool{ false, false, false, false, false, true, false, true, true, false, false, false, false, false, false, false, false, true, true, false, false, false, true, false, false };
+            try std.testing.expectEqual(@as(usize, 25), std.meta.fields(abi.EventId).len);
+            for (0..25) |id| {
+                const event: abi.EventId = @enumFromInt(id);
+                const meta = abi.eventMeta(event);
+                try std.testing.expectEqual(@as(u32, @intCast(id)), meta.external_id);
+                try std.testing.expectEqual((@as(u32, @intCast(id)) << 8) | @as(u32, if (id < 2) 0 else 1), meta.schema);
+                try std.testing.expectEqual(sizes[id], meta.payload_size);
+                const expected_flags = abi.event_flag_callback_only | abi.event_flag_borrowed | (if (cancelable[id]) abi.event_flag_cancelable else 0) | (if (mutable[id]) abi.event_flag_mutable else 0);
+                try std.testing.expectEqual(expected_flags, meta.flags);
+                try std.testing.expectEqual(id < 2, meta.payload == .none);
+            }
+            try std.testing.expect(@sizeOf(abi.EventPayload) <= 64);
+            try std.testing.expect(@sizeOf(abi.EventView) == 40);
+        }
+
+        pub fn case_017() !void {
+            const Player = @import("../player/player.zig").Player;
+            const Entity = @import("../entity/entity.zig").Entity;
+            const EntityId = @import("../ecs/entity_id.zig").EntityId;
+            const BlockPermutation = @import("../world/block/block_permutation.zig").BlockPermutation;
+            const ItemStack = @import("../items/item_stack.zig").ItemStack;
+            const Enchantment = @import("../items/enchantments/enchantment.zig").Enchantment;
+
+            const Capture = struct {
+                seen: [25]bool = std.mem.zeroes([25]bool),
+                sizes: [25]usize = std.mem.zeroes([25]usize),
+                schemas: [25]u32 = std.mem.zeroes([25]u32),
+                payload: [25][64]u8 align(8) = undefined,
+
+                fn callback(userdata: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const self: *@This() = @ptrCast(@alignCast(userdata.?));
+                    const id = view.event_id;
+                    if (id >= 25) return;
+                    self.seen[id] = true;
+                    self.sizes[id] = view.data_size;
+                    self.schemas[id] = view.schema;
+                    if (view.data_size > 0) @memcpy(self.payload[id][0..view.data_size], @as([*]const u8, @ptrCast(view.data.?))[0..view.data_size]);
+                }
+            };
+
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 16, .name = "payloads", .host = undefined, .state = .running };
+            var capture = Capture{};
+            var subscriptions: [25]u64 = undefined;
+            for (0..25) |id| {
+                try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intCast(id), abi.event_phase_pre, 0, Capture.callback, &capture, &subscriptions[id]));
+            }
+
+            var player: Player = undefined;
+            player.entity.runtime_id = 7;
+            player.on_ground = true;
+            var entity: Entity = undefined;
+            entity.runtime_id = 9;
+            entity.position = .{ .x = 1, .y = 2, .z = 3 };
+            var instigator: Entity = undefined;
+            instigator.runtime_id = 10;
+            var permutation: BlockPermutation = undefined;
+            permutation.network_id = 42;
+            var stack: ItemStack = undefined;
+            var enchantment: Enchantment = undefined;
+            enchantment.id = 77;
+            const entity_id: EntityId = undefined;
+
+            var start = Events.types.ServerStartEvent{};
+            var shutdown = Events.types.ServerShutdownEvent{};
+            var tick = Events.types.ServerTickEvent{ .tick = 11 };
+            var join = Events.types.PlayerJoinEvent{ .player = &player };
+            var disconnect = Events.types.PlayerDisconnectEvent{ .player = &player };
+            var chat = Events.types.PlayerChatEvent{ .player = &player, .message = "hi" };
+            var item_use = Events.types.ItemUseEvent{ .player = &player, .identifier = "minecraft:stone" };
+            var move = Events.types.PlayerMoveEvent{ .player = &player, .from = .{ .x = 1, .y = 2, .z = 3 }, .to = .{ .x = 4, .y = 5, .z = 6 } };
+            var damage = Events.types.DamageEvent{ .attacker = null, .victim = &entity, .amount = 3.5, .cause = .fire };
+            var place = Events.types.BlockPlaceEvent{ .player = &player, .position = .{ .x = 1, .y = 2, .z = 3 }, .permutation = &permutation };
+            var block_break = Events.types.BlockBreakEvent{ .player = &player, .position = .{ .x = 4, .y = 5, .z = 6 }, .permutation = &permutation };
+            var open = Events.types.InventoryOpenEvent{ .player = &player, .container_id = 4 };
+            var click = Events.types.InventoryClickEvent{ .player = &player, .slot = 5, .button = 2 };
+            var close = Events.types.InventoryCloseEvent{ .player = &player, .container_id = 4 };
+            var transaction = Events.types.TransactionEvent{ .transaction_id = [_]u8{1} ** 16, .player = &player, .committed = true };
+            var combust = Events.types.EntityCombustEvent{ .entity = &entity, .duration = 100, .instigator = &instigator, .source = .lava };
+            var apply = Events.types.EnchantmentApplyEvent{ .stack = &stack, .definition = &enchantment, .previous_level = 1, .level = 2, .source = .plugin, .actor = &player };
+            var remove = Events.types.EnchantmentRemoveEvent{ .stack = &stack, .definition = null, .definition_id = 88, .previous_level = 2, .source = .plugin, .actor = &player };
+            var spawn = Events.types.EntitySpawnEvent{ .id = entity_id, .runtime_id = 12 };
+            var despawn = Events.types.EntityDespawnEvent{ .id = entity_id, .runtime_id = 12, .cause = .expired };
+            var entity_damage = Events.types.EntityDamageEvent{ .target = entity_id, .target_runtime = 9, .amount = 4.5, .source = null, .source_runtime = null, .cause = .magic };
+            var death = Events.types.EntityDeathEvent{ .id = entity_id, .runtime_id = 9, .killer_runtime = 10, .position = .{ .x = 1, .y = 2, .z = 3 } };
+            var interact = Events.types.EntityInteractEvent{ .target = entity_id, .target_runtime = 9, .player = &player, .action = @enumFromInt(0) };
+
+            var context = Events.EventContext{ .event = .ServerStart, .phase = .pre };
+            _ = private_pluginruntime_dispatch(&runtime, .ServerStart, &context, &start);
+            _ = private_pluginruntime_dispatch(&runtime, .ServerShutdown, &context, &shutdown);
+            _ = private_pluginruntime_dispatch(&runtime, .ServerTick, &context, &tick);
+            _ = private_pluginruntime_dispatch(&runtime, .PlayerJoin, &context, &join);
+            _ = private_pluginruntime_dispatch(&runtime, .PlayerDisconnect, &context, &disconnect);
+            _ = private_pluginruntime_dispatch(&runtime, .PlayerChat, &context, &chat);
+            _ = private_pluginruntime_dispatch(&runtime, .ItemUse, &context, &item_use);
+            _ = private_pluginruntime_dispatch(&runtime, .PlayerMove, &context, &move);
+            _ = private_pluginruntime_dispatch(&runtime, .Damage, &context, &damage);
+            _ = private_pluginruntime_dispatch(&runtime, .BlockPlace, &context, &place);
+            _ = private_pluginruntime_dispatch(&runtime, .BlockBreak, &context, &block_break);
+            _ = private_pluginruntime_dispatch(&runtime, .InventoryOpen, &context, &open);
+            _ = private_pluginruntime_dispatch(&runtime, .InventoryClick, &context, &click);
+            _ = private_pluginruntime_dispatch(&runtime, .InventoryClose, &context, &close);
+            _ = private_pluginruntime_dispatch(&runtime, .TransactionPrepare, &context, &transaction);
+            _ = private_pluginruntime_dispatch(&runtime, .TransactionCommit, &context, &transaction);
+            _ = private_pluginruntime_dispatch(&runtime, .TransactionAbort, &context, &transaction);
+            _ = private_pluginruntime_dispatch(&runtime, .EntityCombust, &context, &combust);
+            _ = private_pluginruntime_dispatch(&runtime, .EnchantmentApply, &context, &apply);
+            _ = private_pluginruntime_dispatch(&runtime, .EnchantmentRemove, &context, &remove);
+            _ = private_pluginruntime_dispatch(&runtime, .EntitySpawn, &context, &spawn);
+            _ = private_pluginruntime_dispatch(&runtime, .EntityDespawn, &context, &despawn);
+            _ = private_pluginruntime_dispatch(&runtime, .EntityDamage, &context, &entity_damage);
+            _ = private_pluginruntime_dispatch(&runtime, .EntityDeath, &context, &death);
+            _ = private_pluginruntime_dispatch(&runtime, .EntityInteract, &context, &interact);
+
+            for (0..25) |id| {
+                try std.testing.expect(capture.seen[id]);
+                try std.testing.expectEqual((@as(u32, @intCast(id)) << 8) | @as(u32, if (id < 2) 0 else 1), capture.schemas[id]);
+            }
+            try std.testing.expectEqual(@as(usize, 8), capture.sizes[2]);
+            try std.testing.expectEqual(@as(usize, 40), capture.sizes[7]);
+            try std.testing.expectEqual(@as(usize, 16), capture.sizes[20]);
+            try std.testing.expectEqual(@as(usize, 24), capture.sizes[24]);
+            try std.testing.expectEqual(@as(u64, 11), @as(*const abi.ServerTickEvent, @ptrCast(&capture.payload[2])).tick);
+            const join_payload: *const abi.PlayerJoinEvent = @ptrCast(&capture.payload[3]);
+            try std.testing.expect(join_payload.handle != 0);
+            try std.testing.expectEqual(@as(i64, 7), join_payload.runtime_id);
+            const disconnect_payload: *const abi.PlayerRefEvent = @ptrCast(&capture.payload[4]);
+            try std.testing.expectEqual(@as(i64, 7), disconnect_payload.runtime_id);
+            const chat_payload: *const abi.PlayerChatEvent = @ptrCast(&capture.payload[5]);
+            try std.testing.expectEqualStrings("hi", chat_payload.message.slice());
+            const use_payload: *const abi.ItemUseEvent = @ptrCast(&capture.payload[6]);
+            try std.testing.expectEqualStrings("minecraft:stone", use_payload.identifier.slice());
+            const move_payload: *const abi.PlayerMoveEvent = @ptrCast(&capture.payload[7]);
+            try std.testing.expectEqual(@as(f32, 1), move_payload.from_x);
+            try std.testing.expectEqual(@as(f32, 6), move_payload.to_z);
+            try std.testing.expectEqual(@as(u32, 1), move_payload.on_ground);
+            const damage_payload: *const abi.DamageEvent = @ptrCast(&capture.payload[8]);
+            try std.testing.expectEqual(@as(i64, 9), damage_payload.victim_runtime);
+            try std.testing.expectEqual(@as(f32, 3.5), damage_payload.amount);
+            const place_payload: *const abi.BlockPlaceEvent = @ptrCast(&capture.payload[9]);
+            try std.testing.expectEqual(@as(i32, 42), place_payload.network_id);
+            const break_payload: *const abi.BlockBreakEvent = @ptrCast(&capture.payload[10]);
+            try std.testing.expectEqual(@as(i32, 6), break_payload.z);
+            const open_payload: *const abi.InventoryEvent = @ptrCast(&capture.payload[11]);
+            try std.testing.expectEqual(@as(u32, 4), open_payload.container_id);
+            const click_payload: *const abi.InventoryClickEvent = @ptrCast(&capture.payload[12]);
+            try std.testing.expectEqual(@as(u16, 5), click_payload.slot);
+            try std.testing.expectEqual(@as(u8, 2), click_payload.button);
+            const transaction_payload: *const abi.TransactionEvent = @ptrCast(&capture.payload[14]);
+            try std.testing.expectEqual(@as(u32, 1), transaction_payload.committed);
+            const combust_payload: *const abi.EntityCombustEvent = @ptrCast(&capture.payload[17]);
+            try std.testing.expectEqual(@as(i32, 100), combust_payload.duration);
+            try std.testing.expectEqual(@as(i64, 10), combust_payload.instigator_runtime);
+            const apply_payload: *const abi.EnchantEvent = @ptrCast(&capture.payload[18]);
+            try std.testing.expect(apply_payload.item_handle != 0);
+            try std.testing.expectEqual(@as(u32, 77), apply_payload.enchantment_id);
+            try std.testing.expectEqual(@as(u8, 2), apply_payload.level);
+            const remove_payload: *const abi.EnchantEvent = @ptrCast(&capture.payload[19]);
+            try std.testing.expectEqual(@as(u32, 88), remove_payload.enchantment_id);
+            try std.testing.expectEqual(@as(u8, 0), remove_payload.level);
+            const spawn_payload: *const abi.EntitySpawnEvent = @ptrCast(&capture.payload[20]);
+            try std.testing.expectEqual(@as(i64, 12), spawn_payload.runtime_id);
+            const despawn_payload: *const abi.EntityDespawnEvent = @ptrCast(&capture.payload[21]);
+            try std.testing.expectEqual(@as(u32, 1), despawn_payload.cause);
+            const entity_damage_payload: *const abi.EntityDamageEvent = @ptrCast(&capture.payload[22]);
+            try std.testing.expectEqual(@as(i64, 9), entity_damage_payload.target_runtime);
+            const death_payload: *const abi.EntityDeathEvent = @ptrCast(&capture.payload[23]);
+            try std.testing.expectEqual(@as(i64, 10), death_payload.killer_runtime);
+            const interact_payload: *const abi.EntityInteractEvent = @ptrCast(&capture.payload[24]);
+            try std.testing.expectEqual(@as(i64, 7), interact_payload.player_runtime);
+        }
+
+        pub fn case_018() !void {
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 17, .name = "custom-limits", .host = undefined, .state = .running };
+            const name = "phase04.custom.limits";
+            var schema: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 0, &schema));
+
+            const Capture = struct {
+                calls: u32 = 0,
+                size: usize = 0,
+                order_ok: bool = true,
+                expected: u16 = 1,
+
+                fn callback(userdata: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const self: *@This() = @ptrCast(@alignCast(userdata.?));
+                    self.calls += 1;
+                    self.size = view.data_size;
+                    if (view.data_size != @sizeOf(u16)) return;
+                    const value: *const u16 = @ptrCast(@alignCast(view.data.?));
+                    if (value.* != self.expected) self.order_ok = false;
+                    self.expected = value.* + 1;
+                }
+            };
+            var capture = Capture{};
+            var subscription: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), schema >> 8, abi.event_phase_pre, 0, Capture.callback, &capture, &subscription));
+
+            var payload: [57]u8 = @splat(0xAB);
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.events_api.emit(@ptrCast(&slot), schema, &payload, payload.len, 0));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(&slot), schema, &payload, abi.custom_payload_max, 0));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit_immediate(@ptrCast(&slot), schema, &payload, payload.len, 0));
+            try std.testing.expectEqual(@as(u32, 1), capture.calls);
+            try std.testing.expectEqual(@as(usize, 57), capture.size);
+
+            var index: usize = 1;
+            while (index < 1024) : (index += 1) {
+                try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(&slot), schema, null, 0, 0));
+            }
+            try std.testing.expectEqual(abi.result_busy, runtime.events_api.emit(@ptrCast(&slot), schema, null, 0, 0));
+            runtime.endTick();
+            try std.testing.expectEqual(@as(u32, 1025), capture.calls);
+
+            capture.expected = 1;
+            for (1..5) |value| {
+                var ordered: u16 = @intCast(value);
+                try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(&slot), schema, &ordered, @sizeOf(u16), 0));
+            }
+            runtime.endTick();
+            try std.testing.expect(capture.order_ok);
+            try std.testing.expectEqual(@as(u16, 5), capture.expected);
+        }
+
+        pub fn case_019() !void {
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 18, .name = "schema-version", .host = undefined, .state = .running };
+            const name = "phase04.custom.versioned";
+            var first: u32 = 0;
+            var again: u32 = 0;
+            var second: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 1, &first));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 1, &again));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 2, &second));
+            try std.testing.expectEqual(first, again);
+            try std.testing.expect(first != second);
+            try std.testing.expectEqual(@as(u32, 1), first & 0xff);
+            try std.testing.expectEqual(@as(u32, 2), second & 0xff);
+        }
+
+        pub fn case_020() !void {
+            const Player = @import("../player/player.zig").Player;
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 19, .name = "move-handles", .host = undefined, .state = .running };
+
+            const Callback = struct {
+                fn call(_: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {}
+            };
+            var subscription: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_move), abi.event_phase_pre, 0, Callback.call, null, &subscription));
+            var player: Player = undefined;
+            player.entity.runtime_id = 7;
+            player.on_ground = true;
+            var move = Events.types.PlayerMoveEvent{ .player = &player, .from = .{ .x = 0, .y = 0, .z = 0 }, .to = .{ .x = 1, .y = 0, .z = 0 } };
+            var context = Events.EventContext{ .event = .PlayerMove, .phase = .pre };
+            const before = runtime.handles.activeCount();
+            _ = private_pluginruntime_dispatch(&runtime, .PlayerMove, &context, &move);
+            try std.testing.expectEqual(before, runtime.handles.activeCount());
+        }
+
+        pub fn case_021() !void {
+            const Player = @import("../player/player.zig").Player;
+            const Entity = @import("../entity/entity.zig").Entity;
+            var counted = CountingAllocator.init(std.testing.allocator);
+            defer counted.deinit();
+            var events = Events.Events.init(counted.allocator());
+            defer events.deinit();
+            var runtime = PluginRuntime.init(counted.allocator());
+            defer {
+                counted.deny_allocations = false;
+                runtime.deinit();
+            }
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 20, .name = "hot-payloads", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                calls: u32 = 0,
+
+                fn callback(userdata: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    probe.calls += 1;
+                }
+            };
+            var probe = Probe{};
+            const ids = [_]u32{ @intFromEnum(abi.EventId.player_move), @intFromEnum(abi.EventId.damage), @intFromEnum(abi.EventId.entity_damage), @intFromEnum(abi.EventId.server_tick) };
+            var subscriptions: [ids.len]u64 = undefined;
+            for (ids, 0..) |id, index| {
+                try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), id, abi.event_phase_pre, 0, Probe.callback, &probe, &subscriptions[index]));
+            }
+
+            var player: Player = undefined;
+            player.entity.runtime_id = 7;
+            player.on_ground = true;
+            var entity: Entity = undefined;
+            entity.runtime_id = 9;
+            var move = Events.types.PlayerMoveEvent{ .player = &player, .from = .{ .x = 0, .y = 0, .z = 0 }, .to = .{ .x = 1, .y = 0, .z = 0 } };
+            var damage = Events.types.DamageEvent{ .attacker = null, .victim = &entity, .amount = 1, .cause = .fall };
+            var entity_damage = Events.types.EntityDamageEvent{ .target = undefined, .target_runtime = 9, .amount = 1, .source = null, .source_runtime = null, .cause = .fall };
+            var tick = Events.types.ServerTickEvent{ .tick = 1 };
+            var context = Events.EventContext{ .event = .ServerTick, .phase = .pre };
+
+            counted.allocations = 0;
+            counted.deny_allocations = true;
+            var iteration: usize = 0;
+            while (iteration < 1000) : (iteration += 1) {
+                _ = private_pluginruntime_dispatch(&runtime, .PlayerMove, &context, &move);
+                _ = private_pluginruntime_dispatch(&runtime, .Damage, &context, &damage);
+                _ = private_pluginruntime_dispatch(&runtime, .EntityDamage, &context, &entity_damage);
+                _ = private_pluginruntime_dispatch(&runtime, .ServerTick, &context, &tick);
+            }
+            counted.deny_allocations = false;
+            try std.testing.expectEqual(@as(u32, 4000), probe.calls);
+            try std.testing.expectEqual(@as(usize, 0), counted.allocations);
+        }
+
+        pub fn case_022() !void {
+            const Player = @import("../player/player.zig").Player;
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 21, .name = "mutate-chat", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const chat: *abi.PlayerChatEvent = @ptrCast(@alignCast(@constCast(view.data.?)));
+                    chat.message = .{ .data = "replaced".ptr, .length = "replaced".len };
+                }
+            };
+            var sub: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+
+            var player: Player = undefined;
+            player.entity.runtime_id = 7;
+            var chat = Events.types.PlayerChatEvent{ .player = &player, .message = "original" };
+            try std.testing.expect(events.emit(.PlayerChat, &chat));
+            try std.testing.expectEqualStrings("replaced", chat.message);
+            try std.testing.expect(chat.owned_message != null);
+            std.testing.allocator.free(chat.owned_message.?);
+        }
+
+        pub fn case_023() !void {
+            const Player = @import("../player/player.zig").Player;
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 22, .name = "mutate-move", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const move: *abi.PlayerMoveEvent = @ptrCast(@alignCast(@constCast(view.data.?)));
+                    if (view.phase == abi.event_phase_pre) {
+                        move.to_x = 9;
+                        move.to_y = 8;
+                        move.to_z = 7;
+                    } else {
+                        move.to_x = 99;
+                        move.to_y = 99;
+                        move.to_z = 99;
+                    }
+                }
+            };
+            var pre: u64 = 0;
+            var commit: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_move), abi.event_phase_pre, 0, Probe.callback, null, &pre));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_move), abi.event_phase_commit, 0, Probe.callback, null, &commit));
+
+            var player: Player = undefined;
+            player.entity.runtime_id = 7;
+            player.on_ground = true;
+            var move = Events.types.PlayerMoveEvent{ .player = &player, .from = .{ .x = 0, .y = 0, .z = 0 }, .to = .{ .x = 1, .y = 2, .z = 3 } };
+            try std.testing.expect(events.emit(.PlayerMove, &move));
+            try std.testing.expectEqual(@as(f32, 9), move.to.x);
+            try std.testing.expectEqual(@as(f32, 8), move.to.y);
+            try std.testing.expectEqual(@as(f32, 7), move.to.z);
+        }
+
+        pub fn case_024() !void {
+            const Entity = @import("../entity/entity.zig").Entity;
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 23, .name = "mutate-damage", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const damage: *abi.DamageEvent = @ptrCast(@alignCast(@constCast(view.data.?)));
+                    damage.amount = 12.5;
+                }
+            };
+            var sub: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.damage), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+
+            var victim: Entity = undefined;
+            victim.runtime_id = 9;
+            var damage = Events.types.DamageEvent{ .attacker = null, .victim = &victim, .amount = 3, .cause = .fire };
+            try std.testing.expect(events.emit(.Damage, &damage));
+            try std.testing.expectEqual(@as(f32, 12.5), damage.amount);
+        }
+
+        pub fn case_025() !void {
+            const Entity = @import("../entity/entity.zig").Entity;
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 24, .name = "mutate-combust", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const combust: *abi.EntityCombustEvent = @ptrCast(@alignCast(@constCast(view.data.?)));
+                    combust.duration = 7;
+                }
+            };
+            var sub: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.entity_combust), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+
+            var entity: Entity = undefined;
+            entity.runtime_id = 9;
+            var combust = Events.types.EntityCombustEvent{ .entity = &entity, .duration = 100, .instigator = null, .source = .lava };
+            try std.testing.expect(events.emit(.EntityCombust, &combust));
+            try std.testing.expectEqual(@as(i32, 7), combust.duration);
+        }
+
+        pub fn case_026() !void {
+            const ItemStack = @import("../items/item_stack.zig").ItemStack;
+            const Enchantment = @import("../items/enchantments/enchantment.zig").Enchantment;
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 25, .name = "mutate-enchant", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const enchant: *abi.EnchantEvent = @ptrCast(@alignCast(@constCast(view.data.?)));
+                    enchant.level = 5;
+                }
+            };
+            var sub: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.enchantment_apply), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+            try std.testing.expectEqual(@as(u16, 0), abi.eventMeta(.enchantment_remove).flags & abi.event_flag_mutable);
+
+            var stack: ItemStack = undefined;
+            var definition: Enchantment = undefined;
+            definition.id = 3;
+            var apply = Events.types.EnchantmentApplyEvent{ .stack = &stack, .definition = &definition, .previous_level = 1, .level = 2, .source = .plugin, .actor = null };
+            try std.testing.expect(events.emit(.EnchantmentApply, &apply));
+            try std.testing.expectEqual(@as(u8, 5), apply.level);
+        }
+
+        pub fn case_027() !void {
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 26, .name = "mutate-entity-damage", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const damage: *abi.EntityDamageEvent = @ptrCast(@alignCast(@constCast(view.data.?)));
+                    damage.amount = 2.25;
+                }
+            };
+            var sub: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.entity_damage), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+
+            var damage = Events.types.EntityDamageEvent{ .target = undefined, .target_runtime = 9, .amount = 1, .cause = .fall };
+            try std.testing.expect(events.emit(.EntityDamage, &damage));
+            try std.testing.expectEqual(@as(f32, 2.25), damage.amount);
+        }
+
+        pub fn case_028() !void {
+            const Player = @import("../player/player.zig").Player;
+            const text = @import("../network/handlers/text.zig");
+            var events = Events.Events.init(std.testing.allocator);
+            defer events.deinit();
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            runtime.attachEvents(&events);
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 27, .name = "chat-guard", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    view.result.* = @intFromEnum(abi.EventResult.cancel);
+                }
+            };
+            var sub: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+
+            var player: Player = undefined;
+            player.entity.runtime_id = 7;
+            var chat = Events.types.PlayerChatEvent{ .player = &player, .message = "hello" };
+            try std.testing.expect(text.acceptedChat(&events, &chat) == null);
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.unsubscribe(@ptrCast(&slot), sub));
+            try std.testing.expectEqualStrings("hello", text.acceptedChat(&events, &chat).?);
+        }
+
+        pub fn case_029() !void {
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 28, .name = "schema-bounds", .host = undefined, .state = .running };
+            const name = "phase04.custom.bounds";
+            var schema: u32 = 0;
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 0x100, &schema));
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 0x101, &schema));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 0xff, &schema));
+            try std.testing.expectEqual(@as(u32, 0xff), schema & 0xff);
+        }
+
+        pub fn case_030() !void {
+            const allocator = std.testing.allocator;
+            var runtime = PluginRuntime.init(allocator);
+            defer runtime.deinit();
+
+            const first = try allocator.create(HostSlot);
+            first.* = .{ .runtime = &runtime, .plugin_id = 1, .name = "", .host = undefined, .state = .running };
+            try runtime.slots.append(allocator, first);
+            try runtime.plugins.append(allocator, first);
+            const second = try allocator.create(HostSlot);
+            second.* = .{ .runtime = &runtime, .plugin_id = 2, .name = "", .host = undefined, .state = .running };
+            try runtime.slots.append(allocator, second);
+            try runtime.plugins.append(allocator, second);
+
+            const name = "phase04.custom.shared";
+            var a: u32 = 0;
+            var b: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(first), .{ .data = name.ptr, .length = name.len }, 3, &a));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(second), .{ .data = name.ptr, .length = name.len }, 3, &b));
+            try std.testing.expectEqual(a, b);
+            try std.testing.expectEqual(@as(u32, 2), runtime.custom_schemas.items[0].refs);
+
+            runtime.unloadPlugin(1);
+            try std.testing.expect(runtime.slots.items[0] == null);
+            var c: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(second), .{ .data = name.ptr, .length = name.len }, 3, &c));
+            try std.testing.expectEqual(a, c);
+            try std.testing.expectEqual(@as(u32, 1), runtime.custom_schemas.items[0].refs);
+
+            runtime.unloadPlugin(2);
+            try std.testing.expect(runtime.custom_schemas.items[0].name == null);
+        }
+
+        pub fn case_031() !void {
+            const ItemStack = @import("../items/item_stack.zig").ItemStack;
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            var stack: ItemStack = undefined;
+            const first = private_pluginruntime_itemHandle(&runtime, @ptrCast(&stack));
+            const second = private_pluginruntime_itemHandle(&runtime, @ptrCast(&stack));
+            try std.testing.expect(first != 0);
+            try std.testing.expectEqual(first, second);
+            try std.testing.expectEqual(@as(?usize, @intFromPtr(&stack)), runtime.handles.get(.item, first));
+            try std.testing.expectEqual(@as(?u32, 0), runtime.handles.ownerOf(@intFromPtr(&stack)));
+        }
+
+        pub fn case_032() !void {
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 32, .name = "deferred-align", .host = undefined, .state = .running };
+
+            const name = "phase04.custom.align";
+            var schema: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(&slot), .{ .data = name.ptr, .length = name.len }, 0, &schema));
+
+            const Payload = extern struct { a: u64, b: i64, c: f64 };
+            const Probe = struct {
+                payload: Payload = .{ .a = 0, .b = 0, .c = 0 },
+                aligned: bool = false,
+
+                fn callback(userdata: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    probe.aligned = @intFromPtr(view.data.?) % @alignOf(Payload) == 0;
+                    probe.payload = @as(*const Payload, @ptrCast(@alignCast(view.data.?))).*;
+                }
+            };
+            var probe = Probe{};
+            var subscription: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), schema >> 8, abi.event_phase_pre, 0, Probe.callback, &probe, &subscription));
+
+            var payload = Payload{ .a = 0x1122334455667788, .b = -7, .c = 1.5 };
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(&slot), schema, &payload, @sizeOf(Payload), 0));
+            runtime.endTick();
+
+            try std.testing.expect(probe.aligned);
+            try std.testing.expectEqual(payload.a, probe.payload.a);
+            try std.testing.expectEqual(payload.b, probe.payload.b);
+            try std.testing.expectEqual(payload.c, probe.payload.c);
+        }
+
+        pub fn case_033() !void {
+            const allocator = std.testing.allocator;
+            var runtime = PluginRuntime.init(allocator);
+            defer runtime.deinit();
+
+            const slot = try allocator.create(HostSlot);
+            slot.* = .{ .runtime = &runtime, .plugin_id = 1, .name = "", .host = undefined, .state = .running };
+            try runtime.slots.append(allocator, slot);
+            try runtime.plugins.append(allocator, slot);
+
+            const name = "phase04.custom.deferred-unload";
+            var schema: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(slot), .{ .data = name.ptr, .length = name.len }, 0, &schema));
+
+            const Probe = struct {
+                calls: u32 = 0,
+
+                fn callback(userdata: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    probe.calls += 1;
+                }
+            };
+            var probe = Probe{};
+            var subscription: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(slot), schema >> 8, abi.event_phase_pre, 0, Probe.callback, &probe, &subscription));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(slot), schema, null, 0, 0));
+            try std.testing.expectEqual(@as(usize, 1), runtime.deferredLen());
+
+            runtime.unloadPlugin(1);
+
+            const custom_index = std.meta.fields(Events.Event).len + @as(usize, schema >> 8) - @as(usize, abi.event_custom_base);
+            try std.testing.expectEqual(@as(usize, 0), runtime.buckets[custom_index][abi.event_phase_pre].items.len);
+            try std.testing.expectEqual(@as(u32, 0), runtime.active[custom_index][abi.event_phase_pre]);
+
+            runtime.endTick();
+            try std.testing.expectEqual(@as(u32, 0), probe.calls);
+            try std.testing.expectEqual(@as(usize, 0), runtime.deferredLen());
+        }
+
+        pub fn case_034() !void {
+            const allocator = std.testing.allocator;
+            var runtime = PluginRuntime.init(allocator);
+            defer runtime.deinit();
+
+            const first = try allocator.create(HostSlot);
+            first.* = .{ .runtime = &runtime, .plugin_id = 1, .name = "", .host = undefined, .state = .running };
+            try runtime.slots.append(allocator, first);
+            try runtime.plugins.append(allocator, first);
+
+            const second = try allocator.create(HostSlot);
+            second.* = .{ .runtime = &runtime, .plugin_id = 2, .name = "", .host = undefined, .state = .running };
+            try runtime.slots.append(allocator, second);
+            try runtime.plugins.append(allocator, second);
+
+            const name = "phase04.custom.tombstone";
+            var old: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(first), .{ .data = name.ptr, .length = name.len }, 4, &old));
+
+            const Probe = struct {
+                calls: u32 = 0,
+
+                fn callback(userdata: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    probe.calls += 1;
+                }
+            };
+            var old_probe = Probe{};
+            var old_subscription: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(first), old >> 8, abi.event_phase_pre, 0, Probe.callback, &old_probe, &old_subscription));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(first), old, null, 0, 0));
+            runtime.endTick();
+            try std.testing.expectEqual(@as(u32, 1), old_probe.calls);
+
+            runtime.unloadPlugin(1);
+
+            try std.testing.expectEqual(abi.result_not_found, runtime.events_api.emit(@ptrCast(second), old, null, 0, 0));
+            try std.testing.expectEqual(abi.result_not_found, runtime.events_api.subscribe(@ptrCast(second), old >> 8, abi.event_phase_pre, 0, Probe.callback, &old_probe, &old_subscription));
+
+            var fresh: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(second), .{ .data = name.ptr, .length = name.len }, 4, &fresh));
+            try std.testing.expect(fresh != old);
+            try std.testing.expectEqual(old & 0xff, fresh & 0xff);
+            try std.testing.expect((fresh >> 8) != (old >> 8));
+            try std.testing.expectEqual(abi.result_not_found, runtime.events_api.emit(@ptrCast(second), old, null, 0, 0));
+
+            const fresh_index = std.meta.fields(Events.Event).len + @as(usize, fresh >> 8) - @as(usize, abi.event_custom_base);
+            var fresh_probe = Probe{};
+            var fresh_subscription: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(second), fresh >> 8, abi.event_phase_pre, 0, Probe.callback, &fresh_probe, &fresh_subscription));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(second), fresh, null, 0, 0));
+            runtime.endTick();
+
+            try std.testing.expectEqual(@as(u32, 1), fresh_probe.calls);
+            try std.testing.expectEqual(@as(u32, 1), old_probe.calls);
+            try std.testing.expectEqual(@as(usize, 1), runtime.buckets[fresh_index][abi.event_phase_pre].items.len);
+        }
+
+        pub fn case_035() !void {
+            var runtime = PluginRuntime.init(std.testing.allocator);
+            defer runtime.deinit();
+
+            const name = "phase04.custom.owners";
+            var slots: [9]HostSlot = undefined;
+            var schemas: [9]u32 = undefined;
+            for (&slots, 0..) |*slot, index| {
+                slot.* = .{ .runtime = &runtime, .plugin_id = @intCast(index + 1), .name = "", .host = undefined, .state = .running };
+            }
+            for (slots[0..8], 0..) |*slot, index| {
+                try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(slot), .{ .data = name.ptr, .length = name.len }, 7, &schemas[index]));
+                try std.testing.expectEqual(schemas[0], schemas[index]);
+            }
+            try std.testing.expectEqual(abi.result_limit, runtime.events_api.schema_of(@ptrCast(&slots[8]), .{ .data = name.ptr, .length = name.len }, 7, &schemas[8]));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.schema_of(@ptrCast(&slots[0]), .{ .data = name.ptr, .length = name.len }, 7, &schemas[0]));
+            try std.testing.expectEqual(@as(u32, 8), runtime.custom_schemas.items[0].refs);
+            try std.testing.expectEqual(@as(u8, 8), runtime.custom_schemas.items[0].owner_len);
         }
 
         pub fn case_001() !void {

@@ -201,33 +201,126 @@ pub const EventId = enum(u32) {
     transaction_prepare = 14,
     transaction_commit = 15,
     transaction_abort = 16,
+    entity_combust = 17,
+    enchantment_apply = 18,
+    enchantment_remove = 19,
+    entity_spawn = 20,
+    entity_despawn = 21,
+    entity_damage = 22,
+    entity_death = 23,
+    entity_interact = 24,
 };
 
 pub const EventResult = enum(i32) { continue_ = 0, cancel = 1 };
 
-pub const PayloadKind = enum { none, tick, player_join, player_disconnect };
+pub const PayloadKind = enum {
+    none,
+    server_tick,
+    player_join,
+    player_ref,
+    player_chat,
+    item_use,
+    player_move,
+    damage,
+    block_place,
+    block_break,
+    inventory,
+    inventory_click,
+    transaction,
+    entity_combust,
+    enchant,
+    entity_spawn,
+    entity_despawn,
+    entity_damage,
+    entity_death,
+    entity_interact,
+};
 
 pub const EventMeta = struct {
     external_id: u32,
     schema: u32,
     flags: u16,
     payload: PayloadKind,
+    payload_size: usize,
 };
+
+fn payloadSize(payload: PayloadKind) usize {
+    return switch (payload) {
+        .none => 0,
+        .server_tick => @sizeOf(ServerTickEvent),
+        .player_join => @sizeOf(PlayerJoinEvent),
+        .player_ref => @sizeOf(PlayerRefEvent),
+        .player_chat => @sizeOf(PlayerChatEvent),
+        .item_use => @sizeOf(ItemUseEvent),
+        .player_move => @sizeOf(PlayerMoveEvent),
+        .damage => @sizeOf(DamageEvent),
+        .block_place => @sizeOf(BlockPlaceEvent),
+        .block_break => @sizeOf(BlockBreakEvent),
+        .inventory => @sizeOf(InventoryEvent),
+        .inventory_click => @sizeOf(InventoryClickEvent),
+        .transaction => @sizeOf(TransactionEvent),
+        .entity_combust => @sizeOf(EntityCombustEvent),
+        .enchant => @sizeOf(EnchantEvent),
+        .entity_spawn => @sizeOf(EntitySpawnEvent),
+        .entity_despawn => @sizeOf(EntityDespawnEvent),
+        .entity_damage => @sizeOf(EntityDamageEvent),
+        .entity_death => @sizeOf(EntityDeathEvent),
+        .entity_interact => @sizeOf(EntityInteractEvent),
+    };
+}
 
 pub fn eventMeta(event: EventId) EventMeta {
     const payload: PayloadKind = switch (event) {
-        .server_tick => .tick,
+        .server_start, .server_shutdown => .none,
+        .server_tick => .server_tick,
         .player_join => .player_join,
-        .player_disconnect => .player_disconnect,
-        else => .none,
+        .player_disconnect => .player_ref,
+        .player_chat => .player_chat,
+        .item_use => .item_use,
+        .player_move => .player_move,
+        .damage => .damage,
+        .block_place => .block_place,
+        .block_break => .block_break,
+        .inventory_open, .inventory_close => .inventory,
+        .inventory_click => .inventory_click,
+        .transaction_prepare, .transaction_commit, .transaction_abort => .transaction,
+        .entity_combust => .entity_combust,
+        .enchantment_apply, .enchantment_remove => .enchant,
+        .entity_spawn => .entity_spawn,
+        .entity_despawn => .entity_despawn,
+        .entity_damage => .entity_damage,
+        .entity_death => .entity_death,
+        .entity_interact => .entity_interact,
+    };
+    // InventoryOpen/Click/Close, TransactionPrepare and EntityInteract stay ABI-only until a core
+    // emitter honors their result; a cancelable flag without a route would be a false promise.
+    const cancelable = switch (event) {
+        .player_join,
+        .player_chat,
+        .item_use,
+        .player_move,
+        .damage,
+        .block_place,
+        .block_break,
+        .entity_combust,
+        .enchantment_apply,
+        .enchantment_remove,
+        .entity_damage,
+        => true,
+        else => false,
+    };
+    const mutable = switch (event) {
+        .player_chat, .player_move, .damage, .entity_combust, .enchantment_apply, .entity_damage => true,
+        else => false,
     };
     const id = @intFromEnum(event);
     const version: u32 = if (payload == .none) 0 else 1;
     return .{
         .external_id = id,
         .schema = (id << 8) | version,
-        .flags = if (payload == .none) event_flag_callback_only | event_flag_borrowed else event_flag_cancelable | event_flag_callback_only | event_flag_borrowed,
+        .flags = event_flag_callback_only | event_flag_borrowed | (if (cancelable) event_flag_cancelable else 0) | (if (mutable) event_flag_mutable else 0),
         .payload = payload,
+        .payload_size = payloadSize(payload),
     };
 }
 
@@ -243,6 +336,46 @@ pub const EventView = extern struct {
 
 pub const ServerTickEvent = extern struct { tick: u64 };
 pub const PlayerEvent = extern struct { handle: u64 };
+pub const PlayerJoinEvent = extern struct { handle: u64, runtime_id: i64 };
+pub const PlayerRefEvent = extern struct { handle: u64, runtime_id: i64 };
+pub const PlayerChatEvent = extern struct { runtime_id: i64, message: StringView, flags: u32, reserved: u32 };
+pub const ItemUseEvent = extern struct { runtime_id: i64, identifier: StringView, flags: u32, reserved: u32 };
+pub const PlayerMoveEvent = extern struct { runtime_id: i64, from_x: f32, from_y: f32, from_z: f32, to_x: f32, to_y: f32, to_z: f32, on_ground: u32, reserved: u32 };
+pub const DamageEvent = extern struct { victim_runtime: i64, attacker_runtime: i64, amount: f32, cause: u32, reserved: u32 };
+pub const BlockPlaceEvent = extern struct { runtime_id: i64, x: i32, y: i32, z: i32, network_id: i32, reserved: u32 };
+pub const BlockBreakEvent = extern struct { runtime_id: i64, x: i32, y: i32, z: i32, network_id: i32, reserved: u32 };
+pub const InventoryEvent = extern struct { handle: u64, container_id: u32, reserved: u32 };
+pub const InventoryClickEvent = extern struct { handle: u64, slot: u16, button: u8, reserved: u8, reserved2: u32 };
+pub const TransactionEvent = extern struct { handle: u64, transaction_id: [16]u8, committed: u32, reserved: u32 };
+pub const EntityCombustEvent = extern struct { runtime_id: i64, instigator_runtime: i64, duration: i32, source: u32 };
+pub const EnchantEvent = extern struct { item_handle: u64, actor_runtime: i64, enchantment_id: u32, previous_level: u8, level: u8, source: u8, reserved: u8 };
+pub const EntitySpawnEvent = extern struct { runtime_id: i64, reserved: u64 };
+pub const EntityDespawnEvent = extern struct { runtime_id: i64, cause: u32, reserved: u32 };
+pub const EntityDamageEvent = extern struct { target_runtime: i64, source_runtime: i64, amount: f32, cause: u32, reserved: u32 };
+pub const EntityDeathEvent = extern struct { runtime_id: i64, killer_runtime: i64, x: f32, y: f32, z: f32, reserved: u32 };
+pub const EntityInteractEvent = extern struct { target_runtime: i64, player_runtime: i64, action: u32, reserved: u32 };
+
+pub const EventPayload = union {
+    server_tick: ServerTickEvent,
+    player_join: PlayerJoinEvent,
+    player_ref: PlayerRefEvent,
+    player_chat: PlayerChatEvent,
+    item_use: ItemUseEvent,
+    player_move: PlayerMoveEvent,
+    damage: DamageEvent,
+    block_place: BlockPlaceEvent,
+    block_break: BlockBreakEvent,
+    inventory: InventoryEvent,
+    inventory_click: InventoryClickEvent,
+    transaction: TransactionEvent,
+    entity_combust: EntityCombustEvent,
+    enchant: EnchantEvent,
+    entity_spawn: EntitySpawnEvent,
+    entity_despawn: EntityDespawnEvent,
+    entity_damage: EntityDamageEvent,
+    entity_death: EntityDeathEvent,
+    entity_interact: EntityInteractEvent,
+};
 
 pub const SnapshotHeader = extern struct { struct_size: u32, version: u16, reserved: u16 };
 pub const WorldSnapshot = extern struct { header: SnapshotHeader, handle: u64, name: StringView };
@@ -493,6 +626,177 @@ fn fpServerTickEvent(hash: u64) u64 {
 
 fn fpPlayerEvent(hash: u64) u64 {
     return mix(mix(hash, @sizeOf(PlayerEvent)), @offsetOf(PlayerEvent, "handle"));
+}
+
+fn fpPlayerJoinEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(PlayerJoinEvent));
+    h = mix(h, @offsetOf(PlayerJoinEvent, "handle"));
+    return mix(h, @offsetOf(PlayerJoinEvent, "runtime_id"));
+}
+
+fn fpPlayerRefEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(PlayerRefEvent));
+    h = mix(h, @offsetOf(PlayerRefEvent, "handle"));
+    return mix(h, @offsetOf(PlayerRefEvent, "runtime_id"));
+}
+
+fn fpPlayerChatEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(PlayerChatEvent));
+    h = mix(h, @offsetOf(PlayerChatEvent, "runtime_id"));
+    h = mix(h, @offsetOf(PlayerChatEvent, "message"));
+    h = mix(h, @offsetOf(PlayerChatEvent, "flags"));
+    return mix(h, @offsetOf(PlayerChatEvent, "reserved"));
+}
+
+fn fpItemUseEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(ItemUseEvent));
+    h = mix(h, @offsetOf(ItemUseEvent, "runtime_id"));
+    h = mix(h, @offsetOf(ItemUseEvent, "identifier"));
+    h = mix(h, @offsetOf(ItemUseEvent, "flags"));
+    return mix(h, @offsetOf(ItemUseEvent, "reserved"));
+}
+
+fn fpPlayerMoveEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(PlayerMoveEvent));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "runtime_id"));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "from_x"));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "from_y"));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "from_z"));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "to_x"));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "to_y"));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "to_z"));
+    h = mix(h, @offsetOf(PlayerMoveEvent, "on_ground"));
+    return mix(h, @offsetOf(PlayerMoveEvent, "reserved"));
+}
+
+fn fpDamageEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(DamageEvent));
+    h = mix(h, @offsetOf(DamageEvent, "victim_runtime"));
+    h = mix(h, @offsetOf(DamageEvent, "attacker_runtime"));
+    h = mix(h, @offsetOf(DamageEvent, "amount"));
+    h = mix(h, @offsetOf(DamageEvent, "cause"));
+    return mix(h, @offsetOf(DamageEvent, "reserved"));
+}
+
+fn fpBlockPlaceEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(BlockPlaceEvent));
+    h = mix(h, @offsetOf(BlockPlaceEvent, "runtime_id"));
+    h = mix(h, @offsetOf(BlockPlaceEvent, "x"));
+    h = mix(h, @offsetOf(BlockPlaceEvent, "y"));
+    h = mix(h, @offsetOf(BlockPlaceEvent, "z"));
+    h = mix(h, @offsetOf(BlockPlaceEvent, "network_id"));
+    return mix(h, @offsetOf(BlockPlaceEvent, "reserved"));
+}
+
+fn fpBlockBreakEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(BlockBreakEvent));
+    h = mix(h, @offsetOf(BlockBreakEvent, "runtime_id"));
+    h = mix(h, @offsetOf(BlockBreakEvent, "x"));
+    h = mix(h, @offsetOf(BlockBreakEvent, "y"));
+    h = mix(h, @offsetOf(BlockBreakEvent, "z"));
+    h = mix(h, @offsetOf(BlockBreakEvent, "network_id"));
+    return mix(h, @offsetOf(BlockBreakEvent, "reserved"));
+}
+
+fn fpInventoryEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(InventoryEvent));
+    h = mix(h, @offsetOf(InventoryEvent, "handle"));
+    h = mix(h, @offsetOf(InventoryEvent, "container_id"));
+    return mix(h, @offsetOf(InventoryEvent, "reserved"));
+}
+
+fn fpInventoryClickEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(InventoryClickEvent));
+    h = mix(h, @offsetOf(InventoryClickEvent, "handle"));
+    h = mix(h, @offsetOf(InventoryClickEvent, "slot"));
+    h = mix(h, @offsetOf(InventoryClickEvent, "button"));
+    h = mix(h, @offsetOf(InventoryClickEvent, "reserved"));
+    return mix(h, @offsetOf(InventoryClickEvent, "reserved2"));
+}
+
+fn fpTransactionEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(TransactionEvent));
+    h = mix(h, @offsetOf(TransactionEvent, "handle"));
+    h = mix(h, @offsetOf(TransactionEvent, "transaction_id"));
+    h = mix(h, @offsetOf(TransactionEvent, "committed"));
+    return mix(h, @offsetOf(TransactionEvent, "reserved"));
+}
+
+fn fpEntityCombustEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EntityCombustEvent));
+    h = mix(h, @offsetOf(EntityCombustEvent, "runtime_id"));
+    h = mix(h, @offsetOf(EntityCombustEvent, "instigator_runtime"));
+    h = mix(h, @offsetOf(EntityCombustEvent, "duration"));
+    return mix(h, @offsetOf(EntityCombustEvent, "source"));
+}
+
+fn fpEnchantEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EnchantEvent));
+    h = mix(h, @offsetOf(EnchantEvent, "item_handle"));
+    h = mix(h, @offsetOf(EnchantEvent, "actor_runtime"));
+    h = mix(h, @offsetOf(EnchantEvent, "enchantment_id"));
+    h = mix(h, @offsetOf(EnchantEvent, "previous_level"));
+    h = mix(h, @offsetOf(EnchantEvent, "level"));
+    h = mix(h, @offsetOf(EnchantEvent, "source"));
+    return mix(h, @offsetOf(EnchantEvent, "reserved"));
+}
+
+fn fpEntitySpawnEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EntitySpawnEvent));
+    h = mix(h, @offsetOf(EntitySpawnEvent, "runtime_id"));
+    return mix(h, @offsetOf(EntitySpawnEvent, "reserved"));
+}
+
+fn fpEntityDespawnEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EntityDespawnEvent));
+    h = mix(h, @offsetOf(EntityDespawnEvent, "runtime_id"));
+    h = mix(h, @offsetOf(EntityDespawnEvent, "cause"));
+    return mix(h, @offsetOf(EntityDespawnEvent, "reserved"));
+}
+
+fn fpEntityDamageEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EntityDamageEvent));
+    h = mix(h, @offsetOf(EntityDamageEvent, "target_runtime"));
+    h = mix(h, @offsetOf(EntityDamageEvent, "source_runtime"));
+    h = mix(h, @offsetOf(EntityDamageEvent, "amount"));
+    h = mix(h, @offsetOf(EntityDamageEvent, "cause"));
+    return mix(h, @offsetOf(EntityDamageEvent, "reserved"));
+}
+
+fn fpEntityDeathEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EntityDeathEvent));
+    h = mix(h, @offsetOf(EntityDeathEvent, "runtime_id"));
+    h = mix(h, @offsetOf(EntityDeathEvent, "killer_runtime"));
+    h = mix(h, @offsetOf(EntityDeathEvent, "x"));
+    h = mix(h, @offsetOf(EntityDeathEvent, "y"));
+    h = mix(h, @offsetOf(EntityDeathEvent, "z"));
+    return mix(h, @offsetOf(EntityDeathEvent, "reserved"));
+}
+
+fn fpEntityInteractEvent(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EntityInteractEvent));
+    h = mix(h, @offsetOf(EntityInteractEvent, "target_runtime"));
+    h = mix(h, @offsetOf(EntityInteractEvent, "player_runtime"));
+    h = mix(h, @offsetOf(EntityInteractEvent, "action"));
+    return mix(h, @offsetOf(EntityInteractEvent, "reserved"));
 }
 
 fn fpSnapshotHeader(hash: u64) u64 {
@@ -805,6 +1109,14 @@ fn fpConstants() u64 {
     h ^= mix(abi_fp_seed ^ 1085, feature_commands);
     h ^= mix(abi_fp_seed ^ 1086, custom_payload_max);
     h ^= mix(abi_fp_seed ^ 1087, max_custom_events);
+    h ^= mix(abi_fp_seed ^ 1088, @intFromEnum(EventId.entity_combust));
+    h ^= mix(abi_fp_seed ^ 1089, @intFromEnum(EventId.enchantment_apply));
+    h ^= mix(abi_fp_seed ^ 1090, @intFromEnum(EventId.enchantment_remove));
+    h ^= mix(abi_fp_seed ^ 1091, @intFromEnum(EventId.entity_spawn));
+    h ^= mix(abi_fp_seed ^ 1092, @intFromEnum(EventId.entity_despawn));
+    h ^= mix(abi_fp_seed ^ 1093, @intFromEnum(EventId.entity_damage));
+    h ^= mix(abi_fp_seed ^ 1094, @intFromEnum(EventId.entity_death));
+    h ^= mix(abi_fp_seed ^ 1095, @intFromEnum(EventId.entity_interact));
     return h;
 }
 
@@ -823,6 +1135,24 @@ pub const abi_fingerprint: u64 = blk: {
     h ^= fpEventView(abi_fp_seed ^ 10);
     h ^= fpServerTickEvent(abi_fp_seed ^ 28);
     h ^= fpPlayerEvent(abi_fp_seed ^ 29);
+    h ^= fpPlayerJoinEvent(abi_fp_seed ^ 39);
+    h ^= fpPlayerRefEvent(abi_fp_seed ^ 40);
+    h ^= fpPlayerChatEvent(abi_fp_seed ^ 41);
+    h ^= fpItemUseEvent(abi_fp_seed ^ 42);
+    h ^= fpPlayerMoveEvent(abi_fp_seed ^ 43);
+    h ^= fpDamageEvent(abi_fp_seed ^ 44);
+    h ^= fpBlockPlaceEvent(abi_fp_seed ^ 45);
+    h ^= fpBlockBreakEvent(abi_fp_seed ^ 46);
+    h ^= fpInventoryEvent(abi_fp_seed ^ 47);
+    h ^= fpInventoryClickEvent(abi_fp_seed ^ 48);
+    h ^= fpTransactionEvent(abi_fp_seed ^ 49);
+    h ^= fpEntityCombustEvent(abi_fp_seed ^ 50);
+    h ^= fpEnchantEvent(abi_fp_seed ^ 51);
+    h ^= fpEntitySpawnEvent(abi_fp_seed ^ 52);
+    h ^= fpEntityDespawnEvent(abi_fp_seed ^ 53);
+    h ^= fpEntityDamageEvent(abi_fp_seed ^ 54);
+    h ^= fpEntityDeathEvent(abi_fp_seed ^ 55);
+    h ^= fpEntityInteractEvent(abi_fp_seed ^ 56);
     h ^= fpSnapshotHeader(abi_fp_seed ^ 11);
     h ^= fpWorldSnapshot(abi_fp_seed ^ 12);
     h ^= fpPlayerSnapshot(abi_fp_seed ^ 13);

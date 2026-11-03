@@ -1,7 +1,6 @@
 const std = @import("std");
 const log = @import("../../core/log.zig");
 
-
 const CommandContext = @import("../context.zig").CommandContext;
 const names = @import("world_names.zig");
 

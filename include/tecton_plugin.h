@@ -83,7 +83,7 @@ extern "C" {
 #define TECTON_CUSTOM_PAYLOAD_MAX 56u
 
 #define TECTON_EVENT_FLAG_CANCELABLE (UINT16_C(1) << 0)
-#define TECTON_EVENT_FLAG_MUTABLE (UINT16_C(1) << 1)
+#define TECTON_EVENT_FLAG_MUTABLE (UINT16_C(1) << 1) /* honored in pre only; ignored in commit and post */
 #define TECTON_EVENT_FLAG_CALLBACK_ONLY (UINT16_C(1) << 2)
 #define TECTON_EVENT_FLAG_BORROWED (UINT16_C(1) << 3)
 
@@ -216,7 +216,15 @@ typedef enum tecton_event_id {
   TECTON_EVENT_INVENTORY_CLOSE = 13,
   TECTON_EVENT_TRANSACTION_PREPARE = 14,
   TECTON_EVENT_TRANSACTION_COMMIT = 15,
-  TECTON_EVENT_TRANSACTION_ABORT = 16
+  TECTON_EVENT_TRANSACTION_ABORT = 16,
+  TECTON_EVENT_ENTITY_COMBUST = 17,
+  TECTON_EVENT_ENCHANTMENT_APPLY = 18,
+  TECTON_EVENT_ENCHANTMENT_REMOVE = 19,
+  TECTON_EVENT_ENTITY_SPAWN = 20,
+  TECTON_EVENT_ENTITY_DESPAWN = 21,
+  TECTON_EVENT_ENTITY_DAMAGE = 22,
+  TECTON_EVENT_ENTITY_DEATH = 23,
+  TECTON_EVENT_ENTITY_INTERACT = 24
 } tecton_event_id;
 
 typedef enum tecton_event_result {
@@ -226,7 +234,29 @@ typedef enum tecton_event_result {
 
 #define TECTON_SCHEMA(event_id, version) (((uint32_t)(event_id) << 8) | (uint32_t)(version))
 #define TECTON_SCHEMA_SERVER_TICK TECTON_SCHEMA(TECTON_EVENT_SERVER_TICK, 1)
-#define TECTON_SCHEMA_PLAYER TECTON_SCHEMA(TECTON_EVENT_PLAYER_JOIN, 1)
+#define TECTON_SCHEMA_PLAYER_JOIN TECTON_SCHEMA(TECTON_EVENT_PLAYER_JOIN, 1)
+#define TECTON_SCHEMA_PLAYER_DISCONNECT TECTON_SCHEMA(TECTON_EVENT_PLAYER_DISCONNECT, 1)
+#define TECTON_SCHEMA_PLAYER_CHAT TECTON_SCHEMA(TECTON_EVENT_PLAYER_CHAT, 1)
+#define TECTON_SCHEMA_ITEM_USE TECTON_SCHEMA(TECTON_EVENT_ITEM_USE, 1)
+#define TECTON_SCHEMA_PLAYER_MOVE TECTON_SCHEMA(TECTON_EVENT_PLAYER_MOVE, 1)
+#define TECTON_SCHEMA_DAMAGE TECTON_SCHEMA(TECTON_EVENT_DAMAGE, 1)
+#define TECTON_SCHEMA_BLOCK_PLACE TECTON_SCHEMA(TECTON_EVENT_BLOCK_PLACE, 1)
+#define TECTON_SCHEMA_BLOCK_BREAK TECTON_SCHEMA(TECTON_EVENT_BLOCK_BREAK, 1)
+#define TECTON_SCHEMA_INVENTORY_OPEN TECTON_SCHEMA(TECTON_EVENT_INVENTORY_OPEN, 1)
+#define TECTON_SCHEMA_INVENTORY_CLICK TECTON_SCHEMA(TECTON_EVENT_INVENTORY_CLICK, 1)
+#define TECTON_SCHEMA_INVENTORY_CLOSE TECTON_SCHEMA(TECTON_EVENT_INVENTORY_CLOSE, 1)
+#define TECTON_SCHEMA_TRANSACTION_PREPARE TECTON_SCHEMA(TECTON_EVENT_TRANSACTION_PREPARE, 1)
+#define TECTON_SCHEMA_TRANSACTION_COMMIT TECTON_SCHEMA(TECTON_EVENT_TRANSACTION_COMMIT, 1)
+#define TECTON_SCHEMA_TRANSACTION_ABORT TECTON_SCHEMA(TECTON_EVENT_TRANSACTION_ABORT, 1)
+#define TECTON_SCHEMA_ENTITY_COMBUST TECTON_SCHEMA(TECTON_EVENT_ENTITY_COMBUST, 1)
+#define TECTON_SCHEMA_ENCHANTMENT_APPLY TECTON_SCHEMA(TECTON_EVENT_ENCHANTMENT_APPLY, 1)
+#define TECTON_SCHEMA_ENCHANTMENT_REMOVE TECTON_SCHEMA(TECTON_EVENT_ENCHANTMENT_REMOVE, 1)
+#define TECTON_SCHEMA_ENTITY_SPAWN TECTON_SCHEMA(TECTON_EVENT_ENTITY_SPAWN, 1)
+#define TECTON_SCHEMA_ENTITY_DESPAWN TECTON_SCHEMA(TECTON_EVENT_ENTITY_DESPAWN, 1)
+#define TECTON_SCHEMA_ENTITY_DAMAGE TECTON_SCHEMA(TECTON_EVENT_ENTITY_DAMAGE, 1)
+#define TECTON_SCHEMA_ENTITY_DEATH TECTON_SCHEMA(TECTON_EVENT_ENTITY_DEATH, 1)
+#define TECTON_SCHEMA_ENTITY_INTERACT TECTON_SCHEMA(TECTON_EVENT_ENTITY_INTERACT, 1)
+#define TECTON_SCHEMA_PLAYER TECTON_SCHEMA_PLAYER_JOIN
 
 typedef struct tecton_event_view {
   const void *data; /* borrowed for this call; NULL when data_size == 0 */
@@ -245,6 +275,141 @@ typedef struct tecton_server_tick_event {
 typedef struct tecton_player_event {
   uint64_t handle;
 } tecton_player_event;
+
+typedef struct tecton_player_join_event {
+  uint64_t handle;
+  int64_t runtime_id;
+} tecton_player_join_event;
+
+typedef struct tecton_player_ref_event {
+  uint64_t handle;
+  int64_t runtime_id;
+} tecton_player_ref_event;
+
+typedef struct tecton_player_chat_event {
+  int64_t runtime_id;
+  tecton_string_view message; /* borrowed for this call; mutable in pre */
+  uint32_t flags;
+  uint32_t reserved;
+} tecton_player_chat_event;
+
+typedef struct tecton_item_use_event {
+  int64_t runtime_id;
+  tecton_string_view identifier; /* borrowed for this call */
+  uint32_t flags;
+  uint32_t reserved;
+} tecton_item_use_event;
+
+typedef struct tecton_player_move_event {
+  int64_t runtime_id;
+  float from_x;
+  float from_y;
+  float from_z;
+  float to_x;
+  float to_y;
+  float to_z;
+  uint32_t on_ground; /* 0/1 */
+  uint32_t reserved;
+} tecton_player_move_event;
+
+typedef struct tecton_damage_event {
+  int64_t victim_runtime;
+  int64_t attacker_runtime;
+  float amount;
+  uint32_t cause;
+  uint32_t reserved;
+} tecton_damage_event;
+
+typedef struct tecton_block_place_event {
+  int64_t runtime_id;
+  int32_t x;
+  int32_t y;
+  int32_t z;
+  int32_t network_id;
+  uint32_t reserved;
+} tecton_block_place_event;
+
+typedef struct tecton_block_break_event {
+  int64_t runtime_id;
+  int32_t x;
+  int32_t y;
+  int32_t z;
+  int32_t network_id;
+  uint32_t reserved;
+} tecton_block_break_event;
+
+typedef struct tecton_inventory_event {
+  uint64_t handle;
+  uint32_t container_id;
+  uint32_t reserved;
+} tecton_inventory_event;
+
+typedef struct tecton_inventory_click_event {
+  uint64_t handle;
+  uint16_t slot;
+  uint8_t button;
+  uint8_t reserved;
+  uint32_t reserved2;
+} tecton_inventory_click_event;
+
+typedef struct tecton_transaction_event {
+  uint64_t handle;
+  uint8_t transaction_id[16];
+  uint32_t committed;
+  uint32_t reserved;
+} tecton_transaction_event;
+
+typedef struct tecton_entity_combust_event {
+  int64_t runtime_id;
+  int64_t instigator_runtime;
+  int32_t duration;
+  uint32_t source;
+} tecton_entity_combust_event;
+
+typedef struct tecton_enchant_event {
+  uint64_t item_handle;
+  int64_t actor_runtime;
+  uint32_t enchantment_id;
+  uint8_t previous_level;
+  uint8_t level;
+  uint8_t source;
+  uint8_t reserved;
+} tecton_enchant_event;
+
+typedef struct tecton_entity_spawn_event {
+  int64_t runtime_id;
+  uint64_t reserved;
+} tecton_entity_spawn_event;
+
+typedef struct tecton_entity_despawn_event {
+  int64_t runtime_id;
+  uint32_t cause;
+  uint32_t reserved;
+} tecton_entity_despawn_event;
+
+typedef struct tecton_entity_damage_event {
+  int64_t target_runtime;
+  int64_t source_runtime;
+  float amount;
+  uint32_t cause;
+  uint32_t reserved;
+} tecton_entity_damage_event;
+
+typedef struct tecton_entity_death_event {
+  int64_t runtime_id;
+  int64_t killer_runtime;
+  float x;
+  float y;
+  float z;
+  uint32_t reserved;
+} tecton_entity_death_event;
+
+typedef struct tecton_entity_interact_event {
+  int64_t target_runtime;
+  int64_t player_runtime;
+  uint32_t action;
+  uint32_t reserved;
+} tecton_entity_interact_event;
 
 typedef void(TECTON_PLUGIN_CALL *tecton_event_callback_fn)(void *userdata, const tecton_event_view *event);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_event_subscribe_fn)(void *userdata, uint32_t event_id, uint16_t phase, int16_t priority, tecton_event_callback_fn callback, void *callback_userdata, uint64_t *out_subscription);
@@ -281,7 +446,7 @@ typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_every_fn)(void *userdata, u
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_log_is_enabled_fn)(void *userdata, uint32_t level);
 typedef void(TECTON_PLUGIN_CALL *tecton_log_set_level_fn)(void *userdata, uint32_t level);
 typedef void(TECTON_PLUGIN_CALL *tecton_log_set_scope_fn)(void *userdata, tecton_string_view scope);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_schema_of_fn)(void *userdata, tecton_string_view name, uint32_t flags, uint32_t *out_schema);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_schema_of_fn)(void *userdata, tecton_string_view name, uint32_t flags, uint32_t *out_schema); /* low byte of flags is the schema version */
 typedef struct tecton_registry_view tecton_registry_view;
 typedef struct tecton_command_desc tecton_command_desc;
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_registry_fn)(void *userdata, tecton_registry_view *out);
@@ -631,6 +796,123 @@ TECTON_LAYOUT_OFFSET(tecton_server_tick_event, tick, 0);
 TECTON_LAYOUT_SIZE(tecton_player_event, 8);
 TECTON_LAYOUT_OFFSET(tecton_player_event, handle, 0);
 
+TECTON_LAYOUT_SIZE(tecton_player_join_event, 16);
+TECTON_LAYOUT_OFFSET(tecton_player_join_event, handle, 0);
+TECTON_LAYOUT_OFFSET(tecton_player_join_event, runtime_id, 8);
+
+TECTON_LAYOUT_SIZE(tecton_player_ref_event, 16);
+TECTON_LAYOUT_OFFSET(tecton_player_ref_event, handle, 0);
+TECTON_LAYOUT_OFFSET(tecton_player_ref_event, runtime_id, 8);
+
+TECTON_LAYOUT_SIZE(tecton_player_chat_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_player_chat_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_player_chat_event, message, 8);
+TECTON_LAYOUT_OFFSET(tecton_player_chat_event, flags, 24);
+TECTON_LAYOUT_OFFSET(tecton_player_chat_event, reserved, 28);
+
+TECTON_LAYOUT_SIZE(tecton_item_use_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_item_use_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_item_use_event, identifier, 8);
+TECTON_LAYOUT_OFFSET(tecton_item_use_event, flags, 24);
+TECTON_LAYOUT_OFFSET(tecton_item_use_event, reserved, 28);
+
+TECTON_LAYOUT_SIZE(tecton_player_move_event, 40);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, from_x, 8);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, from_y, 12);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, from_z, 16);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, to_x, 20);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, to_y, 24);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, to_z, 28);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, on_ground, 32);
+TECTON_LAYOUT_OFFSET(tecton_player_move_event, reserved, 36);
+
+TECTON_LAYOUT_SIZE(tecton_damage_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_damage_event, victim_runtime, 0);
+TECTON_LAYOUT_OFFSET(tecton_damage_event, attacker_runtime, 8);
+TECTON_LAYOUT_OFFSET(tecton_damage_event, amount, 16);
+TECTON_LAYOUT_OFFSET(tecton_damage_event, cause, 20);
+TECTON_LAYOUT_OFFSET(tecton_damage_event, reserved, 24);
+
+TECTON_LAYOUT_SIZE(tecton_block_place_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_block_place_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_block_place_event, x, 8);
+TECTON_LAYOUT_OFFSET(tecton_block_place_event, y, 12);
+TECTON_LAYOUT_OFFSET(tecton_block_place_event, z, 16);
+TECTON_LAYOUT_OFFSET(tecton_block_place_event, network_id, 20);
+TECTON_LAYOUT_OFFSET(tecton_block_place_event, reserved, 24);
+
+TECTON_LAYOUT_SIZE(tecton_block_break_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_block_break_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_block_break_event, x, 8);
+TECTON_LAYOUT_OFFSET(tecton_block_break_event, y, 12);
+TECTON_LAYOUT_OFFSET(tecton_block_break_event, z, 16);
+TECTON_LAYOUT_OFFSET(tecton_block_break_event, network_id, 20);
+TECTON_LAYOUT_OFFSET(tecton_block_break_event, reserved, 24);
+
+TECTON_LAYOUT_SIZE(tecton_inventory_event, 16);
+TECTON_LAYOUT_OFFSET(tecton_inventory_event, handle, 0);
+TECTON_LAYOUT_OFFSET(tecton_inventory_event, container_id, 8);
+TECTON_LAYOUT_OFFSET(tecton_inventory_event, reserved, 12);
+
+TECTON_LAYOUT_SIZE(tecton_inventory_click_event, 16);
+TECTON_LAYOUT_OFFSET(tecton_inventory_click_event, handle, 0);
+TECTON_LAYOUT_OFFSET(tecton_inventory_click_event, slot, 8);
+TECTON_LAYOUT_OFFSET(tecton_inventory_click_event, button, 10);
+TECTON_LAYOUT_OFFSET(tecton_inventory_click_event, reserved, 11);
+TECTON_LAYOUT_OFFSET(tecton_inventory_click_event, reserved2, 12);
+
+TECTON_LAYOUT_SIZE(tecton_transaction_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_transaction_event, handle, 0);
+TECTON_LAYOUT_OFFSET(tecton_transaction_event, transaction_id, 8);
+TECTON_LAYOUT_OFFSET(tecton_transaction_event, committed, 24);
+TECTON_LAYOUT_OFFSET(tecton_transaction_event, reserved, 28);
+
+TECTON_LAYOUT_SIZE(tecton_entity_combust_event, 24);
+TECTON_LAYOUT_OFFSET(tecton_entity_combust_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_entity_combust_event, instigator_runtime, 8);
+TECTON_LAYOUT_OFFSET(tecton_entity_combust_event, duration, 16);
+TECTON_LAYOUT_OFFSET(tecton_entity_combust_event, source, 20);
+
+TECTON_LAYOUT_SIZE(tecton_enchant_event, 24);
+TECTON_LAYOUT_OFFSET(tecton_enchant_event, item_handle, 0);
+TECTON_LAYOUT_OFFSET(tecton_enchant_event, actor_runtime, 8);
+TECTON_LAYOUT_OFFSET(tecton_enchant_event, enchantment_id, 16);
+TECTON_LAYOUT_OFFSET(tecton_enchant_event, previous_level, 20);
+TECTON_LAYOUT_OFFSET(tecton_enchant_event, level, 21);
+TECTON_LAYOUT_OFFSET(tecton_enchant_event, source, 22);
+TECTON_LAYOUT_OFFSET(tecton_enchant_event, reserved, 23);
+
+TECTON_LAYOUT_SIZE(tecton_entity_spawn_event, 16);
+TECTON_LAYOUT_OFFSET(tecton_entity_spawn_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_entity_spawn_event, reserved, 8);
+
+TECTON_LAYOUT_SIZE(tecton_entity_despawn_event, 16);
+TECTON_LAYOUT_OFFSET(tecton_entity_despawn_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_entity_despawn_event, cause, 8);
+TECTON_LAYOUT_OFFSET(tecton_entity_despawn_event, reserved, 12);
+
+TECTON_LAYOUT_SIZE(tecton_entity_damage_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_entity_damage_event, target_runtime, 0);
+TECTON_LAYOUT_OFFSET(tecton_entity_damage_event, source_runtime, 8);
+TECTON_LAYOUT_OFFSET(tecton_entity_damage_event, amount, 16);
+TECTON_LAYOUT_OFFSET(tecton_entity_damage_event, cause, 20);
+TECTON_LAYOUT_OFFSET(tecton_entity_damage_event, reserved, 24);
+
+TECTON_LAYOUT_SIZE(tecton_entity_death_event, 32);
+TECTON_LAYOUT_OFFSET(tecton_entity_death_event, runtime_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_entity_death_event, killer_runtime, 8);
+TECTON_LAYOUT_OFFSET(tecton_entity_death_event, x, 16);
+TECTON_LAYOUT_OFFSET(tecton_entity_death_event, y, 20);
+TECTON_LAYOUT_OFFSET(tecton_entity_death_event, z, 24);
+TECTON_LAYOUT_OFFSET(tecton_entity_death_event, reserved, 28);
+
+TECTON_LAYOUT_SIZE(tecton_entity_interact_event, 24);
+TECTON_LAYOUT_OFFSET(tecton_entity_interact_event, target_runtime, 0);
+TECTON_LAYOUT_OFFSET(tecton_entity_interact_event, player_runtime, 8);
+TECTON_LAYOUT_OFFSET(tecton_entity_interact_event, action, 16);
+TECTON_LAYOUT_OFFSET(tecton_entity_interact_event, reserved, 20);
+
 TECTON_LAYOUT_SIZE(tecton_snapshot_header, 8);
 TECTON_LAYOUT_OFFSET(tecton_snapshot_header, struct_size, 0);
 TECTON_LAYOUT_OFFSET(tecton_snapshot_header, version, 4);
@@ -877,6 +1159,60 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
 #define TECTON_ABI_FP_PLAYER_EVENT(hash) \
   TECTON_ABI_FP_2((hash), sizeof(tecton_player_event), offsetof(tecton_player_event, handle))
 
+#define TECTON_ABI_FP_PLAYER_JOIN_EVENT(hash) \
+  TECTON_ABI_FP_3((hash), sizeof(tecton_player_join_event), offsetof(tecton_player_join_event, handle), offsetof(tecton_player_join_event, runtime_id))
+
+#define TECTON_ABI_FP_PLAYER_REF_EVENT(hash) \
+  TECTON_ABI_FP_3((hash), sizeof(tecton_player_ref_event), offsetof(tecton_player_ref_event, handle), offsetof(tecton_player_ref_event, runtime_id))
+
+#define TECTON_ABI_FP_PLAYER_CHAT_EVENT(hash) \
+  TECTON_ABI_FP_5((hash), sizeof(tecton_player_chat_event), offsetof(tecton_player_chat_event, runtime_id), offsetof(tecton_player_chat_event, message), offsetof(tecton_player_chat_event, flags), offsetof(tecton_player_chat_event, reserved))
+
+#define TECTON_ABI_FP_ITEM_USE_EVENT(hash) \
+  TECTON_ABI_FP_5((hash), sizeof(tecton_item_use_event), offsetof(tecton_item_use_event, runtime_id), offsetof(tecton_item_use_event, identifier), offsetof(tecton_item_use_event, flags), offsetof(tecton_item_use_event, reserved))
+
+#define TECTON_ABI_FP_PLAYER_MOVE_EVENT(hash) \
+  TECTON_ABI_FP_10((hash), sizeof(tecton_player_move_event), offsetof(tecton_player_move_event, runtime_id), offsetof(tecton_player_move_event, from_x), offsetof(tecton_player_move_event, from_y), offsetof(tecton_player_move_event, from_z), offsetof(tecton_player_move_event, to_x), offsetof(tecton_player_move_event, to_y), offsetof(tecton_player_move_event, to_z), offsetof(tecton_player_move_event, on_ground), offsetof(tecton_player_move_event, reserved))
+
+#define TECTON_ABI_FP_DAMAGE_EVENT(hash) \
+  TECTON_ABI_FP_6((hash), sizeof(tecton_damage_event), offsetof(tecton_damage_event, victim_runtime), offsetof(tecton_damage_event, attacker_runtime), offsetof(tecton_damage_event, amount), offsetof(tecton_damage_event, cause), offsetof(tecton_damage_event, reserved))
+
+#define TECTON_ABI_FP_BLOCK_PLACE_EVENT(hash) \
+  TECTON_ABI_FP_7((hash), sizeof(tecton_block_place_event), offsetof(tecton_block_place_event, runtime_id), offsetof(tecton_block_place_event, x), offsetof(tecton_block_place_event, y), offsetof(tecton_block_place_event, z), offsetof(tecton_block_place_event, network_id), offsetof(tecton_block_place_event, reserved))
+
+#define TECTON_ABI_FP_BLOCK_BREAK_EVENT(hash) \
+  TECTON_ABI_FP_7((hash), sizeof(tecton_block_break_event), offsetof(tecton_block_break_event, runtime_id), offsetof(tecton_block_break_event, x), offsetof(tecton_block_break_event, y), offsetof(tecton_block_break_event, z), offsetof(tecton_block_break_event, network_id), offsetof(tecton_block_break_event, reserved))
+
+#define TECTON_ABI_FP_INVENTORY_EVENT(hash) \
+  TECTON_ABI_FP_4((hash), sizeof(tecton_inventory_event), offsetof(tecton_inventory_event, handle), offsetof(tecton_inventory_event, container_id), offsetof(tecton_inventory_event, reserved))
+
+#define TECTON_ABI_FP_INVENTORY_CLICK_EVENT(hash) \
+  TECTON_ABI_FP_6((hash), sizeof(tecton_inventory_click_event), offsetof(tecton_inventory_click_event, handle), offsetof(tecton_inventory_click_event, slot), offsetof(tecton_inventory_click_event, button), offsetof(tecton_inventory_click_event, reserved), offsetof(tecton_inventory_click_event, reserved2))
+
+#define TECTON_ABI_FP_TRANSACTION_EVENT(hash) \
+  TECTON_ABI_FP_5((hash), sizeof(tecton_transaction_event), offsetof(tecton_transaction_event, handle), offsetof(tecton_transaction_event, transaction_id), offsetof(tecton_transaction_event, committed), offsetof(tecton_transaction_event, reserved))
+
+#define TECTON_ABI_FP_ENTITY_COMBUST_EVENT(hash) \
+  TECTON_ABI_FP_5((hash), sizeof(tecton_entity_combust_event), offsetof(tecton_entity_combust_event, runtime_id), offsetof(tecton_entity_combust_event, instigator_runtime), offsetof(tecton_entity_combust_event, duration), offsetof(tecton_entity_combust_event, source))
+
+#define TECTON_ABI_FP_ENCHANT_EVENT(hash) \
+  TECTON_ABI_FP_8((hash), sizeof(tecton_enchant_event), offsetof(tecton_enchant_event, item_handle), offsetof(tecton_enchant_event, actor_runtime), offsetof(tecton_enchant_event, enchantment_id), offsetof(tecton_enchant_event, previous_level), offsetof(tecton_enchant_event, level), offsetof(tecton_enchant_event, source), offsetof(tecton_enchant_event, reserved))
+
+#define TECTON_ABI_FP_ENTITY_SPAWN_EVENT(hash) \
+  TECTON_ABI_FP_3((hash), sizeof(tecton_entity_spawn_event), offsetof(tecton_entity_spawn_event, runtime_id), offsetof(tecton_entity_spawn_event, reserved))
+
+#define TECTON_ABI_FP_ENTITY_DESPAWN_EVENT(hash) \
+  TECTON_ABI_FP_4((hash), sizeof(tecton_entity_despawn_event), offsetof(tecton_entity_despawn_event, runtime_id), offsetof(tecton_entity_despawn_event, cause), offsetof(tecton_entity_despawn_event, reserved))
+
+#define TECTON_ABI_FP_ENTITY_DAMAGE_EVENT(hash) \
+  TECTON_ABI_FP_6((hash), sizeof(tecton_entity_damage_event), offsetof(tecton_entity_damage_event, target_runtime), offsetof(tecton_entity_damage_event, source_runtime), offsetof(tecton_entity_damage_event, amount), offsetof(tecton_entity_damage_event, cause), offsetof(tecton_entity_damage_event, reserved))
+
+#define TECTON_ABI_FP_ENTITY_DEATH_EVENT(hash) \
+  TECTON_ABI_FP_7((hash), sizeof(tecton_entity_death_event), offsetof(tecton_entity_death_event, runtime_id), offsetof(tecton_entity_death_event, killer_runtime), offsetof(tecton_entity_death_event, x), offsetof(tecton_entity_death_event, y), offsetof(tecton_entity_death_event, z), offsetof(tecton_entity_death_event, reserved))
+
+#define TECTON_ABI_FP_ENTITY_INTERACT_EVENT(hash) \
+  TECTON_ABI_FP_5((hash), sizeof(tecton_entity_interact_event), offsetof(tecton_entity_interact_event, target_runtime), offsetof(tecton_entity_interact_event, player_runtime), offsetof(tecton_entity_interact_event, action), offsetof(tecton_entity_interact_event, reserved))
+
 #define TECTON_ABI_FP_SNAPSHOT_HEADER(hash) \
   TECTON_ABI_FP_4((hash), sizeof(tecton_snapshot_header), offsetof(tecton_snapshot_header, struct_size), offsetof(tecton_snapshot_header, version), offsetof(tecton_snapshot_header, reserved))
 
@@ -1041,7 +1377,15 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   (TECTON_ABI_FP_ITEM(1084, TECTON_FEATURE_REGISTRIES)) ^ \
   (TECTON_ABI_FP_ITEM(1085, TECTON_FEATURE_COMMANDS)) ^ \
   (TECTON_ABI_FP_ITEM(1086, TECTON_CUSTOM_PAYLOAD_MAX)) ^ \
-  (TECTON_ABI_FP_ITEM(1087, TECTON_MAX_CUSTOM_EVENTS))
+  (TECTON_ABI_FP_ITEM(1087, TECTON_MAX_CUSTOM_EVENTS)) ^ \
+  (TECTON_ABI_FP_ITEM(1088, TECTON_EVENT_ENTITY_COMBUST)) ^ \
+  (TECTON_ABI_FP_ITEM(1089, TECTON_EVENT_ENCHANTMENT_APPLY)) ^ \
+  (TECTON_ABI_FP_ITEM(1090, TECTON_EVENT_ENCHANTMENT_REMOVE)) ^ \
+  (TECTON_ABI_FP_ITEM(1091, TECTON_EVENT_ENTITY_SPAWN)) ^ \
+  (TECTON_ABI_FP_ITEM(1092, TECTON_EVENT_ENTITY_DESPAWN)) ^ \
+  (TECTON_ABI_FP_ITEM(1093, TECTON_EVENT_ENTITY_DAMAGE)) ^ \
+  (TECTON_ABI_FP_ITEM(1094, TECTON_EVENT_ENTITY_DEATH)) ^ \
+  (TECTON_ABI_FP_ITEM(1095, TECTON_EVENT_ENTITY_INTERACT))
 
 /* Members use FNV-1a and are XOR-combined: one left-to-right chain exceeds C
    compilers' bracket nesting limit. */
@@ -1058,6 +1402,24 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   (TECTON_ABI_FP_EVENT_VIEW(TECTON_ABI_FP_SEED ^ UINT64_C(10))) ^ \
   (TECTON_ABI_FP_SERVER_TICK_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(28))) ^ \
   (TECTON_ABI_FP_PLAYER_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(29))) ^ \
+  (TECTON_ABI_FP_PLAYER_JOIN_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(39))) ^ \
+  (TECTON_ABI_FP_PLAYER_REF_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(40))) ^ \
+  (TECTON_ABI_FP_PLAYER_CHAT_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(41))) ^ \
+  (TECTON_ABI_FP_ITEM_USE_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(42))) ^ \
+  (TECTON_ABI_FP_PLAYER_MOVE_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(43))) ^ \
+  (TECTON_ABI_FP_DAMAGE_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(44))) ^ \
+  (TECTON_ABI_FP_BLOCK_PLACE_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(45))) ^ \
+  (TECTON_ABI_FP_BLOCK_BREAK_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(46))) ^ \
+  (TECTON_ABI_FP_INVENTORY_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(47))) ^ \
+  (TECTON_ABI_FP_INVENTORY_CLICK_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(48))) ^ \
+  (TECTON_ABI_FP_TRANSACTION_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(49))) ^ \
+  (TECTON_ABI_FP_ENTITY_COMBUST_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(50))) ^ \
+  (TECTON_ABI_FP_ENCHANT_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(51))) ^ \
+  (TECTON_ABI_FP_ENTITY_SPAWN_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(52))) ^ \
+  (TECTON_ABI_FP_ENTITY_DESPAWN_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(53))) ^ \
+  (TECTON_ABI_FP_ENTITY_DAMAGE_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(54))) ^ \
+  (TECTON_ABI_FP_ENTITY_DEATH_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(55))) ^ \
+  (TECTON_ABI_FP_ENTITY_INTERACT_EVENT(TECTON_ABI_FP_SEED ^ UINT64_C(56))) ^ \
   (TECTON_ABI_FP_SNAPSHOT_HEADER(TECTON_ABI_FP_SEED ^ UINT64_C(11))) ^ \
   (TECTON_ABI_FP_WORLD_SNAPSHOT(TECTON_ABI_FP_SEED ^ UINT64_C(12))) ^ \
   (TECTON_ABI_FP_PLAYER_SNAPSHOT(TECTON_ABI_FP_SEED ^ UINT64_C(13))) ^ \

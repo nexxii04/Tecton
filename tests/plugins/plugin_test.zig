@@ -101,7 +101,7 @@ test "example native plugin completes lifecycle" {
         .schema = abi.schema_server_tick,
         .event_id = @intFromEnum(abi.EventId.server_tick),
         .phase = abi.event_phase_pre,
-        .flags = abi.event_flag_cancelable | abi.event_flag_callback_only | abi.event_flag_borrowed,
+        .flags = abi.event_flag_callback_only | abi.event_flag_borrowed,
     };
     eventCallback.?(eventUserdata, &event);
     try std.testing.expect(plugin.loaded);
