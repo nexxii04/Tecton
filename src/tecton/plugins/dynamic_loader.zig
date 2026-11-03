@@ -10,10 +10,32 @@ const native = if (builtin.os.tag == .windows) struct {
     extern "kernel32" fn LoadLibraryA(name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
     extern "kernel32" fn FreeLibrary(handle: *anyopaque) callconv(.winapi) i32;
     extern "kernel32" fn GetProcAddress(handle: *anyopaque, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn GetLastError() callconv(.winapi) u32;
 } else struct {
     extern "dl" fn dlopen(name: [*:0]const u8, flags: c_int) ?*anyopaque;
     extern "dl" fn dlclose(handle: *anyopaque) c_int;
     extern "dl" fn dlsym(handle: *anyopaque, name: [*:0]const u8) ?*anyopaque;
+    extern "dl" fn dlerror() ?[*:0]const u8;
+};
+
+pub const LoadResult = struct {
+    reason: u32 = abi.load_ok,
+    abi_major: u16 = 0,
+    abi_minor: u16 = 0,
+    fingerprint: u64 = 0,
+    detail: [128]u8 = [_]u8{0} ** 128,
+    detail_len: u8 = 0,
+
+    pub fn set(self: *LoadResult, reason: u32, detail: []const u8) void {
+        self.reason = reason;
+        const length = @min(detail.len, self.detail.len);
+        if (length > 0) @memcpy(self.detail[0..length], detail[0..length]);
+        self.detail_len = @intCast(length);
+    }
+
+    pub fn detailSlice(self: *const LoadResult) []const u8 {
+        return self.detail[0..self.detail_len];
+    }
 };
 
 pub const Error = error{
@@ -52,40 +74,41 @@ pub fn reasonCode(err: Error) u32 {
 }
 
 pub fn reasonName(err: Error) []const u8 {
-    return reasonNameCode(reasonCode(err));
+    return abi.loadReasonName(reasonCode(err));
 }
 
 pub fn reasonNameCode(code: u32) []const u8 {
-    return switch (code) {
-        abi.load_ok => "ok",
-        abi.load_dlopen => "dlopen",
-        abi.load_symbol_missing => "symbol_missing",
-        abi.load_legacy_abi => "legacy_abi",
-        abi.load_abi_major => "abi_major",
-        abi.load_abi_minor => "abi_minor",
-        abi.load_fingerprint => "fingerprint",
-        abi.load_descriptor => "descriptor",
-        abi.load_metadata => "metadata",
-        abi.load_duplicate_name => "duplicate_name",
-        abi.load_required_feature => "required_feature",
-        abi.load_missing_callback => "missing_callback",
-        abi.load_callback_failed => "callback_failed",
-        abi.load_out_of_memory => "out_of_memory",
-        else => "unknown",
-    };
+    return abi.loadReasonName(code);
 }
 
 pub const SharedLibrary = struct {
     handle: NativeHandle,
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8) error{ OpenFailed, OutOfMemory }!SharedLibrary {
-        const zero_terminated = try allocator.dupeZ(u8, path);
+        var result: LoadResult = .{};
+        return openDetailed(allocator, path, &result);
+    }
+
+    pub fn openDetailed(allocator: std.mem.Allocator, path: []const u8, result: *LoadResult) error{ OpenFailed, OutOfMemory }!SharedLibrary {
+        const zero_terminated = allocator.dupeZ(u8, path) catch {
+            result.set(abi.load_out_of_memory, "path allocation");
+            return error.OutOfMemory;
+        };
         defer allocator.free(zero_terminated);
         if (builtin.os.tag == .windows) {
-            const handle = native.LoadLibraryA(zero_terminated.ptr) orelse return error.OpenFailed;
+            const handle = native.LoadLibraryA(zero_terminated.ptr) orelse {
+                var buffer: [64]u8 = undefined;
+                const detail = std.fmt.bufPrint(&buffer, "LoadLibraryA error {d}", .{native.GetLastError()}) catch "LoadLibraryA failed";
+                result.set(abi.load_dlopen, detail);
+                return error.OpenFailed;
+            };
             return .{ .handle = handle };
         }
-        const handle = native.dlopen(zero_terminated.ptr, 2 | rtl_local) orelse return error.OpenFailed;
+        const handle = native.dlopen(zero_terminated.ptr, 2 | rtl_local) orelse {
+            const message = native.dlerror();
+            result.set(abi.load_dlopen, if (message) |text| std.mem.span(text) else "dlopen failed");
+            return error.OpenFailed;
+        };
         return .{ .handle = handle };
     }
 
@@ -119,6 +142,11 @@ pub const NativePlugin = struct {
     library: SharedLibrary,
     descriptor: *const abi.Descriptor,
     context: *abi.Context,
+    abi_major: u16 = 0,
+    abi_minor: u16 = 0,
+    fingerprint: u64 = 0,
+    required_features: u64 = 0,
+    optional_features: u64 = 0,
     loaded: bool = false,
     load_attempted: bool = false,
     unload_called: bool = false,
@@ -127,11 +155,21 @@ pub const NativePlugin = struct {
     shutdown_called: bool = false,
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8, host: *const abi.HostApi, plugin_id: u32) Error!NativePlugin {
-        var library = try SharedLibrary.open(allocator, path);
+        var result: LoadResult = .{};
+        return openDetailed(allocator, path, host, plugin_id, &result);
+    }
+
+    pub fn openDetailed(allocator: std.mem.Allocator, path: []const u8, host: *const abi.HostApi, plugin_id: u32, result: *LoadResult) Error!NativePlugin {
+        result.* = .{};
+        var library = SharedLibrary.openDetailed(allocator, path, result) catch |err| return err;
         errdefer library.close();
 
         const query = library.symbol(abi.QueryFn, "tecton_plugin_query") orelse {
-            if (library.rawSymbol("tecton_plugin_get_descriptor") != null) return error.LegacyAbi;
+            if (library.rawSymbol("tecton_plugin_get_descriptor") != null) {
+                result.set(abi.load_legacy_abi, "tecton_plugin_get_descriptor");
+                return error.LegacyAbi;
+            }
+            result.set(abi.load_symbol_missing, "tecton_plugin_query");
             return error.SymbolMissing;
         };
 
@@ -147,11 +185,25 @@ pub const NativePlugin = struct {
             .reserved = 0,
         };
         _ = query(&host_query, &info);
-        abi.validateQuery(&host_query, &info) catch |err| return mapError(err);
+        result.abi_major = @truncate(info.abi_major);
+        result.abi_minor = @truncate(info.abi_minor);
+        result.fingerprint = info.abi_fingerprint;
+        abi.validateQuery(&host_query, &info) catch |err| {
+            const mapped = mapError(err);
+            result.set(reasonCode(mapped), @errorName(err));
+            return mapped;
+        };
         const descriptor = info.descriptor.?;
-        abi.validateDescriptor(descriptor, host.features) catch |err| return mapError(err);
+        abi.validateDescriptor(descriptor, host.features) catch |err| {
+            const mapped = mapError(err);
+            result.set(reasonCode(mapped), @errorName(err));
+            return mapped;
+        };
 
-        const context = try allocator.create(abi.Context);
+        const context = allocator.create(abi.Context) catch {
+            result.set(abi.load_out_of_memory, "context allocation");
+            return error.OutOfMemory;
+        };
         errdefer allocator.destroy(context);
         context.* = .{
             .struct_size = @sizeOf(abi.Context),
@@ -165,23 +217,48 @@ pub const NativePlugin = struct {
             .library = library,
             .descriptor = descriptor,
             .context = context,
+            .abi_major = @intCast(info.abi_major),
+            .abi_minor = @intCast(info.abi_minor),
+            .fingerprint = info.abi_fingerprint,
+            .required_features = descriptor.metadata.required_features,
+            .optional_features = descriptor.metadata.optional_features,
         };
     }
 
     pub fn load(self: *NativePlugin) Error!void {
+        return self.loadWithDetail(null);
+    }
+
+    pub fn loadWithDetail(self: *NativePlugin, result: ?*LoadResult) Error!void {
         if (self.loaded) return;
-        const on_load = self.descriptor.on_load orelse return error.MissingCallback;
+        const on_load = self.descriptor.on_load orelse {
+            if (result) |output| output.set(abi.load_missing_callback, "on_load");
+            return error.MissingCallback;
+        };
         self.load_attempted = true;
-        if (on_load(self.context) != 0) return error.CallbackFailed;
+        if (on_load(self.context) != 0) {
+            if (result) |output| output.set(abi.load_callback_failed, "on_load returned nonzero");
+            return error.CallbackFailed;
+        }
         self.loaded = true;
     }
 
     pub fn start(self: *NativePlugin) Error!void {
+        return self.startWithDetail(null);
+    }
+
+    pub fn startWithDetail(self: *NativePlugin, result: ?*LoadResult) Error!void {
         if (self.started) return;
-        const on_start = self.descriptor.on_start orelse return error.MissingCallback;
+        const on_start = self.descriptor.on_start orelse {
+            if (result) |output| output.set(abi.load_missing_callback, "on_start");
+            return error.MissingCallback;
+        };
         self.start_attempted = true;
         self.shutdown_called = false;
-        if (on_start(self.context) != 0) return error.CallbackFailed;
+        if (on_start(self.context) != 0) {
+            if (result) |output| output.set(abi.load_callback_failed, "on_start returned nonzero");
+            return error.CallbackFailed;
+        }
         self.started = true;
     }
 
@@ -230,5 +307,8 @@ pub const NativePlugin = struct {
 
 test "native loader rejects a nonexistent library" {
     if (builtin.os.tag == .windows) return;
-    try std.testing.expectError(error.OpenFailed, SharedLibrary.open(std.testing.allocator, "missing-tecton-plugin.so"));
+    var result: LoadResult = .{};
+    try std.testing.expectError(error.OpenFailed, SharedLibrary.openDetailed(std.testing.allocator, "missing-tecton-plugin.so", &result));
+    try std.testing.expectEqual(abi.load_dlopen, result.reason);
+    try std.testing.expect(result.detail_len > 0);
 }

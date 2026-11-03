@@ -159,6 +159,19 @@ pub const Table = struct {
         return count;
     }
 
+    pub fn countOwner(self: *const Table, head: *const u32) usize {
+        var count: usize = 0;
+        var current = head.*;
+        while (current != none) {
+            if (current >= self.slots.items.len) return count;
+            const slot = self.slots.items[current];
+            if (!slot.active or slot.head != head) return count;
+            count += 1;
+            current = slot.next_owned;
+        }
+        return count;
+    }
+
     fn promote(self: *Table, index: u32) void {
         self.unlink(index);
         var slot = &self.slots.items[index];

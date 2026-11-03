@@ -115,6 +115,54 @@ pub const load_required_feature: u32 = 10;
 pub const load_missing_callback: u32 = 11;
 pub const load_callback_failed: u32 = 12;
 pub const load_out_of_memory: u32 = 13;
+pub const load_reason_count: usize = load_out_of_memory + 1;
+
+pub const LoadReason = enum(u32) {
+    ok = load_ok,
+    dlopen = load_dlopen,
+    symbol_missing = load_symbol_missing,
+    legacy_abi = load_legacy_abi,
+    abi_major = load_abi_major,
+    abi_minor = load_abi_minor,
+    fingerprint = load_fingerprint,
+    descriptor = load_descriptor,
+    metadata = load_metadata,
+    duplicate_name = load_duplicate_name,
+    required_feature = load_required_feature,
+    missing_callback = load_missing_callback,
+    callback_failed = load_callback_failed,
+    out_of_memory = load_out_of_memory,
+};
+
+pub fn loadReasonName(reason: u32) []const u8 {
+    return switch (reason) {
+        load_ok => "ok",
+        load_dlopen => "dlopen",
+        load_symbol_missing => "symbol_missing",
+        load_legacy_abi => "legacy_abi",
+        load_abi_major => "abi_major",
+        load_abi_minor => "abi_minor",
+        load_fingerprint => "fingerprint",
+        load_descriptor => "descriptor",
+        load_metadata => "metadata",
+        load_duplicate_name => "duplicate_name",
+        load_required_feature => "required_feature",
+        load_missing_callback => "missing_callback",
+        load_callback_failed => "callback_failed",
+        load_out_of_memory => "out_of_memory",
+        else => "unknown",
+    };
+}
+
+pub fn shutdownReasonName(reason: u32) []const u8 {
+    return switch (reason) {
+        shutdown_normal => "normal",
+        shutdown_fault => "fault",
+        shutdown_reload => "reload",
+        shutdown_server_exit => "server_exit",
+        else => "unknown",
+    };
+}
 
 pub const packet_priority_normal: u32 = 0;
 pub const packet_priority_immediate: u32 = 1;
@@ -1214,6 +1262,20 @@ fn fpConstants() u64 {
     h ^= mixSigned(abi_fp_seed ^ 1065, result_unloaded);
     h ^= mixSigned(abi_fp_seed ^ 1066, result_denied);
     h ^= mixSigned(abi_fp_seed ^ 1067, result_limit);
+    h ^= mix(abi_fp_seed ^ 1102, load_ok);
+    h ^= mix(abi_fp_seed ^ 1103, load_dlopen);
+    h ^= mix(abi_fp_seed ^ 1104, load_symbol_missing);
+    h ^= mix(abi_fp_seed ^ 1105, load_legacy_abi);
+    h ^= mix(abi_fp_seed ^ 1106, load_abi_major);
+    h ^= mix(abi_fp_seed ^ 1107, load_abi_minor);
+    h ^= mix(abi_fp_seed ^ 1108, load_fingerprint);
+    h ^= mix(abi_fp_seed ^ 1109, load_descriptor);
+    h ^= mix(abi_fp_seed ^ 1110, load_metadata);
+    h ^= mix(abi_fp_seed ^ 1111, load_duplicate_name);
+    h ^= mix(abi_fp_seed ^ 1112, load_required_feature);
+    h ^= mix(abi_fp_seed ^ 1113, load_missing_callback);
+    h ^= mix(abi_fp_seed ^ 1114, load_callback_failed);
+    h ^= mix(abi_fp_seed ^ 1115, load_out_of_memory);
     h ^= mix(abi_fp_seed ^ 1068, packet_priority_normal);
     h ^= mix(abi_fp_seed ^ 1069, packet_priority_immediate);
     h ^= mix(abi_fp_seed ^ 1070, event_custom_base);

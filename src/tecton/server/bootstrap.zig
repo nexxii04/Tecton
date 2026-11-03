@@ -173,6 +173,7 @@ pub fn prepare(tecton: *Tecton) !void {
 
     try @import("../command/list/worlds.zig").register(&tecton.command_registry, tecton);
     try @import("../command/list/world.zig").register(&tecton.command_registry, services.commandViews(tecton).world_admin);
+    try @import("../command/list/plugins.zig").register(&tecton.command_registry, tecton);
     tecton.prepared = true;
     if (tecton.prepare_callback) |callback| callback(tecton.lifecycle_userdata);
 }

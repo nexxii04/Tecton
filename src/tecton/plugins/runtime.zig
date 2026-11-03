@@ -48,6 +48,30 @@ pub const PluginState = enum(u8) {
     failed,
 };
 
+pub const LoadCounters = struct {
+    loaded: u32 = 0,
+    failed: u32 = 0,
+    unloaded: u32 = 0,
+    by_reason: [abi.load_reason_count]u32 = [_]u32{0} ** abi.load_reason_count,
+};
+
+pub const PluginSnapshot = struct {
+    name: []const u8,
+    state: PluginState,
+    previous_state: PluginState,
+    abi_major: u16,
+    abi_minor: u16,
+    fingerprint: u64,
+    required_features: u64,
+    optional_features: u64,
+    load_reason: u32,
+    load_detail: []const u8,
+    events_dispatched: u64,
+    tasks_run: u64,
+    handles_owned: u32,
+    commands_owned: u32,
+};
+
 pub const PluginRuntime = struct {
     allocator: std.mem.Allocator,
     tecton: ?*Tecton = null,
@@ -79,7 +103,7 @@ pub const PluginRuntime = struct {
     next_order: u64 = 1,
     depth: u32 = 0,
     in_emit: bool = false,
-    discovery_error_count: usize = 0,
+    counters: LoadCounters = .{},
     server_state: u32 = 0,
     core_api: abi.CoreApi,
     logging_api: abi.LoggingApi,
@@ -124,12 +148,22 @@ pub const PluginRuntime = struct {
         runtime: *PluginRuntime,
         plugin_id: u32,
         state: PluginState = .unloaded,
+        previous_state: PluginState = .unloaded,
         owns_handles: u32 = Handles.none,
+        handles_owned: u32 = 0,
+        commands_owned: u32 = 0,
         events_dispatched: u64 = 0,
         tasks_run: u64 = 0,
         host: abi.HostApi = undefined,
         name: []const u8 = "",
         load_reason: u32 = abi.load_ok,
+        load_detail: [128]u8 = undefined,
+        load_detail_len: u8 = 0,
+        abi_major: u16 = 0,
+        abi_minor: u16 = 0,
+        fingerprint: u64 = 0,
+        required_features: u64 = 0,
+        optional_features: u64 = 0,
         native: ?*NativePlugin = null,
         scope: [64]u8 = undefined,
         scope_len: u8 = 0,
@@ -479,12 +513,7 @@ pub const PluginRuntime = struct {
     }
 
     pub fn failedCount(self: *const PluginRuntime) usize {
-        var total: usize = 0;
-        for (self.slots.items) |maybe_slot| {
-            const slot = maybe_slot orelse continue;
-            if (slot.state == .failed) total += 1;
-        }
-        return total;
+        return self.counters.failed;
     }
 
     pub fn stateFor(self: *PluginRuntime, plugin_id: u32) ?PluginState {
@@ -495,6 +524,45 @@ pub const PluginRuntime = struct {
     pub fn loadReasonFor(self: *PluginRuntime, plugin_id: u32) ?u32 {
         const slot = self.slotFor(plugin_id) orelse return null;
         return slot.load_reason;
+    }
+
+    pub fn loadDetailFor(self: *PluginRuntime, plugin_id: u32) ?[]const u8 {
+        const slot = self.slotFor(plugin_id) orelse return null;
+        return slot.load_detail[0..slot.load_detail_len];
+    }
+
+    pub fn snapshotPlugins(self: *PluginRuntime, allocator: std.mem.Allocator) ![]PluginSnapshot {
+        var total: usize = 0;
+        for (self.slots.items) |maybe_slot| {
+            const slot = maybe_slot orelse continue;
+            if (slot.state == .unloaded) continue;
+            total += 1;
+        }
+        if (total == 0) return &.{};
+        const snapshots = try allocator.alloc(PluginSnapshot, total);
+        var index: usize = 0;
+        for (self.slots.items) |maybe_slot| {
+            const slot = maybe_slot orelse continue;
+            if (slot.state == .unloaded) continue;
+            snapshots[index] = .{
+                .name = slot.name,
+                .state = slot.state,
+                .previous_state = slot.previous_state,
+                .abi_major = slot.abi_major,
+                .abi_minor = slot.abi_minor,
+                .fingerprint = slot.fingerprint,
+                .required_features = slot.required_features,
+                .optional_features = slot.optional_features,
+                .load_reason = slot.load_reason,
+                .load_detail = slot.load_detail[0..slot.load_detail_len],
+                .events_dispatched = slot.events_dispatched,
+                .tasks_run = slot.tasks_run,
+                .handles_owned = @intCast(self.handles.countOwner(&slot.owns_handles)),
+                .commands_owned = slot.commands_owned,
+            };
+            index += 1;
+        }
+        return snapshots;
     }
 
     pub fn setServerState(self: *PluginRuntime, state: u32) void {
@@ -548,8 +616,7 @@ pub const PluginRuntime = struct {
 
     pub fn loadPath(self: *PluginRuntime, path: []const u8) void {
         const slot = self.allocator.create(HostSlot) catch {
-            self.discovery_error_count += 1;
-            logger.err("Unable to allocate plugin slot for {s}", .{path});
+            self.recordFailure(path, abi.load_out_of_memory, "slot allocation");
             return;
         };
         slot.* = .{ .runtime = self, .plugin_id = self.next_id, .state = .loading, .host = self.host };
@@ -558,54 +625,71 @@ pub const PluginRuntime = struct {
         slot.host.allocator.userdata = @ptrCast(slot);
 
         self.registerLoadingSlot(slot) catch {
-            self.discovery_error_count += 1;
-            logger.err("Unable to allocate plugin slot for {s}", .{path});
+            self.recordFailure(path, abi.load_out_of_memory, "slot table allocation");
             self.allocator.destroy(slot);
             return;
         };
 
         const native = self.allocator.create(NativePlugin) catch {
-            self.failSlot(slot, path, abi.load_out_of_memory, "out_of_memory");
+            self.failSlot(slot, path, abi.load_out_of_memory, "native allocation");
             return;
         };
-        native.* = NativePlugin.open(self.allocator, path, &slot.host, slot.plugin_id) catch |err| {
+        var result: native_loader.LoadResult = .{};
+        native.* = NativePlugin.openDetailed(self.allocator, path, &slot.host, slot.plugin_id, &result) catch |err| {
+            slot.abi_major = result.abi_major;
+            slot.abi_minor = result.abi_minor;
+            slot.fingerprint = result.fingerprint;
             self.allocator.destroy(native);
-            self.failSlot(slot, path, native_loader.reasonCode(err), @errorName(err));
+            self.failSlot(slot, path, failureReason(&result, err), failureDetail(&result, err));
             return;
         };
         slot.native = native;
+        slot.abi_major = native.abi_major;
+        slot.abi_minor = native.abi_minor;
+        slot.fingerprint = native.fingerprint;
+        slot.required_features = native.required_features;
+        slot.optional_features = native.optional_features;
 
         const label = self.allocator.dupe(u8, abi.metadataName(native.descriptor)) catch {
-            self.failSlot(slot, path, abi.load_out_of_memory, "out_of_memory");
+            self.failSlot(slot, path, abi.load_out_of_memory, "name allocation");
             return;
         };
         slot.name = label;
 
         for (self.plugins.items) |existing| {
             if (std.mem.eql(u8, existing.name, label)) {
-                self.failSlot(slot, path, abi.load_duplicate_name, "duplicate_name");
+                self.failSlot(slot, path, abi.load_duplicate_name, "duplicate metadata name");
                 return;
             }
         }
 
-        native.load() catch |err| {
-            self.failSlot(slot, path, native_loader.reasonCode(err), @errorName(err));
+        native.loadWithDetail(&result) catch |err| {
+            self.failSlot(slot, path, failureReason(&result, err), failureDetail(&result, err));
             return;
         };
         slot.state = .loaded;
 
         slot.state = .starting;
-        native.start() catch |err| {
-            self.failSlot(slot, path, native_loader.reasonCode(err), @errorName(err));
+        result = .{};
+        native.startWithDetail(&result) catch |err| {
+            self.failSlot(slot, path, failureReason(&result, err), failureDetail(&result, err));
             return;
         };
 
         slot.state = .running;
         self.plugins.append(self.allocator, slot) catch {
-            self.failSlot(slot, path, abi.load_out_of_memory, "out_of_memory");
+            self.failSlot(slot, path, abi.load_out_of_memory, "plugin list allocation");
             return;
         };
-        logger.info("Loading native plugin: {s}", .{path});
+        self.counters.loaded +%= 1;
+        logger.info("[plugin:{s}] load: ok abi={d}.{d} fingerprint=0x{x} features=0x{x} path={s}", .{
+            slot.name,
+            slot.abi_major,
+            slot.abi_minor,
+            slot.fingerprint,
+            slot.required_features | slot.optional_features,
+            path,
+        });
     }
 
     fn readyAll(self: *PluginRuntime) void {
@@ -622,17 +706,50 @@ pub const PluginRuntime = struct {
         self.next_id += 1;
     }
 
-    fn failSlot(self: *PluginRuntime, slot: *HostSlot, path: []const u8, reason: u32, reason_name: []const u8) void {
+    fn setLoadDetail(slot: *HostSlot, detail: []const u8) void {
+        const length = @min(detail.len, slot.load_detail.len);
+        if (length > 0) @memcpy(slot.load_detail[0..length], detail[0..length]);
+        slot.load_detail_len = @intCast(length);
+    }
+
+    fn failureReason(result: *const native_loader.LoadResult, err: native_loader.Error) u32 {
+        if (result.reason != abi.load_ok) return result.reason;
+        return native_loader.reasonCode(err);
+    }
+
+    fn failureDetail(result: *const native_loader.LoadResult, err: native_loader.Error) []const u8 {
+        if (result.detail_len > 0) return result.detailSlice();
+        return @errorName(err);
+    }
+
+    fn recordFailure(self: *PluginRuntime, path: []const u8, reason: u32, detail: []const u8) void {
+        self.counters.failed +%= 1;
+        if (reason < self.counters.by_reason.len) self.counters.by_reason[reason] +%= 1;
+        self.logLoadFailure(std.fs.path.basename(path), path, reason, detail);
+    }
+
+    fn logLoadFailure(self: *PluginRuntime, name: []const u8, path: []const u8, reason: u32, detail: []const u8) void {
+        _ = self;
+        const text = if (detail.len == 0) "-" else detail;
+        if (builtin.is_test) {
+            logger.warn("[plugin:{s}] load: {s} ({s}) path={s}", .{ name, abi.loadReasonName(reason), text, path });
+        } else {
+            logger.err("[plugin:{s}] load: {s} ({s}) path={s}", .{ name, abi.loadReasonName(reason), text, path });
+        }
+    }
+
+    fn failSlot(self: *PluginRuntime, slot: *HostSlot, path: []const u8, reason: u32, detail: []const u8) void {
         self.removeFromPlugins(slot);
+        slot.previous_state = slot.state;
         self.teardownSlot(slot, .fault);
         slot.state = .failed;
         slot.load_reason = reason;
-        self.discovery_error_count += 1;
-        if (builtin.is_test) {
-            logger.warn("Unable to load plugin {s}: {s} ({s})", .{ path, reason_name, native_loader.reasonNameCode(reason) });
-        } else {
-            logger.err("Unable to load plugin {s}: {s} ({s})", .{ path, reason_name, native_loader.reasonNameCode(reason) });
-        }
+        setLoadDetail(slot, detail);
+        self.counters.failed +%= 1;
+        if (reason < self.counters.by_reason.len) self.counters.by_reason[reason] +%= 1;
+        if (slot.name.len == 0) slot.name = self.allocator.dupe(u8, std.fs.path.basename(path)) catch "";
+        const name = if (slot.name.len > 0) slot.name else std.fs.path.basename(path);
+        self.logLoadFailure(name, path, reason, slot.load_detail[0..slot.load_detail_len]);
     }
 
     fn removeFromPlugins(self: *PluginRuntime, slot: *HostSlot) void {
@@ -652,6 +769,7 @@ pub const PluginRuntime = struct {
         self.releaseSchemas(slot.plugin_id);
         self.removeSubscriptions(slot.plugin_id);
         _ = self.handles.removeOwner(slot.plugin_id, &slot.owns_handles);
+        slot.handles_owned = 0;
         if (slot.native) |native| {
             native.deinit();
             self.allocator.destroy(native);
@@ -661,14 +779,26 @@ pub const PluginRuntime = struct {
 
     fn unloadSlot(self: *PluginRuntime, slot: *HostSlot, reason: abi.ShutdownReason) void {
         if (slot.state == .unloaded or slot.state == .failed) return;
+        slot.handles_owned = @intCast(self.handles.countOwner(&slot.owns_handles));
+        const handles = slot.handles_owned;
+        const timers = self.timerCountFor(slot.plugin_id);
+        const commands = slot.commands_owned;
         slot.state = .stopping;
         self.teardownSlot(slot, reason);
         self.removeFromPlugins(slot);
         if (slot.plugin_id > 0 and slot.plugin_id <= self.slots.items.len) {
             self.slots.items[@intCast(slot.plugin_id - 1)] = null;
         }
+        logger.info("[plugin:{s}] unload: {s} handles={d} timers={d} commands={d}", .{
+            slot.name,
+            abi.shutdownReasonName(@intFromEnum(reason)),
+            handles,
+            timers,
+            commands,
+        });
         if (slot.name.len > 0) self.allocator.free(slot.name);
         slot.state = .unloaded;
+        self.counters.unloaded +%= 1;
         self.allocator.destroy(slot);
     }
 
@@ -2071,6 +2201,7 @@ pub const PluginRuntime = struct {
             registry.unregisterCommand(cmd);
             return abi.result_out_of_memory;
         };
+        slot.commands_owned +%= 1;
         registry.markDirty();
         self.command_dirty = true;
         output.* = handle;
@@ -2085,6 +2216,7 @@ pub const PluginRuntime = struct {
         const registry = self.command_registry orelse return abi.result_not_found;
         _ = self.handles.remove(.command, command);
         registry.unregisterCommand(@ptrFromInt(marker));
+        if (slot.commands_owned > 0) slot.commands_owned -= 1;
         registry.markDirty();
         self.command_dirty = true;
         return abi.result_ok;
@@ -2099,7 +2231,12 @@ pub const PluginRuntime = struct {
 
     pub fn unregisterCommandsFor(self: *PluginRuntime, plugin_id: u32) void {
         const registry = self.command_registry orelse return;
-        if (registry.removeOwned(plugin_id) == 0) return;
+        const removed = registry.removeOwned(plugin_id);
+        if (removed == 0) return;
+        if (self.slotFor(plugin_id)) |slot| {
+            const removed_count: u32 = @intCast(removed);
+            if (slot.commands_owned >= removed_count) slot.commands_owned -= removed_count else slot.commands_owned = 0;
+        }
         registry.markDirty();
         self.command_dirty = true;
     }
@@ -2115,6 +2252,15 @@ pub const PluginRuntime = struct {
     pub fn timerLiveCount(self: *const PluginRuntime) u32 {
         const wheel = self.timer_wheel orelse return 0;
         return wheel.live;
+    }
+
+    fn timerCountFor(self: *const PluginRuntime, plugin_id: u32) u32 {
+        const wheel = self.timer_wheel orelse return 0;
+        var total: u32 = 0;
+        for (wheel.slots.items) |timer| {
+            if (timer.active and timer.plugin_id == plugin_id) total += 1;
+        }
+        return total;
     }
 
     pub fn deferredLen(self: *const PluginRuntime) usize {
@@ -3286,4 +3432,24 @@ test "set block applies traits only when requested" {
 
 test "plugin commands execute with borrowed argv and disappear on owner unload" {
     try @import("runtime_test.zig").Suite(test_scope).case_038();
+}
+
+test "unknown interface id returns unsupported" {
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+    var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 1 };
+    var output: ?abi.InterfacePtr = undefined;
+    try std.testing.expectEqual(abi.result_unsupported, PluginRuntime.getInterface(@ptrCast(&slot), 0xffff, 1, 0, &output));
+    try std.testing.expect(output == null);
+}
+
+test "interface version mismatch returns version" {
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+    var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 1 };
+    var output: ?abi.InterfacePtr = undefined;
+    try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), abi.interface_core, 2, 0, &output));
+    try std.testing.expect(output == null);
+    try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), abi.interface_core, 1, 1, &output));
+    try std.testing.expect(output == null);
 }

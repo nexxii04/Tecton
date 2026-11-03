@@ -67,8 +67,97 @@ test "duplicate metadata name is rejected and the first plugin stays running" {
     try std.testing.expectEqual(@as(usize, 1), runtime.count());
     try std.testing.expectEqual(@as(usize, 1), runtime.failedCount());
     try std.testing.expectEqual(tecton.plugins.PluginState.running, runtime.stateFor(1).?);
+    try std.testing.expectEqual(abi.load_ok, runtime.loadReasonFor(1).?);
     try std.testing.expectEqual(tecton.plugins.PluginState.failed, runtime.stateFor(2).?);
     try std.testing.expectEqual(abi.load_duplicate_name, runtime.loadReasonFor(2).?);
+    try std.testing.expectEqual(@as(u32, 1), runtime.counters.loaded);
+    try std.testing.expectEqual(@as(u32, 1), runtime.counters.failed);
+    try std.testing.expectEqual(@as(u32, 1), runtime.counters.by_reason[abi.load_duplicate_name]);
+}
+
+test "each load reason is reported in the slot, detail and aggregate counter" {
+    const allocator = std.testing.allocator;
+    var runtime = tecton.plugins.PluginRuntime.init(allocator);
+    defer runtime.deinit();
+
+    const cases = [_]struct { path: []const u8, reason: u32 }{
+        .{ .path = "missing-phase6-plugin.so", .reason = abi.load_dlopen },
+        .{ .path = options.no_query_path, .reason = abi.load_symbol_missing },
+        .{ .path = options.legacy_path, .reason = abi.load_legacy_abi },
+        .{ .path = options.reason_abi_major_path, .reason = abi.load_abi_major },
+        .{ .path = options.reason_abi_minor_path, .reason = abi.load_abi_minor },
+        .{ .path = options.mismatch_path, .reason = abi.load_fingerprint },
+        .{ .path = options.reason_descriptor_path, .reason = abi.load_descriptor },
+        .{ .path = options.reason_metadata_path, .reason = abi.load_metadata },
+        .{ .path = options.reason_required_feature_path, .reason = abi.load_required_feature },
+        .{ .path = options.reason_missing_callback_path, .reason = abi.load_missing_callback },
+        .{ .path = options.failure_path, .reason = abi.load_callback_failed },
+    };
+
+    for (cases, 0..) |case, index| {
+        runtime.loadPath(case.path);
+        const plugin_id: u32 = @intCast(index + 1);
+        try std.testing.expectEqual(tecton.plugins.PluginState.failed, runtime.stateFor(plugin_id).?);
+        try std.testing.expectEqual(case.reason, runtime.loadReasonFor(plugin_id).?);
+        try std.testing.expect(runtime.loadDetailFor(plugin_id).?.len > 0);
+        try std.testing.expectEqual(@as(u32, 1), runtime.counters.by_reason[case.reason]);
+    }
+
+    try std.testing.expectEqual(@as(u32, cases.len), runtime.counters.failed);
+    try std.testing.expectEqual(@as(u32, 0), runtime.counters.loaded);
+    try std.testing.expectEqual(@as(u32, 0), runtime.counters.unloaded);
+
+    const snapshots = try runtime.snapshotPlugins(allocator);
+    defer allocator.free(snapshots);
+    try std.testing.expectEqual(cases.len, snapshots.len);
+    for (snapshots, 0..) |snapshot, snapshot_index| {
+        const expected_previous: tecton.plugins.PluginState = if (cases[snapshot_index].reason == abi.load_callback_failed) .starting else .loading;
+        try std.testing.expectEqual(tecton.plugins.PluginState.failed, snapshot.state);
+        try std.testing.expectEqual(expected_previous, snapshot.previous_state);
+        try std.testing.expect(snapshot.load_detail.len > 0);
+        switch (cases[snapshot_index].reason) {
+            abi.load_abi_major, abi.load_abi_minor => {
+                try std.testing.expectEqual(@as(u16, 2), snapshot.abi_major);
+                try std.testing.expectEqual(@as(u16, 0), snapshot.abi_minor);
+            },
+            abi.load_dlopen, abi.load_symbol_missing, abi.load_legacy_abi => {
+                try std.testing.expectEqual(@as(u16, 0), snapshot.abi_major);
+                try std.testing.expectEqual(@as(u16, 0), snapshot.abi_minor);
+            },
+            else => {},
+        }
+    }
+}
+
+test "out of memory during load is reported as a failed slot" {
+    const allocator = std.testing.allocator;
+    var index: usize = 1;
+    var found = false;
+    while (index < 24 and !found) : (index += 1) {
+        var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = index });
+        var runtime = tecton.plugins.PluginRuntime.init(failing.allocator());
+        runtime.loadPath(options.trace_a_path);
+        const snapshots = runtime.snapshotPlugins(allocator) catch &.{};
+        if (snapshots.len > 0) {
+            if (snapshots[0].state == .failed and snapshots[0].load_reason == abi.load_out_of_memory) found = true;
+            allocator.free(snapshots);
+        }
+        runtime.deinit();
+    }
+    try std.testing.expect(found);
+}
+
+test "unload reports counters and removes the running slot" {
+    var runtime = tecton.plugins.PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+
+    runtime.loadPath(options.trace_a_path);
+    try std.testing.expectEqual(tecton.plugins.PluginState.running, runtime.stateFor(1).?);
+    try std.testing.expectEqual(@as(u32, 1), runtime.counters.loaded);
+
+    runtime.unloadPlugin(1);
+    try std.testing.expect(runtime.stateFor(1) == null);
+    try std.testing.expectEqual(@as(u32, 1), runtime.counters.unloaded);
 }
 
 test "on_ready runs after every on_start in load order" {

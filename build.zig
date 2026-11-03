@@ -159,6 +159,13 @@ pub fn build(b: *std.Build) void {
     const native_mismatch = addTestPlugin(b, target, optimize, "tecton-c-fingerprint-mismatch", "tests/plugins/fingerprint_mismatch_plugin.c");
     const native_legacy = addTestPlugin(b, target, optimize, "tecton-c-legacy", "tests/plugins/legacy_plugin.c");
     const native_failure = addTestPlugin(b, target, optimize, "tecton-c-failure", "tests/plugins/failure_plugin.c");
+    const native_no_query = addTestPlugin(b, target, optimize, "tecton-c-no-query", "tests/plugins/no_query_plugin.c");
+    const native_reason_abi_major = addReasonPlugin(b, target, optimize, "tecton-c-reason-abi-major", 1);
+    const native_reason_abi_minor = addReasonPlugin(b, target, optimize, "tecton-c-reason-abi-minor", 2);
+    const native_reason_descriptor = addReasonPlugin(b, target, optimize, "tecton-c-reason-descriptor", 3);
+    const native_reason_metadata = addReasonPlugin(b, target, optimize, "tecton-c-reason-metadata", 4);
+    const native_reason_required_feature = addReasonPlugin(b, target, optimize, "tecton-c-reason-required-feature", 5);
+    const native_reason_missing_callback = addReasonPlugin(b, target, optimize, "tecton-c-reason-missing-callback", 6);
     const native_trace_a = addTracePlugin(b, target, optimize, "tecton-c-trace-a", "tecton-trace-a", "a");
     const native_trace_b = addTracePlugin(b, target, optimize, "tecton-c-trace-b", "tecton-trace-b", "b");
     const native_trace_duplicate = addTracePlugin(b, target, optimize, "tecton-c-trace-duplicate", "tecton-trace-a", "d");
@@ -210,6 +217,13 @@ pub fn build(b: *std.Build) void {
     plugin_options.addOptionPath("mismatch_path", native_mismatch.getEmittedBin());
     plugin_options.addOptionPath("legacy_path", native_legacy.getEmittedBin());
     plugin_options.addOptionPath("failure_path", native_failure.getEmittedBin());
+    plugin_options.addOptionPath("no_query_path", native_no_query.getEmittedBin());
+    plugin_options.addOptionPath("reason_abi_major_path", native_reason_abi_major.getEmittedBin());
+    plugin_options.addOptionPath("reason_abi_minor_path", native_reason_abi_minor.getEmittedBin());
+    plugin_options.addOptionPath("reason_descriptor_path", native_reason_descriptor.getEmittedBin());
+    plugin_options.addOptionPath("reason_metadata_path", native_reason_metadata.getEmittedBin());
+    plugin_options.addOptionPath("reason_required_feature_path", native_reason_required_feature.getEmittedBin());
+    plugin_options.addOptionPath("reason_missing_callback_path", native_reason_missing_callback.getEmittedBin());
     plugin_options.addOptionPath("trace_a_path", native_trace_a.getEmittedBin());
     plugin_options.addOptionPath("trace_b_path", native_trace_b.getEmittedBin());
     plugin_options.addOptionPath("trace_duplicate_path", native_trace_duplicate.getEmittedBin());
@@ -239,6 +253,13 @@ pub fn build(b: *std.Build) void {
     runtime_plugin_tests.root_module.linkLibrary(mbedtls);
     const run_runtime_plugin_tests = b.addRunArtifact(runtime_plugin_tests);
     run_runtime_plugin_tests.step.dependOn(&native_failure.step);
+    run_runtime_plugin_tests.step.dependOn(&native_no_query.step);
+    run_runtime_plugin_tests.step.dependOn(&native_reason_abi_major.step);
+    run_runtime_plugin_tests.step.dependOn(&native_reason_abi_minor.step);
+    run_runtime_plugin_tests.step.dependOn(&native_reason_descriptor.step);
+    run_runtime_plugin_tests.step.dependOn(&native_reason_metadata.step);
+    run_runtime_plugin_tests.step.dependOn(&native_reason_required_feature.step);
+    run_runtime_plugin_tests.step.dependOn(&native_reason_missing_callback.step);
     run_runtime_plugin_tests.step.dependOn(&native_trace_a.step);
     run_runtime_plugin_tests.step.dependOn(&native_trace_b.step);
     run_runtime_plugin_tests.step.dependOn(&native_trace_duplicate.step);
@@ -349,6 +370,26 @@ fn addTracePlugin(
         "-std=c11",
         b.fmt("-DTECTON_TRACE_NAME=\"{s}\"", .{trace_name}),
         b.fmt("-DTECTON_TRACE_LABEL=\"{s}\"", .{label}),
+    } });
+    return plugin;
+}
+
+fn addReasonPlugin(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    name: []const u8,
+    reason_case: u32,
+) *std.Build.Step.Compile {
+    const plugin = b.addLibrary(.{
+        .name = name,
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    plugin.root_module.addIncludePath(b.path("include"));
+    plugin.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/reason_plugin.c"), .flags = &.{
+        "-std=c11",
+        b.fmt("-DTECTON_REASON_CASE={d}", .{reason_case}),
     } });
     return plugin;
 }
