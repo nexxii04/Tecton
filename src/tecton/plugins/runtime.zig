@@ -1250,25 +1250,23 @@ pub const PluginRuntime = struct {
 
     const InterfaceSpec = struct {
         id: u32,
-        major: u16,
-        minor: u16,
         field: []const u8,
     };
 
     const interface_specs = [_]InterfaceSpec{
-        .{ .id = abi.interface_core, .major = 1, .minor = 0, .field = "core_api" },
-        .{ .id = abi.interface_logging, .major = 1, .minor = 0, .field = "logging_api" },
-        .{ .id = abi.interface_events, .major = 1, .minor = 0, .field = "events_api" },
-        .{ .id = abi.interface_scheduler, .major = 1, .minor = 0, .field = "scheduler_api" },
-        .{ .id = abi.interface_world, .major = 1, .minor = 1, .field = "world_api" },
-        .{ .id = abi.interface_players, .major = 1, .minor = 1, .field = "players_api" },
-        .{ .id = abi.interface_entities, .major = 1, .minor = 1, .field = "entities_api" },
-        .{ .id = abi.interface_items, .major = 1, .minor = 1, .field = "items_api" },
-        .{ .id = abi.interface_blocks, .major = 1, .minor = 1, .field = "blocks_api" },
-        .{ .id = abi.interface_inventories, .major = 1, .minor = 0, .field = "inventories_api" },
-        .{ .id = abi.interface_registries, .major = 1, .minor = 0, .field = "registries_api" },
-        .{ .id = abi.interface_network, .major = 1, .minor = 0, .field = "network_api" },
-        .{ .id = abi.interface_commands, .major = 1, .minor = 1, .field = "commands_api" },
+        .{ .id = abi.interface_core, .field = "core_api" },
+        .{ .id = abi.interface_logging, .field = "logging_api" },
+        .{ .id = abi.interface_events, .field = "events_api" },
+        .{ .id = abi.interface_scheduler, .field = "scheduler_api" },
+        .{ .id = abi.interface_world, .field = "world_api" },
+        .{ .id = abi.interface_players, .field = "players_api" },
+        .{ .id = abi.interface_entities, .field = "entities_api" },
+        .{ .id = abi.interface_items, .field = "items_api" },
+        .{ .id = abi.interface_blocks, .field = "blocks_api" },
+        .{ .id = abi.interface_inventories, .field = "inventories_api" },
+        .{ .id = abi.interface_registries, .field = "registries_api" },
+        .{ .id = abi.interface_network, .field = "network_api" },
+        .{ .id = abi.interface_commands, .field = "commands_api" },
     };
 
     fn getInterface(context: ?*anyopaque, interface_id: u32, major: u16, minor: u16, interface: ?*?abi.InterfacePtr) callconv(.c) i32 {
@@ -1277,8 +1275,9 @@ pub const PluginRuntime = struct {
         output.* = null;
         inline for (interface_specs) |spec| {
             if (spec.id == interface_id) {
-                if (major != spec.major or minor > spec.minor) return abi.result_version;
-                output.* = @ptrCast(&@field(self, spec.field));
+                const served: *const abi.InterfaceHeader = @ptrCast(&@field(self, spec.field));
+                if (major != served.major or minor > served.minor) return abi.result_version;
+                output.* = served;
                 return abi.result_ok;
             }
         }
@@ -3174,15 +3173,14 @@ test "every served interface advertises exactly its feature bit" {
     var served: u64 = 0;
     var output: ?abi.InterfacePtr = null;
     for (PluginRuntime.interface_specs) |spec| {
-        try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, spec.major, spec.minor, &output));
+        try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, 1, 0, &output));
         const header = output orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqual(spec.major, header.major);
-        try std.testing.expectEqual(spec.minor, header.minor);
+        try std.testing.expectEqual(@as(u16, 1), header.major);
         try std.testing.expectEqual(abi.interfaceFeature(spec.id), header.features);
         served |= header.features;
 
-        try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, spec.major + 1, 0, &output));
-        try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, spec.major, spec.minor + 1, &output));
+        try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, header.major + 1, 0, &output));
+        try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, header.major, header.minor + 1, &output));
     }
     try std.testing.expectEqual(abi.result_unsupported, PluginRuntime.getInterface(@ptrCast(&slot), 0, 1, 0, &output));
     const behaviors = abi.feature_allocator | abi.feature_custom_events | abi.feature_traits | abi.feature_hot_unload;

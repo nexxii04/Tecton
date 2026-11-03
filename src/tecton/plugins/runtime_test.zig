@@ -128,6 +128,14 @@ pub fn Suite(comptime scope: type) type {
                 try std.testing.expectEqual(minor, interface.?.minor);
                 try std.testing.expect(interface.?.struct_size >= @sizeOf(abi.InterfaceHeader));
 
+                if (minor > 0) {
+                    var older: ?abi.InterfacePtr = null;
+                    try std.testing.expectEqual(abi.result_ok, private_pluginruntime_getInterface(@ptrCast(&slot), id, 1, 0, &older));
+                    try std.testing.expect(older != null);
+                    try std.testing.expectEqual(id, older.?.interface_id);
+                    try std.testing.expectEqual(minor, older.?.minor);
+                }
+
                 try std.testing.expectEqual(abi.result_version, private_pluginruntime_getInterface(@ptrCast(&slot), id, 2, 0, &interface));
                 try std.testing.expect(interface == null);
                 try std.testing.expectEqual(abi.result_version, private_pluginruntime_getInterface(@ptrCast(&slot), id, 1, minor + 1, &interface));
