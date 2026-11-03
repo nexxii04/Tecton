@@ -61,6 +61,7 @@ pub fn Harness(comptime Provider: type) type {
                 .find_player_by_runtime_id = harnessFindPlayer,
                 .register_ecs_entity = harnessRegisterEcs,
                 .unregister_ecs_entity = harnessUnregisterEcs,
+                .note_entity_removed = harnessNoteEntityRemoved,
                 .set_player_location = harnessSetPlayerLocation,
                 .enqueue_player_removal = harnessEnqueuePlayerRemoval,
                 .remove_player = harnessRemovePlayer,
@@ -173,6 +174,11 @@ pub fn Harness(comptime Provider: type) type {
             if (entity.ecs_id == 0) return;
             _ = self.ecs.destroy(@bitCast(entity.ecs_id));
             entity.ecs_id = 0;
+        }
+
+        fn harnessNoteEntityRemoved(ctx: *anyopaque, entity: *Entity) void {
+            _ = ctx;
+            _ = entity;
         }
 
         fn harnessSetPlayerLocation(ctx: *anyopaque, uuid: []const u8, world_identifier: []const u8, dimension_identifier: []const u8) void {

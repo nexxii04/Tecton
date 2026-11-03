@@ -34,6 +34,10 @@ pub const TaskQueue = struct {
     }
 
     pub fn cancelByOwner(self: *TaskQueue, name: []const u8, owner_id: i64, cleanup: ?*const fn (*anyopaque) void) void {
+        self.drainByOwner(name, owner_id, cleanup);
+    }
+
+    pub fn drainByOwner(self: *TaskQueue, name: []const u8, owner_id: i64, cleanup: ?*const fn (*anyopaque) void) void {
         var i: usize = 0;
         while (i < self.tasks.items.len) {
             const task = self.tasks.items[i];

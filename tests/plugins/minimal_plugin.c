@@ -4,6 +4,7 @@ static tecton_plugin_context *context;
 static const tecton_host_api *host;
 static void *host_userdata;
 static uint64_t subscription;
+static uint32_t lifecycle_mask;
 
 static void TECTON_PLUGIN_CALL on_tick_event(void *userdata,
                                               const tecton_event_view *event) {
@@ -23,6 +24,7 @@ static int32_t TECTON_PLUGIN_CALL on_load(tecton_plugin_context *value) {
   context = value;
   host = value->host;
   host_userdata = host->userdata;
+  lifecycle_mask |= 1u;
   return 0;
 }
 
@@ -32,8 +34,14 @@ static int32_t TECTON_PLUGIN_CALL on_start(tecton_plugin_context *value) {
                             TECTON_EVENT_PHASE_PRE, 0, on_tick_event, 0,
                             &subscription) != 0)
     return 1;
+  lifecycle_mask |= 2u;
   host->log(host_userdata, TECTON_LOG_INFO, TECTON_STR("C plugin started"));
   return 0;
+}
+
+static void TECTON_PLUGIN_CALL on_ready(tecton_plugin_context *value) {
+  (void)value;
+  lifecycle_mask |= 4u;
 }
 
 static void TECTON_PLUGIN_CALL on_shutdown(tecton_plugin_context *value,
@@ -44,6 +52,7 @@ static void TECTON_PLUGIN_CALL on_shutdown(tecton_plugin_context *value,
     host->event_unsubscribe(host_userdata, subscription);
     subscription = 0;
   }
+  lifecycle_mask |= 8u;
   host->log(host_userdata, TECTON_LOG_INFO, TECTON_STR("C plugin stopped"));
 }
 
@@ -52,6 +61,7 @@ static void TECTON_PLUGIN_CALL on_unload(tecton_plugin_context *value) {
   context = 0;
   host = 0;
   host_userdata = 0;
+  lifecycle_mask |= 16u;
 }
 
 static const tecton_plugin_descriptor descriptor = {
@@ -73,8 +83,11 @@ static const tecton_plugin_descriptor descriptor = {
     .on_start = on_start,
     .on_shutdown = on_shutdown,
     .on_unload = on_unload,
-    .on_ready = 0,
+    .on_ready = on_ready,
 };
+
+TECTON_PLUGIN_EXPORT uint32_t TECTON_PLUGIN_CALL
+tecton_minimal_lifecycle_mask(void) { return lifecycle_mask; }
 
 TECTON_PLUGIN_EXPORT int32_t TECTON_PLUGIN_CALL
 tecton_plugin_query(const tecton_host_query *query, tecton_plugin_info *info) {

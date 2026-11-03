@@ -52,21 +52,26 @@ pub fn reasonCode(err: Error) u32 {
 }
 
 pub fn reasonName(err: Error) []const u8 {
-    return switch (err) {
-        error.OpenFailed => "dlopen",
-        error.SymbolMissing => "symbol_missing",
-        error.LegacyAbi => "legacy_abi",
-        error.AbiMajor => "abi_major",
-        error.AbiMinor => "abi_minor",
-        error.HostTooOld => "host_too_old",
-        error.BuildTarget => "build_target",
-        error.FingerprintMismatch => "fingerprint",
-        error.Descriptor => "descriptor",
-        error.Metadata => "metadata",
-        error.RequiredFeature => "required_feature",
-        error.MissingCallback => "missing_callback",
-        error.CallbackFailed => "callback_failed",
-        error.OutOfMemory => "out_of_memory",
+    return reasonNameCode(reasonCode(err));
+}
+
+pub fn reasonNameCode(code: u32) []const u8 {
+    return switch (code) {
+        abi.load_ok => "ok",
+        abi.load_dlopen => "dlopen",
+        abi.load_symbol_missing => "symbol_missing",
+        abi.load_legacy_abi => "legacy_abi",
+        abi.load_abi_major => "abi_major",
+        abi.load_abi_minor => "abi_minor",
+        abi.load_fingerprint => "fingerprint",
+        abi.load_descriptor => "descriptor",
+        abi.load_metadata => "metadata",
+        abi.load_duplicate_name => "duplicate_name",
+        abi.load_required_feature => "required_feature",
+        abi.load_missing_callback => "missing_callback",
+        abi.load_callback_failed => "callback_failed",
+        abi.load_out_of_memory => "out_of_memory",
+        else => "unknown",
     };
 }
 
@@ -115,7 +120,11 @@ pub const NativePlugin = struct {
     descriptor: *const abi.Descriptor,
     context: *abi.Context,
     loaded: bool = false,
+    load_attempted: bool = false,
+    unload_called: bool = false,
     started: bool = false,
+    start_attempted: bool = false,
+    shutdown_called: bool = false,
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8, host: *const abi.HostApi, plugin_id: u32) Error!NativePlugin {
         var library = try SharedLibrary.open(allocator, path);
@@ -159,37 +168,45 @@ pub const NativePlugin = struct {
         };
     }
 
-    pub fn start(self: *NativePlugin) Error!void {
+    pub fn load(self: *NativePlugin) Error!void {
         if (self.loaded) return;
-
         const on_load = self.descriptor.on_load orelse return error.MissingCallback;
-        if (on_load(self.context) != 0) {
-            if (self.descriptor.on_unload) |on_unload| on_unload(self.context);
-            return error.CallbackFailed;
-        }
+        self.load_attempted = true;
+        if (on_load(self.context) != 0) return error.CallbackFailed;
         self.loaded = true;
-        const on_start = self.descriptor.on_start orelse return error.MissingCallback;
-        if (on_start(self.context) != 0) {
-            self.shutdown(.fault);
-            return error.CallbackFailed;
-        }
+    }
 
+    pub fn start(self: *NativePlugin) Error!void {
+        if (self.started) return;
+        const on_start = self.descriptor.on_start orelse return error.MissingCallback;
+        self.start_attempted = true;
+        self.shutdown_called = false;
+        if (on_start(self.context) != 0) return error.CallbackFailed;
         self.started = true;
     }
 
+    pub fn ready(self: *NativePlugin) void {
+        if (!self.started) return;
+        if (self.descriptor.on_ready) |on_ready| on_ready(self.context);
+    }
+
     pub fn shutdown(self: *NativePlugin, reason: abi.ShutdownReason) void {
-        if (self.started) {
-            if (self.descriptor.on_shutdown) |on_shutdown| on_shutdown(self.context, @intFromEnum(reason));
-            self.started = false;
-        }
-        if (self.loaded) {
-            if (self.descriptor.on_unload) |on_unload| on_unload(self.context);
-            self.loaded = false;
-        }
+        if (!self.start_attempted or self.shutdown_called) return;
+        if (self.descriptor.on_shutdown) |on_shutdown| on_shutdown(self.context, @intFromEnum(reason));
+        self.shutdown_called = true;
+        self.started = false;
+    }
+
+    pub fn unload(self: *NativePlugin) void {
+        if (!self.load_attempted or self.unload_called) return;
+        if (self.descriptor.on_unload) |on_unload| on_unload(self.context);
+        self.unload_called = true;
+        self.loaded = false;
     }
 
     pub fn deinit(self: *NativePlugin) void {
         self.shutdown(.normal);
+        self.unload();
         self.allocator.destroy(self.context);
         self.library.close();
     }

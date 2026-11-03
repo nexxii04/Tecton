@@ -350,6 +350,7 @@ pub fn ServerHost(
         find_player_by_runtime_id: *const fn (*anyopaque, i64) ?*Player,
         register_ecs_entity: *const fn (*anyopaque, *Entity) void,
         unregister_ecs_entity: *const fn (*anyopaque, *Entity) void,
+        note_entity_removed: *const fn (*anyopaque, *Entity) void,
         set_player_location: *const fn (*anyopaque, []const u8, []const u8, []const u8) void,
         enqueue_player_removal: *const fn (*anyopaque, *Player) void,
         remove_player: *const fn (*anyopaque, *Player) void,
@@ -380,6 +381,10 @@ pub fn ServerHost(
 
         pub fn unregisterEcsEntity(self: Self, entity: *Entity) void {
             self.unregister_ecs_entity(self.ctx, entity);
+        }
+
+        pub fn noteEntityRemoved(self: Self, entity: *Entity) void {
+            self.note_entity_removed(self.ctx, entity);
         }
 
         pub fn setPlayerLocation(self: Self, uuid: []const u8, world_identifier: []const u8, dimension_identifier: []const u8) void {

@@ -158,6 +158,10 @@ pub fn build(b: *std.Build) void {
     const native_example = addPluginExample(b, target, optimize);
     const native_mismatch = addTestPlugin(b, target, optimize, "tecton-c-fingerprint-mismatch", "tests/plugins/fingerprint_mismatch_plugin.c");
     const native_legacy = addTestPlugin(b, target, optimize, "tecton-c-legacy", "tests/plugins/legacy_plugin.c");
+    const native_failure = addTestPlugin(b, target, optimize, "tecton-c-failure", "tests/plugins/failure_plugin.c");
+    const native_trace_a = addTracePlugin(b, target, optimize, "tecton-c-trace-a", "tecton-trace-a", "a");
+    const native_trace_b = addTracePlugin(b, target, optimize, "tecton-c-trace-b", "tecton-trace-b", "b");
+    const native_trace_duplicate = addTracePlugin(b, target, optimize, "tecton-c-trace-duplicate", "tecton-trace-a", "d");
     const native_example_step = b.step("plugin-example", "Build the minimal C ABI plugin");
     native_example_step.dependOn(b.getInstallStep());
     native_example_step.dependOn(&native_example.step);
@@ -205,6 +209,10 @@ pub fn build(b: *std.Build) void {
     plugin_options.addOptionPath("path", native_example.getEmittedBin());
     plugin_options.addOptionPath("mismatch_path", native_mismatch.getEmittedBin());
     plugin_options.addOptionPath("legacy_path", native_legacy.getEmittedBin());
+    plugin_options.addOptionPath("failure_path", native_failure.getEmittedBin());
+    plugin_options.addOptionPath("trace_a_path", native_trace_a.getEmittedBin());
+    plugin_options.addOptionPath("trace_b_path", native_trace_b.getEmittedBin());
+    plugin_options.addOptionPath("trace_duplicate_path", native_trace_duplicate.getEmittedBin());
     const plugin_test_mod = b.createModule(.{ .root_source_file = b.path("tests/plugins/plugin_test.zig"), .target = target, .optimize = optimize, .link_libc = true });
     const plugin_loader_mod = b.createModule(.{ .root_source_file = b.path("src/tecton/plugins/dynamic_loader.zig"), .target = target, .optimize = optimize });
     plugin_test_mod.addImport("tecton-plugin-loader", plugin_loader_mod);
@@ -214,7 +222,26 @@ pub fn build(b: *std.Build) void {
     run_plugin_tests.step.dependOn(&native_example.step);
     run_plugin_tests.step.dependOn(&native_mismatch.step);
     run_plugin_tests.step.dependOn(&native_legacy.step);
+    run_plugin_tests.step.dependOn(&native_failure.step);
     run_plugin_tests.step.dependOn(b.getInstallStep());
+
+    const runtime_plugin_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/plugins/runtime_plugin_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{ .{ .name = "tecton", .module = tecton_mod }, .{ .name = "nbt", .module = nbt_mod } },
+    });
+    runtime_plugin_test_mod.addOptions("plugin-options", plugin_options);
+    const runtime_plugin_tests = b.addTest(.{ .root_module = runtime_plugin_test_mod });
+    runtime_plugin_tests.root_module.linkLibrary(leveldb_lib);
+    runtime_plugin_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
+    runtime_plugin_tests.root_module.linkLibrary(mbedtls);
+    const run_runtime_plugin_tests = b.addRunArtifact(runtime_plugin_tests);
+    run_runtime_plugin_tests.step.dependOn(&native_failure.step);
+    run_runtime_plugin_tests.step.dependOn(&native_trace_a.step);
+    run_runtime_plugin_tests.step.dependOn(&native_trace_b.step);
+    run_runtime_plugin_tests.step.dependOn(&native_trace_duplicate.step);
 
     const conformance = addPluginConformance(b, target, optimize);
 
@@ -223,6 +250,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_chest_tests.step);
     test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_plugin_tests.step);
+    test_step.dependOn(&run_runtime_plugin_tests.step);
     test_step.dependOn(conformance);
     const chest_test_step = b.step("test-chest", "Run chest regression tests");
     chest_test_step.dependOn(&run_chest_tests.step);
@@ -300,6 +328,28 @@ fn addTestPlugin(
     });
     plugin.root_module.addIncludePath(b.path("include"));
     plugin.root_module.addCSourceFile(.{ .file = b.path(source), .flags = &.{"-std=c11"} });
+    return plugin;
+}
+
+fn addTracePlugin(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    name: []const u8,
+    trace_name: []const u8,
+    label: []const u8,
+) *std.Build.Step.Compile {
+    const plugin = b.addLibrary(.{
+        .name = name,
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    plugin.root_module.addIncludePath(b.path("include"));
+    plugin.root_module.addCSourceFile(.{ .file = b.path("tests/plugins/trace_plugin.c"), .flags = &.{
+        "-std=c11",
+        b.fmt("-DTECTON_TRACE_NAME=\"{s}\"", .{trace_name}),
+        b.fmt("-DTECTON_TRACE_LABEL=\"{s}\"", .{label}),
+    } });
     return plugin;
 }
 

@@ -117,6 +117,10 @@ pub fn Emitter() type {
             }
         }
 
+        pub fn removeOwnerFor(self: *Self, comptime event: Event, phase: EventPhase, owner_id: u32) void {
+            self.removeOwnerFrom(self.listenerList(event, phase), owner_id);
+        }
+
         fn removeOwnerFrom(self: *Self, list: anytype, owner_id: u32) void {
             _ = self;
             var index: usize = 0;
@@ -143,8 +147,17 @@ pub fn Emitter() type {
             context.event = event;
             context.cancelled = false;
             context.phase = .pre;
-            const pre = self.listenerList(event, .pre);
-            for (pre.items) |listener| {
+            const limit = self.next_order;
+            var min_order: u64 = 0;
+            var index: usize = 0;
+            while (index < self.listenerList(event, .pre).items.len) {
+                const listener = self.listenerList(event, .pre).items[index];
+                if (listener.order < min_order or listener.order >= limit) {
+                    index += 1;
+                    continue;
+                }
+                
+                min_order = listener.order + 1;
                 context.listener_userdata = listener.userdata;
                 switch (listener.callback(context, data)) {
                     .cancel => {
@@ -157,25 +170,43 @@ pub fn Emitter() type {
                     },
                     .continue_ => {},
                 }
+                if (index < self.listenerList(event, .pre).items.len and self.listenerList(event, .pre).items[index].order == listener.order) index += 1;
             }
 
             if (!context.cancelled) {
                 context.phase = .commit;
-                const commit = self.listenerList(event, .commit);
-                for (commit.items) |listener| {
+                min_order = 0;
+                index = 0;
+                while (index < self.listenerList(event, .commit).items.len) {
+                    const listener = self.listenerList(event, .commit).items[index];
+                    if (listener.order < min_order or listener.order >= limit) {
+                        index += 1;
+                        continue;
+                    }
+                    min_order = listener.order + 1;
                     context.listener_userdata = listener.userdata;
                     if (listener.callback(context, data) != .continue_) {
                         context.cancelled = true;
                         break;
                     }
+                    
+                    if (index < self.listenerList(event, .commit).items.len and self.listenerList(event, .commit).items[index].order == listener.order) index += 1;
                 }
             }
 
             context.phase = .post;
-            const post = self.listenerList(event, .post);
-            for (post.items) |listener| {
+            min_order = 0;
+            index = 0;
+            while (index < self.listenerList(event, .post).items.len) {
+                const listener = self.listenerList(event, .post).items[index];
+                if (listener.order < min_order or listener.order >= limit) {
+                    index += 1;
+                    continue;
+                }
+                min_order = listener.order + 1;
                 context.listener_userdata = listener.userdata;
                 _ = listener.callback(context, data);
+                if (index < self.listenerList(event, .post).items.len and self.listenerList(event, .post).items[index].order == listener.order) index += 1;
             }
             context.listener_userdata = null;
             return !context.cancelled;

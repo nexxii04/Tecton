@@ -82,7 +82,6 @@ pub const Dimension = struct {
     }
 
     pub fn deinit(self: *Dimension) void {
-
         if (self.floating_texts) |manager| manager.destroy();
         if (self.ecs) |state| state.destroy(self.allocator);
 
@@ -100,6 +99,7 @@ pub const Dimension = struct {
 
         var entity_iter = self.entities.valueIterator();
         while (entity_iter.next()) |entity| {
+            self.world.tecton.noteEntityRemoved(entity.*);
             entity.*.deinit();
             self.allocator.destroy(entity.*);
         }

@@ -53,6 +53,7 @@ pub fn removeEntity(dim: *Dimension, entity: *Entity) !void {
     dim.entity_index.remove(entity.runtime_id);
     _ = dim.entities.remove(entity.runtime_id);
     dim.world.tecton.unregisterEcsEntity(entity);
+    dim.world.tecton.noteEntityRemoved(entity);
     entity.deinit();
     dim.allocator.destroy(entity);
 }
@@ -64,6 +65,7 @@ pub fn flushPendingRemovals(dim: *Dimension) void {
             dim.entity_index.remove(rid);
             broadcastRemoveEntity(dim, entity) catch {};
             dim.world.tecton.unregisterEcsEntity(entity);
+            dim.world.tecton.noteEntityRemoved(entity);
             entity.deinit();
             dim.allocator.destroy(entity);
         }

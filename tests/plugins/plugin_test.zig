@@ -62,13 +62,36 @@ fn reallocate(_: ?*anyopaque, _: ?*anyopaque, _: usize, _: usize, _: usize) call
     return null;
 }
 
+fn lifecycleMask(plugin: *loader.NativePlugin) u32 {
+    const symbol = plugin.library.rawSymbol("tecton_minimal_lifecycle_mask") orelse return 0;
+    const read: *const fn () callconv(.c) u32 = @ptrCast(symbol);
+    return read();
+}
+
+fn failureMask(plugin: *loader.NativePlugin) u32 {
+    const symbol = plugin.library.rawSymbol("tecton_failure_mask") orelse return 0;
+    const read: *const fn () callconv(.c) u32 = @ptrCast(symbol);
+    return read();
+}
+
+fn failureShutdownReason(plugin: *loader.NativePlugin) u32 {
+    const symbol = plugin.library.rawSymbol("tecton_failure_shutdown_reason") orelse return 0;
+    const read: *const fn () callconv(.c) u32 = @ptrCast(symbol);
+    return read();
+}
+
 test "example native plugin completes lifecycle" {
     const path = options.path;
     var host = hostApi();
     var plugin = try loader.NativePlugin.open(std.testing.allocator, path, &host, 1);
     defer plugin.deinit();
+    try plugin.load();
+    try std.testing.expectEqual(@as(u32, 1), lifecycleMask(&plugin));
     try plugin.start();
+    try std.testing.expectEqual(@as(u32, 3), lifecycleMask(&plugin));
     try std.testing.expect(eventCallback != null);
+    plugin.ready();
+    try std.testing.expectEqual(@as(u32, 7), lifecycleMask(&plugin));
     var tick = abi.ServerTickEvent{ .tick = 1 };
     var result: i32 = @intFromEnum(abi.EventResult.continue_);
     const event = abi.EventView{
@@ -84,8 +107,26 @@ test "example native plugin completes lifecycle" {
     try std.testing.expect(plugin.loaded);
     try std.testing.expect(plugin.started);
     plugin.shutdown(.normal);
-    try std.testing.expect(!plugin.loaded);
     try std.testing.expect(!plugin.started);
+    try std.testing.expectEqual(@as(u32, 15), lifecycleMask(&plugin));
+    plugin.unload();
+    try std.testing.expect(!plugin.loaded);
+    try std.testing.expectEqual(@as(u32, 31), lifecycleMask(&plugin));
+}
+
+test "failed start invokes fault shutdown and unload" {
+    var host = hostApi();
+    var plugin = try loader.NativePlugin.open(std.testing.allocator, options.failure_path, &host, 1);
+    defer plugin.deinit();
+    try plugin.load();
+    try std.testing.expectEqual(@as(u32, 1), failureMask(&plugin));
+    try std.testing.expectError(error.CallbackFailed, plugin.start());
+    try std.testing.expect(!plugin.started);
+    plugin.shutdown(.fault);
+    try std.testing.expectEqual(@as(u32, 11), failureMask(&plugin));
+    try std.testing.expectEqual(abi.shutdown_fault, failureShutdownReason(&plugin));
+    plugin.unload();
+    try std.testing.expectEqual(@as(u32, 27), failureMask(&plugin));
 }
 
 test "descriptor with a foreign fingerprint is rejected without dereferencing it" {
