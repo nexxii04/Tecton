@@ -16,9 +16,19 @@ const Entity = @import("../entity/entity.zig").Entity;
 const EntityType = @import("../entity/entity_type.zig").EntityType;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const entities_mod = @import("../world/dimension/entities.zig");
+const BlockPermutation = @import("../world/block/block_permutation.zig").BlockPermutation;
+const ItemType = @import("../items/item_type.zig").ItemType;
+const EntityTypeRegistry = @import("../entity/entity_type_registry.zig").EntityTypeRegistry;
 
 const MAX_PLUGIN_PACKET_BYTES: usize = 1 << 20;
 const event_count = std.meta.fields(Events.Event).len;
+const custom_event_count: usize = abi.max_custom_events;
+const bucket_count = event_count + custom_event_count;
+const deferred_capacity: usize = 1024;
+const timer_wheel_slots: usize = 4096;
+const timer_capacity: usize = 4096;
+const timer_none: u32 = std.math.maxInt(u32);
+const max_emit_depth: u32 = 16;
 
 pub const PluginState = enum(u8) {
     unloaded,
@@ -38,15 +48,18 @@ pub const PluginRuntime = struct {
     handles: Handles.Table,
     plugins: std.ArrayList(*HostSlot),
     slots: std.ArrayList(?*HostSlot),
-    buckets: [event_count][3]std.ArrayList(Subscription),
-    active: [event_count][3]u32,
-    dead: [event_count][3]u32,
-    bridges: [event_count][3]bool,
-    bridge_priority: [event_count][3]i16,
-    bridge_refresh: [event_count][3]bool = std.mem.zeroes([event_count][3]bool),
+    buckets: [bucket_count][3]std.ArrayList(Subscription),
+    active: [bucket_count][3]u32,
+    dead: [bucket_count][3]u32,
+    bridges: [bucket_count][3]bool,
+    bridge_priority: [bucket_count][3]i16,
+    bridge_refresh: [bucket_count][3]bool = std.mem.zeroes([bucket_count][3]bool),
     bridge_refresh_total: u32 = 0,
     bridge_total: u32 = 0,
-    dirty: [event_count][3]bool = std.mem.zeroes([event_count][3]bool),
+    retire_pending: [bucket_count * 3]u16 = std.mem.zeroes([bucket_count * 3]u16),
+    retire_seen: [bucket_count][3]bool = std.mem.zeroes([bucket_count][3]bool),
+    retire_count: usize = 0,
+    dirty: [bucket_count][3]bool = std.mem.zeroes([bucket_count][3]bool),
     dirty_total: u32 = 0,
     pending_unloads: std.ArrayList(u32),
     unload_all_pending: bool = false,
@@ -60,9 +73,9 @@ pub const PluginRuntime = struct {
     in_emit: bool = false,
     discovery_error_count: usize = 0,
     server_state: u32 = 0,
-    next_task: u64 = 1,
-    scheduled_tasks: std.ArrayList(*ScheduledTask),
     core_api: abi.CoreApi,
+    logging_api: abi.LoggingApi,
+    events_api: abi.EventsApi,
     scheduler_api: abi.SchedulerApi,
     world_api: abi.WorldApi,
     players_api: abi.PlayersApi,
@@ -70,7 +83,23 @@ pub const PluginRuntime = struct {
     items_api: abi.ItemsApi,
     blocks_api: abi.BlocksApi,
     inventories_api: abi.InventoriesApi,
+    registries_api: abi.RegistriesApi,
     network_api: abi.NetworkApi,
+    commands_api: abi.CommandsApi,
+    custom_schemas: std.ArrayList(CustomSchema),
+    deferred_ring: ?[]DeferredEmit = null,
+    deferred_head: usize = 0,
+    deferred_tail: usize = 0,
+    deferred_len: usize = 0,
+    block_state_entries: ?[]abi.BlockStateEntry = null,
+    block_state_entry_count: usize = 0,
+    item_entries: ?[]abi.ItemEntry = null,
+    item_entry_count: usize = 0,
+    entity_type_entries: ?[]abi.EntityTypeEntry = null,
+    entity_type_entry_count: usize = 0,
+    timer_wheel: ?*TimerWheel = null,
+    timer_tick: u64 = 0,
+    timer_task_registered: bool = false,
 
     pub const NATIVE_BRIDGE_OWNER_ID: u16 = 0xC001;
 
@@ -85,15 +114,54 @@ pub const PluginRuntime = struct {
         name: []const u8 = "",
         load_reason: u32 = abi.load_ok,
         native: ?*NativePlugin = null,
+        scope: [64]u8 = undefined,
+        scope_len: u8 = 0,
+        log_level: u32 = abi.log_trace,
+
+        fn logEnabled(self: *const HostSlot, level: u32) bool {
+            if (level < self.log_level) return false;
+            return switch (level) {
+                abi.log_trace, abi.log_debug => logger.enabled(.debug),
+                abi.log_info => logger.enabled(.info),
+                abi.log_warn => logger.enabled(.warn),
+                else => logger.enabled(.err),
+            };
+        }
     };
 
-    const ScheduledTask = struct {
-        runtime: *PluginRuntime,
+    const CustomSchema = struct {
+        name: ?[]u8,
+        schema: u32,
         plugin_id: u32,
-        timer_id: u64,
-        callback: abi.SchedulerCallbackFn,
-        userdata: ?*anyopaque,
-        cancelled: bool = false,
+    };
+
+    const DeferredEmit = extern struct {
+        schema: u32,
+        size: u16,
+        flags: u16,
+        payload: [abi.custom_payload_max]u8,
+    };
+
+    const TimerSlot = struct {
+        next_tick: u64 = 0,
+        callback: ?abi.TimerCallbackFn = null,
+        userdata: ?*anyopaque = null,
+        plugin_id: u32 = 0,
+        interval: u32 = 0,
+        generation: u32 = 1,
+        next: u32 = timer_none,
+        prev: u32 = timer_none,
+        active: bool = false,
+        firing: bool = false,
+    };
+
+    const TimerWheel = struct {
+        slots: std.ArrayList(TimerSlot),
+        free: std.ArrayList(u32),
+        garbage: std.ArrayList(u32),
+        heads: []u32,
+        live: u32 = 0,
+        dispatching: bool = false,
     };
 
     const Subscription = struct {
@@ -116,13 +184,15 @@ pub const PluginRuntime = struct {
             .plugins = .empty,
             .slots = .empty,
             .buckets = undefined,
-            .active = std.mem.zeroes([event_count][3]u32),
-            .dead = std.mem.zeroes([event_count][3]u32),
-            .bridges = std.mem.zeroes([event_count][3]bool),
-            .bridge_priority = std.mem.zeroes([event_count][3]i16),
+            .active = std.mem.zeroes([bucket_count][3]u32),
+            .dead = std.mem.zeroes([bucket_count][3]u32),
+            .bridges = std.mem.zeroes([bucket_count][3]bool),
+            .bridge_priority = std.mem.zeroes([bucket_count][3]i16),
             .pending_unloads = .empty,
-            .scheduled_tasks = .empty,
+            .custom_schemas = .empty,
             .core_api = undefined,
+            .logging_api = undefined,
+            .events_api = undefined,
             .scheduler_api = undefined,
             .world_api = undefined,
             .players_api = undefined,
@@ -130,9 +200,11 @@ pub const PluginRuntime = struct {
             .items_api = undefined,
             .blocks_api = undefined,
             .inventories_api = undefined,
+            .registries_api = undefined,
             .network_api = undefined,
+            .commands_api = undefined,
         };
-        for (0..event_count) |event_index| {
+        for (0..bucket_count) |event_index| {
             for (0..3) |phase| {
                 runtime.buckets[event_index][phase] = .empty;
                 runtime.bridge_priority[event_index][phase] = std.math.minInt(i16);
@@ -173,16 +245,44 @@ pub const PluginRuntime = struct {
             .get_size = inventoryGetSize,
             .get_item = inventoryGetItem,
         };
+        runtime.logging_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.LoggingApi), .major = 1, .minor = 0, .interface_id = abi.interface_logging, .reserved = 0, .features = abi.feature_logging },
+            .log = log,
+            .is_enabled = logIsEnabled,
+            .set_level = logSetLevel,
+            .set_scope = logSetScope,
+        };
+        runtime.events_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.EventsApi), .major = 1, .minor = 0, .interface_id = abi.interface_events, .reserved = 0, .features = abi.feature_events },
+            .subscribe = eventSubscribe,
+            .unsubscribe = eventUnsubscribe,
+            .emit = emitCustom,
+            .emit_immediate = emitImmediate,
+            .schema_of = schemaOf,
+        };
         runtime.scheduler_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .reserved = 0, .features = 0 },
-            .schedule = schedulerSchedule,
+            .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .reserved = 0, .features = abi.feature_scheduler },
+            .after = schedulerAfter,
+            .every = schedulerEvery,
             .cancel = schedulerCancel,
             .cancel_owner = schedulerCancelOwner,
         };
         runtime.network_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.NetworkApi), .major = 1, .minor = 0, .interface_id = abi.interface_network, .reserved = 0, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.NetworkApi), .major = 1, .minor = 0, .interface_id = abi.interface_network, .reserved = 0, .features = abi.feature_network },
             .send = networkSend,
             .broadcast = networkBroadcast,
+        };
+        runtime.registries_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.RegistriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_registries, .reserved = 0, .features = abi.feature_registries },
+            .block_states = registriesBlockStates,
+            .items = registriesItems,
+            .entity_types = registriesEntityTypes,
+        };
+        runtime.commands_api = .{
+            .header = .{ .struct_size = @sizeOf(abi.CommandsApi), .major = 1, .minor = 0, .interface_id = abi.interface_commands, .reserved = 0, .features = abi.feature_commands },
+            .register_command = commandRegister,
+            .unregister = commandUnregister,
+            .mark_dirty = commandMarkDirty,
         };
         runtime.host = .{
             .struct_size = @sizeOf(abi.HostApi),
@@ -207,12 +307,15 @@ pub const PluginRuntime = struct {
         self.tasks = &tecton.tasks;
         self.attachEvents(events);
         self.server_state = 0;
+        _ = self.ensureDeferredRing() catch {};
+        _ = self.ensureTimerWheel() catch {};
+        self.registerTimerTask();
     }
 
     pub fn attachEvents(self: *PluginRuntime, events: *Events.Events) void {
         if (self.events) |previous| previous.setIdleHook(null, null);
         self.events = events;
-        events.setIdleHook(bridgeIdle, self);
+        if (self.bridge_refresh_total > 0) events.setIdleHook(bridgeIdle, self);
     }
 
     pub fn discover(self: *PluginRuntime, io: std.Io, directory_path: []const u8) void {
@@ -263,7 +366,6 @@ pub const PluginRuntime = struct {
 
     pub fn deinit(self: *PluginRuntime) void {
         self.unloadAll(.server_exit);
-        self.cancelAllScheduled();
         for (self.slots.items) |maybe_slot| {
             const slot = maybe_slot orelse continue;
             self.teardownSlot(slot, .server_exit);
@@ -276,14 +378,35 @@ pub const PluginRuntime = struct {
             events.setIdleHook(null, null);
             events.removeOwner(NATIVE_BRIDGE_OWNER_ID);
         }
-        for (0..event_count) |event_index| {
+        for (0..bucket_count) |event_index| {
             for (0..3) |phase| self.buckets[event_index][phase].deinit(self.allocator);
+        }
+        for (self.custom_schemas.items) |schema| {
+            if (schema.name) |name| self.allocator.free(name);
+        }
+        self.custom_schemas.deinit(self.allocator);
+        if (self.deferred_ring) |ring| self.allocator.free(ring);
+        if (self.block_state_entries) |entries| {
+            if (entries.len > 0) self.allocator.free(entries);
+        }
+        if (self.item_entries) |entries| {
+            if (entries.len > 0) self.allocator.free(entries);
+        }
+        if (self.entity_type_entries) |entries| {
+            if (entries.len > 0) self.allocator.free(entries);
+        }
+        if (self.timer_wheel) |wheel| {
+            wheel.slots.deinit(self.allocator);
+            wheel.free.deinit(self.allocator);
+            wheel.garbage.deinit(self.allocator);
+            self.allocator.free(wheel.heads);
+            self.allocator.destroy(wheel);
+            self.timer_wheel = null;
         }
         self.pending_unloads.deinit(self.allocator);
         self.plugins.deinit(self.allocator);
         self.slots.deinit(self.allocator);
         self.handles.deinit();
-        self.scheduled_tasks.deinit(self.allocator);
         self.tasks = null;
         self.events = null;
         self.tecton = null;
@@ -461,6 +584,8 @@ pub const PluginRuntime = struct {
     fn teardownSlot(self: *PluginRuntime, slot: *HostSlot, reason: abi.ShutdownReason) void {
         if (slot.native) |native| native.shutdown(reason);
         self.cancelTasksFor(slot.plugin_id);
+        self.cancelTimersFor(slot.plugin_id);
+        self.releaseSchemas(slot.plugin_id);
         self.removeSubscriptions(slot.plugin_id);
         _ = self.handles.removeOwner(slot.plugin_id, &slot.owns_handles);
         if (slot.native) |native| {
@@ -484,21 +609,11 @@ pub const PluginRuntime = struct {
     }
 
     fn cancelTasksFor(self: *PluginRuntime, plugin_id: u32) void {
-        if (self.tasks) |tasks| {
-            tasks.drainByOwner("plugin", @intCast(plugin_id), null);
-            return;
-        }
-        var index = self.scheduled_tasks.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.scheduled_tasks.items[index].plugin_id != plugin_id) continue;
-            const scheduled = self.scheduled_tasks.swapRemove(index);
-            self.allocator.destroy(scheduled);
-        }
+        if (self.tasks) |tasks| tasks.drainByOwner("plugin", @intCast(plugin_id), null);
     }
 
     fn removeSubscriptions(self: *PluginRuntime, plugin_id: u32) void {
-        for (0..event_count) |event_index| {
+        for (0..bucket_count) |event_index| {
             for (0..3) |phase| {
                 var changed = false;
                 for (self.buckets[event_index][phase].items) |*subscription| {
@@ -507,6 +622,7 @@ pub const PluginRuntime = struct {
                     self.dead[event_index][phase] += 1;
                     self.dead_total += 1;
                     if (self.active[event_index][phase] > 0) self.active[event_index][phase] -= 1;
+                    if (self.depth > 0 and self.active[event_index][phase] == 0) self.markRetire(event_index, phase);
                     changed = true;
                 }
                 if (changed and self.depth == 0) self.compactBucket(event_index, phase, true);
@@ -527,10 +643,18 @@ pub const PluginRuntime = struct {
         if (phase >= 3) return abi.result_invalid_argument;
         const callback_value = callback orelse return abi.result_invalid_argument;
         const output = subscription orelse return abi.result_invalid_argument;
-        const internal = internalEvent(event_id) orelse return abi.result_not_found;
-        if (externalEventId(internal) == null) return abi.result_not_found;
-
-        const event_index: usize = @intCast(event_id);
+        const event_index: usize = if (event_id >= abi.event_custom_base) blk: {
+            const custom = event_id - abi.event_custom_base;
+            if (custom >= abi.max_custom_events) return abi.result_not_found;
+            if (custom >= self.custom_schemas.items.len or self.custom_schemas.items[custom].name == null) return abi.result_not_found;
+            break :blk event_count + custom;
+        } else blk: {
+            if (event_id >= event_count) return abi.result_not_found;
+            const internal = internalEvent(event_id) orelse return abi.result_not_found;
+            if (externalEventId(internal) == null) return abi.result_not_found;
+            break :blk @intCast(event_id);
+        };
+        const core_event = event_index < event_count;
         const phase_index: usize = @intCast(phase);
         const id = self.next_subscription;
         self.next_subscription += 1;
@@ -550,7 +674,7 @@ pub const PluginRuntime = struct {
         var item_index: usize = undefined;
         if (deferred) {
             self.buckets[event_index][phase_index].append(self.allocator, item) catch {
-                self.maybeRemoveEmptyBridge(event_index, phase_index);
+                if (core_event) self.maybeRemoveEmptyBridge(event_index, phase_index);
                 return abi.result_out_of_memory;
             };
             item_index = self.buckets[event_index][phase_index].items.len - 1;
@@ -559,20 +683,23 @@ pub const PluginRuntime = struct {
             var index: usize = 0;
             while (index < self.buckets[event_index][phase_index].items.len and self.buckets[event_index][phase_index].items[index].priority >= priority) : (index += 1) {}
             self.buckets[event_index][phase_index].insert(self.allocator, index, item) catch {
-                self.maybeRemoveEmptyBridge(event_index, phase_index);
+                if (core_event) self.maybeRemoveEmptyBridge(event_index, phase_index);
                 return abi.result_out_of_memory;
             };
             item_index = index;
         }
         self.active[event_index][phase_index] += 1;
-        self.ensureBridge(event_id, phase, priority) catch {
-            self.active[event_index][phase_index] -= 1;
-            self.buckets[event_index][phase_index].items[item_index].active = false;
-            self.dead[event_index][phase_index] += 1;
-            self.dead_total += 1;
-            if (self.depth == 0) self.compactBucket(event_index, phase_index, true);
-            return abi.result_unsupported;
-        };
+        if (core_event) {
+            self.ensureBridge(event_id, phase, priority) catch {
+                self.active[event_index][phase_index] -= 1;
+                self.buckets[event_index][phase_index].items[item_index].active = false;
+                self.dead[event_index][phase_index] += 1;
+                self.dead_total += 1;
+                if (self.depth > 0 and self.active[event_index][phase_index] == 0) self.markRetire(event_index, phase_index);
+                if (self.depth == 0) self.compactBucket(event_index, phase_index, true);
+                return abi.result_unsupported;
+            };
+        }
         output.* = id;
         return abi.result_ok;
     }
@@ -581,7 +708,7 @@ pub const PluginRuntime = struct {
         const slot = slotFrom(context) orelse return abi.result_invalid_argument;
         const self = slot.runtime;
         if (subscription == 0) return abi.result_invalid_argument;
-        for (0..event_count) |event_index| {
+        for (0..bucket_count) |event_index| {
             for (0..3) |phase| {
                 for (self.buckets[event_index][phase].items) |*item| {
                     if (item.subscription_id != subscription or !item.active) continue;
@@ -590,6 +717,7 @@ pub const PluginRuntime = struct {
                     self.dead[event_index][phase] += 1;
                     self.dead_total += 1;
                     if (self.active[event_index][phase] > 0) self.active[event_index][phase] -= 1;
+                    if (self.depth > 0 and self.active[event_index][phase] == 0) self.markRetire(event_index, phase);
                     if (self.depth == 0) self.compactBucket(event_index, phase, true);
                     return abi.result_ok;
                 }
@@ -652,6 +780,9 @@ pub const PluginRuntime = struct {
     fn markBridgeRefresh(self: *PluginRuntime, event_index: usize, phase_index: usize) void {
         if (self.bridge_refresh[event_index][phase_index]) return;
         self.bridge_refresh[event_index][phase_index] = true;
+        if (self.bridge_refresh_total == 0) {
+            if (self.events) |events| events.setIdleHook(bridgeIdle, self);
+        }
         self.bridge_refresh_total += 1;
     }
 
@@ -659,6 +790,9 @@ pub const PluginRuntime = struct {
         if (!self.bridge_refresh[event_index][phase_index]) return;
         self.bridge_refresh[event_index][phase_index] = false;
         if (self.bridge_refresh_total > 0) self.bridge_refresh_total -= 1;
+        if (self.bridge_refresh_total == 0) {
+            if (self.events) |events| events.setIdleHook(null, null);
+        }
     }
 
     fn refreshBridges(self: *PluginRuntime) void {
@@ -678,17 +812,28 @@ pub const PluginRuntime = struct {
         self.refreshBridges();
     }
 
+    fn markRetire(self: *PluginRuntime, event_index: usize, phase: usize) void {
+        if (self.retire_seen[event_index][phase]) return;
+        self.retire_seen[event_index][phase] = true;
+        self.retire_pending[self.retire_count] = @intCast(event_index * 3 + phase);
+        self.retire_count += 1;
+    }
+
     fn retireEmptyBridges(self: *PluginRuntime) void {
         if (self.in_emit) return;
-        if (self.bridge_total == 0 and self.bridge_refresh_total == 0) return;
-        for (0..event_count) |event_index| {
-            for (0..3) |phase| {
-                if (self.active[event_index][phase] != 0) continue;
-                if (self.bridges[event_index][phase] or self.bridge_refresh[event_index][phase]) {
-                    self.removeBridge(event_index, phase);
-                }
+        if (self.retire_count == 0) return;
+        var index: usize = 0;
+        while (index < self.retire_count) : (index += 1) {
+            const encoded = self.retire_pending[index];
+            const event_index: usize = encoded / 3;
+            const phase: usize = encoded % 3;
+            self.retire_seen[event_index][phase] = false;
+            if (self.active[event_index][phase] != 0) continue;
+            if (self.bridges[event_index][phase] or self.bridge_refresh[event_index][phase]) {
+                self.removeBridge(event_index, phase);
             }
         }
+        self.retire_count = 0;
     }
 
     fn maybeRemoveEmptyBridge(self: *PluginRuntime, event_index: usize, phase: usize) void {
@@ -707,7 +852,7 @@ pub const PluginRuntime = struct {
         const dead = self.dead[event_index][phase];
         const dirty = self.dirty[event_index][phase];
         if (dead == 0 and !dirty) {
-            if (retire_bridge and !self.in_emit and self.active[event_index][phase] == 0) {
+            if (event_index < event_count and retire_bridge and !self.in_emit and self.active[event_index][phase] == 0) {
                 self.removeBridge(event_index, phase);
             }
             return;
@@ -729,6 +874,7 @@ pub const PluginRuntime = struct {
             if (self.dirty_total > 0) self.dirty_total -= 1;
         }
         std.mem.sort(Subscription, bucket.items, {}, subscriptionBefore);
+        if (event_index >= event_count) return;
         const priority: i16 = if (bucket.items.len > 0) bucket.items[0].priority else std.math.minInt(i16);
         const priority_changed = priority != self.bridge_priority[event_index][phase];
         if (priority_changed) {
@@ -747,7 +893,7 @@ pub const PluginRuntime = struct {
 
     fn compactAll(self: *PluginRuntime) void {
         if (self.dead_total == 0 and self.dirty_total == 0) return;
-        for (0..event_count) |event_index| {
+        for (0..bucket_count) |event_index| {
             for (0..3) |phase| {
                 if (self.dead[event_index][phase] != 0 or self.dirty[event_index][phase]) {
                     self.compactBucket(event_index, phase, false);
@@ -771,43 +917,55 @@ pub const PluginRuntime = struct {
         }.callback;
     }
 
+    fn dispatchMeta(comptime event: Events.Event) ?abi.EventMeta {
+        const external = externalEventId(event) orelse return null;
+        return abi.eventMeta(external);
+    }
+
     fn dispatch(self: *PluginRuntime, comptime event: Events.Event, context: *Events.EventContext, data: *Events.Event.DataType(event)) Events.EventResult {
-        const external_event_id = @intFromEnum(externalEventId(event) orelse return .continue_);
+        const maybe_meta = comptime dispatchMeta(event);
+        const meta = maybe_meta orelse return .continue_;
+        const external_event_id = meta.external_id;
         const event_index: usize = external_event_id;
         const phase: usize = @intFromEnum(context.phase);
+        if (self.active[event_index][phase] == 0) return .continue_;
 
         var result: i32 = @intFromEnum(abi.EventResult.continue_);
         var payload: abi.ServerTickEvent = undefined;
         var player_payload: abi.PlayerEvent = undefined;
         var payload_ptr: ?*const anyopaque = null;
         var payload_size: usize = 0;
-        if (event == .ServerTick) {
-            payload.tick = data.tick;
-            payload_ptr = @ptrCast(&payload);
-            payload_size = @sizeOf(abi.ServerTickEvent);
-        } else if (event == .PlayerJoin) {
-            player_payload.handle = self.playerHandle(data.player);
-            if (player_payload.handle != 0) {
-                payload_ptr = @ptrCast(&player_payload);
-                payload_size = @sizeOf(abi.PlayerEvent);
-            }
-        } else if (event == .PlayerDisconnect) {
-            player_payload.handle = self.handles.handleFor(.player, @intFromPtr(data.player)) orelse 0;
-            if (player_payload.handle != 0) {
-                payload_ptr = @ptrCast(&player_payload);
-                payload_size = @sizeOf(abi.PlayerEvent);
-            }
+        switch (meta.payload) {
+            .tick => {
+                payload.tick = data.tick;
+                payload_ptr = @ptrCast(&payload);
+                payload_size = @sizeOf(abi.ServerTickEvent);
+            },
+            .player_join => {
+                player_payload.handle = self.playerHandle(data.player);
+                if (player_payload.handle != 0) {
+                    payload_ptr = @ptrCast(&player_payload);
+                    payload_size = @sizeOf(abi.PlayerEvent);
+                }
+            },
+            .player_disconnect => {
+                player_payload.handle = self.handles.handleFor(.player, @intFromPtr(data.player)) orelse 0;
+                if (player_payload.handle != 0) {
+                    payload_ptr = @ptrCast(&player_payload);
+                    payload_size = @sizeOf(abi.PlayerEvent);
+                }
+            },
+            .none => {},
         }
 
-        const payload_version: u32 = if (event == .ServerTick or event == .PlayerJoin or event == .PlayerDisconnect) 1 else 0;
         const view = abi.EventView{
             .data = payload_ptr,
             .data_size = payload_size,
             .result = &result,
-            .schema = (external_event_id << 8) | payload_version,
+            .schema = meta.schema,
             .event_id = external_event_id,
             .phase = @intCast(phase),
-            .flags = if (event == .ServerTick or event == .PlayerJoin or event == .PlayerDisconnect) abi.event_flag_cancelable | abi.event_flag_callback_only | abi.event_flag_borrowed else abi.event_flag_callback_only | abi.event_flag_borrowed,
+            .flags = meta.flags,
         };
 
         const previous_emit = self.in_emit;
@@ -832,7 +990,7 @@ pub const PluginRuntime = struct {
             if (!subscription.active or subscription.pending) continue;
             if (subscription.slot) |slot| slot.events_dispatched +%= 1;
             subscription.callback(subscription.userdata, &view);
-            if (result != @intFromEnum(abi.EventResult.continue_)) return .cancel;
+            if (result != @intFromEnum(abi.EventResult.continue_) and (meta.flags & abi.event_flag_cancelable) != 0) return .cancel;
         }
         return .continue_;
     }
@@ -842,50 +1000,41 @@ pub const PluginRuntime = struct {
         return self.handles.put(.player, @intFromPtr(player), 0, &self.handles.runtime_head) catch 0;
     }
 
+    const InterfaceSpec = struct {
+        id: u32,
+        major: u16,
+        minor: u16,
+        field: []const u8,
+    };
+
+    const interface_specs = [_]InterfaceSpec{
+        .{ .id = abi.interface_core, .major = 1, .minor = 0, .field = "core_api" },
+        .{ .id = abi.interface_logging, .major = 1, .minor = 0, .field = "logging_api" },
+        .{ .id = abi.interface_events, .major = 1, .minor = 0, .field = "events_api" },
+        .{ .id = abi.interface_scheduler, .major = 1, .minor = 0, .field = "scheduler_api" },
+        .{ .id = abi.interface_world, .major = 1, .minor = 0, .field = "world_api" },
+        .{ .id = abi.interface_players, .major = 1, .minor = 0, .field = "players_api" },
+        .{ .id = abi.interface_entities, .major = 1, .minor = 0, .field = "entities_api" },
+        .{ .id = abi.interface_items, .major = 1, .minor = 0, .field = "items_api" },
+        .{ .id = abi.interface_blocks, .major = 1, .minor = 0, .field = "blocks_api" },
+        .{ .id = abi.interface_inventories, .major = 1, .minor = 0, .field = "inventories_api" },
+        .{ .id = abi.interface_registries, .major = 1, .minor = 0, .field = "registries_api" },
+        .{ .id = abi.interface_network, .major = 1, .minor = 0, .field = "network_api" },
+        .{ .id = abi.interface_commands, .major = 1, .minor = 0, .field = "commands_api" },
+    };
+
     fn getInterface(context: ?*anyopaque, interface_id: u32, major: u16, minor: u16, interface: ?*?abi.InterfacePtr) callconv(.c) i32 {
         const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = interface orelse return abi.result_invalid_argument;
         output.* = null;
-        if (major != 1 or minor > 0) return abi.result_version;
-        switch (interface_id) {
-            abi.interface_core => {
-                output.* = @ptrCast(&self.core_api);
+        inline for (interface_specs) |spec| {
+            if (spec.id == interface_id) {
+                if (major != spec.major or minor > spec.minor) return abi.result_version;
+                output.* = @ptrCast(&@field(self, spec.field));
                 return abi.result_ok;
-            },
-            abi.interface_scheduler => {
-                output.* = @ptrCast(&self.scheduler_api);
-                return abi.result_ok;
-            },
-            abi.interface_world => {
-                output.* = @ptrCast(&self.world_api);
-                return abi.result_ok;
-            },
-            abi.interface_players => {
-                output.* = @ptrCast(&self.players_api);
-                return abi.result_ok;
-            },
-            abi.interface_entities => {
-                output.* = @ptrCast(&self.entities_api);
-                return abi.result_ok;
-            },
-            abi.interface_items => {
-                output.* = @ptrCast(&self.items_api);
-                return abi.result_ok;
-            },
-            abi.interface_blocks => {
-                output.* = @ptrCast(&self.blocks_api);
-                return abi.result_ok;
-            },
-            abi.interface_inventories => {
-                output.* = @ptrCast(&self.inventories_api);
-                return abi.result_ok;
-            },
-            abi.interface_network => {
-                output.* = @ptrCast(&self.network_api);
-                return abi.result_ok;
-            },
-            else => return abi.result_unsupported,
+            }
         }
+        return abi.result_unsupported;
     }
 
     fn coreGetTick(context: ?*anyopaque, tick: ?*u64) callconv(.c) i32 {
@@ -902,81 +1051,212 @@ pub const PluginRuntime = struct {
         return abi.result_ok;
     }
 
-    fn schedulerSchedule(context: ?*anyopaque, _: u32, callback: ?abi.SchedulerCallbackFn, callback_userdata: ?*anyopaque, task: ?*u64) callconv(.c) i32 {
+    fn ensureTimerWheel(self: *PluginRuntime) !*TimerWheel {
+        if (self.timer_wheel) |wheel| return wheel;
+        const wheel = try self.allocator.create(TimerWheel);
+        errdefer self.allocator.destroy(wheel);
+        const heads = try self.allocator.alloc(u32, timer_wheel_slots);
+        errdefer self.allocator.free(heads);
+        @memset(heads, timer_none);
+        wheel.* = .{ .slots = .empty, .free = .empty, .garbage = .empty, .heads = heads };
+        errdefer {
+            wheel.slots.deinit(self.allocator);
+            wheel.free.deinit(self.allocator);
+            wheel.garbage.deinit(self.allocator);
+        }
+        try wheel.slots.ensureTotalCapacity(self.allocator, timer_capacity);
+        try wheel.free.ensureTotalCapacity(self.allocator, timer_capacity);
+        try wheel.garbage.ensureTotalCapacity(self.allocator, timer_capacity);
+        self.timer_wheel = wheel;
+        return wheel;
+    }
+
+    fn registerTimerTask(self: *PluginRuntime) void {
+        if (self.timer_task_registered) return;
+        const tasks = self.tasks orelse return;
+        tasks.enqueue(.{ .func = timerTask, .ctx = @ptrCast(self), .name = "plugin-timers", .owner_id = 0 }) catch return;
+        self.timer_task_registered = true;
+    }
+
+    fn timerTask(context: *anyopaque) bool {
+        const self: *PluginRuntime = @ptrCast(@alignCast(context));
+        const tick = if (self.tecton) |tecton| tecton.tick_count else self.timer_tick + 1;
+        self.runTimers(tick);
+        return false;
+    }
+
+    pub fn runTimers(self: *PluginRuntime, tick: u64) void {
+        const wheel = self.timer_wheel orelse {
+            self.timer_tick = tick;
+            return;
+        };
+        self.timer_tick = tick;
+        wheel.dispatching = true;
+        defer {
+            wheel.dispatching = false;
+            for (wheel.garbage.items) |index| recycleTimer(wheel, index);
+            wheel.garbage.clearRetainingCapacity();
+        }
+        const head_index: usize = @intCast(tick % timer_wheel_slots);
+        var current = wheel.heads[head_index];
+        wheel.heads[head_index] = timer_none;
+        while (current != timer_none) {
+            const next = wheel.slots.items[current].next;
+            const timer = &wheel.slots.items[current];
+            timer.next = timer_none;
+            timer.prev = timer_none;
+            if (!timer.active) {
+                current = next;
+                continue;
+            }
+            if (timer.next_tick != tick) {
+                self.linkTimer(wheel, current, timer.next_tick);
+                current = next;
+                continue;
+            }
+            timer.firing = true;
+            const callback = timer.callback;
+            const userdata = timer.userdata;
+            const interval = timer.interval;
+            if (self.slotFor(timer.plugin_id)) |slot| slot.tasks_run +%= 1;
+            const handle = (@as(u64, timer.generation) << 32) | current;
+            if (callback) |cb| cb(userdata, handle);
+            timer.firing = false;
+            if (!timer.active) {
+                self.releaseTimer(wheel, current);
+            } else if (interval > 0) {
+                self.linkTimer(wheel, current, tick + interval);
+            } else {
+                self.releaseTimer(wheel, current);
+            }
+            current = next;
+        }
+    }
+
+    fn schedulerAfter(context: ?*anyopaque, delay: u32, callback: ?abi.TimerCallbackFn, callback_userdata: ?*anyopaque, timer: ?*u64) callconv(.c) i32 {
+        return scheduleTimer(context, @max(delay, 1), 0, callback, callback_userdata, timer);
+    }
+
+    fn schedulerEvery(context: ?*anyopaque, interval: u32, callback: ?abi.TimerCallbackFn, callback_userdata: ?*anyopaque, timer: ?*u64) callconv(.c) i32 {
+        if (interval == 0) return abi.result_invalid_argument;
+        return scheduleTimer(context, interval, interval, callback, callback_userdata, timer);
+    }
+
+    fn scheduleTimer(context: ?*anyopaque, delay: u32, interval: u32, callback: ?abi.TimerCallbackFn, callback_userdata: ?*anyopaque, timer: ?*u64) i32 {
         const slot = slotFrom(context) orelse return abi.result_invalid_argument;
-        const self = slot.runtime;
         const callback_value = callback orelse return abi.result_invalid_argument;
-        const output = task orelse return abi.result_invalid_argument;
-        if (output.* != 0) return abi.result_invalid_argument;
-        const tasks = self.tasks orelse return abi.result_not_found;
-        const scheduled = self.allocator.create(ScheduledTask) catch return abi.result_out_of_memory;
-        scheduled.* = .{ .runtime = self, .plugin_id = slot.plugin_id, .timer_id = self.next_task, .callback = callback_value, .userdata = callback_userdata };
-        self.next_task += 1;
-        self.scheduled_tasks.append(self.allocator, scheduled) catch {
-            self.allocator.destroy(scheduled);
-            return abi.result_out_of_memory;
-        };
-        tasks.enqueue(.{ .func = runScheduledTask, .ctx = @ptrCast(scheduled), .name = "plugin", .owner_id = @intCast(slot.plugin_id), .cleanup = cleanupScheduledTask }) catch {
-            _ = self.scheduled_tasks.pop();
-            self.allocator.destroy(scheduled);
-            return abi.result_busy;
-        };
-        output.* = scheduled.timer_id;
+        const output = timer orelse return abi.result_invalid_argument;
+        const self = slot.runtime;
+        const wheel = self.timer_wheel orelse self.ensureTimerWheel() catch return abi.result_out_of_memory;
+        const next_tick = self.timer_tick + @as(u64, delay);
+        const handle = self.insertTimer(wheel, next_tick, interval, callback_value, callback_userdata, slot.plugin_id) catch return abi.result_busy;
+        output.* = handle;
         return abi.result_ok;
     }
 
     fn schedulerCancel(context: ?*anyopaque, handle: u64) callconv(.c) i32 {
         const slot = slotFrom(context) orelse return abi.result_invalid_argument;
         const self = slot.runtime;
-        for (self.scheduled_tasks.items) |scheduled| {
-            if (scheduled.timer_id == handle and scheduled.plugin_id == slot.plugin_id and !scheduled.cancelled) {
-                scheduled.cancelled = true;
-                return abi.result_ok;
-            }
+        const wheel = self.timer_wheel orelse return abi.result_not_found;
+        const index: u32 = @intCast(handle & 0xffff_ffff);
+        const generation: u32 = @intCast(handle >> 32);
+        if (index >= wheel.slots.items.len) return abi.result_not_found;
+        const timer = &wheel.slots.items[index];
+        if (!timer.active or timer.generation != generation or timer.plugin_id != slot.plugin_id) return abi.result_not_found;
+        timer.active = false;
+        if (!timer.firing) {
+            self.unlinkTimer(wheel, index);
+            self.releaseTimer(wheel, index);
         }
-        return abi.result_not_found;
+        return abi.result_ok;
     }
 
-    fn schedulerCancelOwner(context: ?*anyopaque, owner_id: u32) callconv(.c) i32 {
+    fn schedulerCancelOwner(context: ?*anyopaque) callconv(.c) i32 {
         const slot = slotFrom(context) orelse return abi.result_invalid_argument;
-        if (owner_id != slot.plugin_id) return abi.result_not_found;
-        return cancelScheduledOwner(slot.runtime, slot.plugin_id);
+        return cancelOwnerTimers(slot.runtime, slot.plugin_id);
     }
 
-    fn cancelScheduledOwner(self: *PluginRuntime, plugin_id: u32) i32 {
+    fn cancelOwnerTimers(self: *PluginRuntime, plugin_id: u32) i32 {
+        const wheel = self.timer_wheel orelse return abi.result_not_found;
         var found = false;
-        for (self.scheduled_tasks.items) |scheduled| {
-            if (scheduled.plugin_id == plugin_id and !scheduled.cancelled) {
-                scheduled.cancelled = true;
-                found = true;
+        for (wheel.slots.items, 0..) |*timer, index| {
+            if (!timer.active or timer.plugin_id != plugin_id) continue;
+            timer.active = false;
+            if (!timer.firing) {
+                self.unlinkTimer(wheel, @intCast(index));
+                self.releaseTimer(wheel, @intCast(index));
             }
+            found = true;
         }
         return if (found) abi.result_ok else abi.result_not_found;
     }
 
-    fn runScheduledTask(context: *anyopaque) bool {
-        const scheduled: *ScheduledTask = @ptrCast(@alignCast(context));
-        if (!scheduled.cancelled) {
-            if (scheduled.runtime.slotFor(scheduled.plugin_id)) |slot| slot.tasks_run +%= 1;
-            _ = scheduled.callback(scheduled.userdata);
-        }
-        return true;
+    fn cancelTimersFor(self: *PluginRuntime, plugin_id: u32) void {
+        _ = cancelOwnerTimers(self, plugin_id);
     }
 
-    fn cleanupScheduledTask(context: *anyopaque) void {
-        const scheduled: *ScheduledTask = @ptrCast(@alignCast(context));
-        const runtime = scheduled.runtime;
-        for (runtime.scheduled_tasks.items, 0..) |candidate, index| {
-            if (candidate == scheduled) {
-                _ = runtime.scheduled_tasks.swapRemove(index);
-                break;
-            }
+    fn insertTimer(self: *PluginRuntime, wheel: *TimerWheel, next_tick: u64, interval: u32, callback: abi.TimerCallbackFn, userdata: ?*anyopaque, plugin_id: u32) !u64 {
+        if (wheel.live >= @as(u32, timer_capacity)) return error.TimerLimit;
+        var index: u32 = undefined;
+        if (wheel.free.pop()) |value| {
+            index = value;
+        } else {
+            index = @intCast(wheel.slots.items.len);
+            wheel.slots.appendAssumeCapacity(.{});
         }
-        runtime.allocator.destroy(scheduled);
+        const timer = &wheel.slots.items[index];
+        const generation = if (timer.generation == 0) 1 else timer.generation;
+        timer.* = .{ .next_tick = next_tick, .callback = callback, .userdata = userdata, .plugin_id = plugin_id, .interval = interval, .generation = generation };
+        self.linkTimer(wheel, index, next_tick);
+        wheel.live += 1;
+        return (@as(u64, generation) << 32) | index;
     }
 
-    fn cancelAllScheduled(self: *PluginRuntime) void {
-        for (self.scheduled_tasks.items) |scheduled| scheduled.cancelled = true;
+    fn linkTimer(_: *PluginRuntime, wheel: *TimerWheel, index: u32, next_tick: u64) void {
+        const head_index: usize = @intCast(next_tick % timer_wheel_slots);
+        const head = wheel.heads[head_index];
+        const timer = &wheel.slots.items[index];
+        timer.next_tick = next_tick;
+        timer.next = head;
+        timer.prev = timer_none;
+        timer.active = true;
+        if (head != timer_none) wheel.slots.items[head].prev = index;
+        wheel.heads[head_index] = index;
+    }
+
+    fn unlinkTimer(_: *PluginRuntime, wheel: *TimerWheel, index: u32) void {
+        const timer = wheel.slots.items[index];
+        const head_index: usize = @intCast(timer.next_tick % timer_wheel_slots);
+        if (timer.prev != timer_none) {
+            wheel.slots.items[timer.prev].next = timer.next;
+        } else if (wheel.heads[head_index] == index) {
+            wheel.heads[head_index] = timer.next;
+        }
+        if (timer.next != timer_none) wheel.slots.items[timer.next].prev = timer.prev;
+        wheel.slots.items[index].next = timer_none;
+        wheel.slots.items[index].prev = timer_none;
+    }
+
+    fn releaseTimer(_: *PluginRuntime, wheel: *TimerWheel, index: u32) void {
+        const timer = &wheel.slots.items[index];
+        timer.active = false;
+        timer.callback = null;
+        timer.userdata = null;
+        timer.next = timer_none;
+        timer.prev = timer_none;
+        if (wheel.live > 0) wheel.live -= 1;
+        if (wheel.dispatching) {
+            wheel.garbage.appendAssumeCapacity(index);
+            return;
+        }
+        recycleTimer(wheel, index);
+    }
+
+    fn recycleTimer(wheel: *TimerWheel, index: u32) void {
+        const timer = &wheel.slots.items[index];
+        timer.generation +%= 1;
+        if (timer.generation == 0) timer.generation = 1;
+        wheel.free.appendAssumeCapacity(index);
     }
 
     fn internalEvent(event_id: u32) ?Events.Event {
@@ -1066,26 +1346,321 @@ pub const PluginRuntime = struct {
     }
 
     fn log(context: ?*anyopaque, level: u32, message: abi.StringView) callconv(.c) void {
-        const slot: *HostSlot = @ptrCast(@alignCast(context orelse return));
+        const slot = slotFrom(context) orelse return;
+        if (!slot.logEnabled(level)) return;
         const text = message.slice();
+        if (slot.scope_len == 0) {
+            switch (level) {
+                abi.log_trace, abi.log_debug => logger.debug("[plugin:{s}] {s}", .{ slot.name, text }),
+                abi.log_info => logger.info("[plugin:{s}] {s}", .{ slot.name, text }),
+                abi.log_warn => logger.warn("[plugin:{s}] {s}", .{ slot.name, text }),
+                else => logger.err("[plugin:{s}] {s}", .{ slot.name, text }),
+            }
+            return;
+        }
+        const scope = slot.scope[0..slot.scope_len];
         switch (level) {
-            abi.log_trace, abi.log_debug => logger.debug("[plugin:{s}] {s}", .{ slot.name, text }),
-            abi.log_info => logger.info("[plugin:{s}] {s}", .{ slot.name, text }),
-            abi.log_warn => logger.warn("[plugin:{s}] {s}", .{ slot.name, text }),
-            else => logger.err("[plugin:{s}] {s}", .{ slot.name, text }),
+            abi.log_trace, abi.log_debug => logger.debug("[plugin:{s}/{s}] {s}", .{ slot.name, scope, text }),
+            abi.log_info => logger.info("[plugin:{s}/{s}] {s}", .{ slot.name, scope, text }),
+            abi.log_warn => logger.warn("[plugin:{s}/{s}] {s}", .{ slot.name, scope, text }),
+            else => logger.err("[plugin:{s}/{s}] {s}", .{ slot.name, scope, text }),
         }
     }
 
-    fn emitCustom(_: ?*anyopaque, _: u32, _: ?*const anyopaque, _: usize, _: u32) callconv(.c) i32 {
+    fn logIsEnabled(context: ?*anyopaque, level: u32) callconv(.c) i32 {
+        const slot = slotFrom(context) orelse return 0;
+        return if (slot.logEnabled(level)) 1 else 0;
+    }
+
+    fn logSetLevel(context: ?*anyopaque, level: u32) callconv(.c) void {
+        const slot = slotFrom(context) orelse return;
+        slot.log_level = @min(level, abi.log_error);
+    }
+
+    fn logSetScope(context: ?*anyopaque, value: abi.StringView) callconv(.c) void {
+        const slot = slotFrom(context) orelse return;
+        const scope = value.slice();
+        const length = @min(scope.len, slot.scope.len);
+        if (length > 0) @memcpy(slot.scope[0..length], scope[0..length]);
+        slot.scope_len = @intCast(length);
+    }
+
+    fn schemaOf(context: ?*anyopaque, name: abi.StringView, flags: u32, out_schema: ?*u32) callconv(.c) i32 {
+        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const self = slot.runtime;
+        const output = out_schema orelse return abi.result_invalid_argument;
+        const text = name.slice();
+        if (text.len == 0 or text.len > 96) return abi.result_invalid_argument;
+        for (self.custom_schemas.items) |schema| {
+            if (schema.name) |existing| {
+                if (std.mem.eql(u8, existing, text)) {
+                    output.* = schema.schema;
+                    return abi.result_ok;
+                }
+            }
+        }
+        var slot_index: ?usize = null;
+        for (self.custom_schemas.items, 0..) |schema, index| {
+            if (schema.name == null) {
+                slot_index = index;
+                break;
+            }
+        }
+        const index = slot_index orelse blk: {
+            if (self.custom_schemas.items.len >= abi.max_custom_events) return abi.result_limit;
+            const new_index = self.custom_schemas.items.len;
+            self.custom_schemas.append(self.allocator, .{ .name = null, .schema = 0, .plugin_id = 0 }) catch return abi.result_out_of_memory;
+            break :blk new_index;
+        };
+        const copy = self.allocator.dupe(u8, text) catch return abi.result_out_of_memory;
+        const version: u32 = if ((flags & 0xff) == 0) 1 else flags & 0xff;
+        const schema = ((abi.event_custom_base + @as(u32, @intCast(index))) << 8) | version;
+        self.custom_schemas.items[index] = .{ .name = copy, .schema = schema, .plugin_id = slot.plugin_id };
+        output.* = schema;
+        return abi.result_ok;
+    }
+
+    fn schemaLive(self: *PluginRuntime, schema: u32) bool {
+        const event_id = schema >> 8;
+        if (event_id < abi.event_custom_base) return false;
+        const index = event_id - abi.event_custom_base;
+        if (index >= self.custom_schemas.items.len) return false;
+        return self.custom_schemas.items[index].name != null;
+    }
+
+    fn releaseSchemas(self: *PluginRuntime, plugin_id: u32) void {
+        for (self.custom_schemas.items) |*schema| {
+            if (schema.plugin_id != plugin_id) continue;
+            if (schema.name) |name| self.allocator.free(name);
+            schema.* = .{ .name = null, .schema = 0, .plugin_id = 0 };
+        }
+    }
+
+    fn ensureDeferredRing(self: *PluginRuntime) ![]DeferredEmit {
+        if (self.deferred_ring) |ring| return ring;
+        const ring = try self.allocator.alloc(DeferredEmit, deferred_capacity);
+        self.deferred_ring = ring;
+        return ring;
+    }
+
+    fn emitCustom(context: ?*anyopaque, schema: u32, payload: ?*const anyopaque, payload_size: usize, flags: u32) callconv(.c) i32 {
+        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const self = slot.runtime;
+        if (!self.schemaLive(schema)) return abi.result_not_found;
+        if (payload_size > abi.custom_payload_max) return abi.result_limit;
+        if (payload_size > 0 and payload == null) return abi.result_invalid_argument;
+        const ring = self.ensureDeferredRing() catch return abi.result_out_of_memory;
+        if (self.deferred_len >= deferred_capacity) return abi.result_busy;
+        const entry = &ring[self.deferred_tail];
+        entry.schema = schema;
+        entry.size = @intCast(payload_size);
+        entry.flags = @truncate(flags);
+        if (payload_size > 0) @memcpy(entry.payload[0..payload_size], @as([*]const u8, @ptrCast(payload.?))[0..payload_size]);
+        self.deferred_tail = (self.deferred_tail + 1) % deferred_capacity;
+        self.deferred_len += 1;
+        return abi.result_ok;
+    }
+
+    fn emitImmediate(context: ?*anyopaque, schema: u32, payload: ?*const anyopaque, payload_size: usize, flags: u32) callconv(.c) i32 {
+        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const self = slot.runtime;
+        if (!self.schemaLive(schema)) return abi.result_not_found;
+        if (payload_size > abi.custom_payload_max) return abi.result_limit;
+        if (payload_size > 0 and payload == null) return abi.result_invalid_argument;
+        if (self.depth >= max_emit_depth) return abi.result_busy;
+        self.dispatchCustom(schema, payload, payload_size, @truncate(flags));
+        return abi.result_ok;
+    }
+
+    fn dispatchCustom(self: *PluginRuntime, schema: u32, payload: ?*const anyopaque, payload_size: usize, flags: u16) void {
+        const event_id = schema >> 8;
+        if (event_id < abi.event_custom_base) return;
+        const custom = event_id - abi.event_custom_base;
+        if (custom >= abi.max_custom_events) return;
+        const event_index: usize = event_count + custom;
+        var result: i32 = @intFromEnum(abi.EventResult.continue_);
+        const previous_emit = self.in_emit;
+        self.in_emit = true;
+        self.depth += 1;
+        defer {
+            self.depth -= 1;
+            self.in_emit = previous_emit;
+            if (self.depth == 0 and !self.in_emit) {
+                self.compactAll();
+                self.retireEmptyBridges();
+                self.refreshBridges();
+                self.flushPendingUnloads();
+                self.retireEmptyBridges();
+            }
+        }
+        inline for (0..3) |phase| {
+            const view = abi.EventView{
+                .data = if (payload_size == 0) null else payload,
+                .data_size = payload_size,
+                .result = &result,
+                .schema = schema,
+                .event_id = event_id,
+                .phase = @intCast(phase),
+                .flags = flags,
+            };
+            const captured = self.buckets[event_index][phase].items.len;
+            var index: usize = 0;
+            while (index < captured) : (index += 1) {
+                const subscription = self.buckets[event_index][phase].items[index];
+                if (!subscription.active or subscription.pending) continue;
+                if (subscription.slot) |slot| slot.events_dispatched +%= 1;
+                subscription.callback(subscription.userdata, &view);
+            }
+        }
+    }
+
+    pub fn endTick(self: *PluginRuntime) void {
+        if (self.deferred_len == 0 or self.depth > 0) return;
+        const ring = self.deferred_ring orelse return;
+        const pending = self.deferred_len;
+        var processed: usize = 0;
+        while (processed < pending) : (processed += 1) {
+            const entry = ring[self.deferred_head];
+            self.deferred_head = (self.deferred_head + 1) % deferred_capacity;
+            self.deferred_len -= 1;
+            const payload: ?*const anyopaque = if (entry.size == 0) null else @ptrCast(&entry.payload);
+            self.dispatchCustom(entry.schema, payload, entry.size, entry.flags);
+        }
+    }
+
+    fn registriesBlockStates(context: ?*anyopaque, out_view: ?*abi.RegistryView) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = out_view orelse return abi.result_invalid_argument;
+        if (self.block_state_entries == null) {
+            const entry_count = BlockPermutation.count();
+            if (entry_count == 0) {
+                self.block_state_entries = &.{};
+                self.block_state_entry_count = 0;
+            } else {
+                const entries = self.allocator.alloc(abi.BlockStateEntry, entry_count) catch return abi.result_out_of_memory;
+                var written: usize = 0;
+                var iterator = BlockPermutation.valueIterator();
+                while (iterator.next()) |permutation| {
+                    if (written >= entries.len) break;
+                    const entry = permutation.*;
+                    entries[written] = .{
+                        .network_id = entry.network_id,
+                        .reserved = 0,
+                        .identifier = .{ .data = entry.identifier.ptr, .length = entry.identifier.len },
+                    };
+                    written += 1;
+                }
+                self.block_state_entries = entries;
+                self.block_state_entry_count = written;
+            }
+        }
+        const entries = self.block_state_entries.?;
+        output.* = .{
+            .data = @ptrCast(entries.ptr),
+            .count = self.block_state_entry_count,
+            .stride = @sizeOf(abi.BlockStateEntry),
+            .element_version = 1,
+            .reserved = 0,
+        };
+        return abi.result_ok;
+    }
+
+    fn registriesItems(context: ?*anyopaque, out_view: ?*abi.RegistryView) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = out_view orelse return abi.result_invalid_argument;
+        if (self.item_entries == null) {
+            const entry_count = ItemType.count();
+            if (entry_count == 0) {
+                self.item_entries = &.{};
+                self.item_entry_count = 0;
+            } else {
+                const entries = self.allocator.alloc(abi.ItemEntry, entry_count) catch return abi.result_out_of_memory;
+                var written: usize = 0;
+                var iterator = ItemType.getAll().valueIterator();
+                while (iterator.next()) |item| {
+                    if (written >= entries.len) break;
+                    const entry = item.*;
+                    entries[written] = .{
+                        .network_id = entry.network_id,
+                        .max_stack_size = entry.max_stack_size,
+                        .stackable = if (entry.stackable) 1 else 0,
+                        .reserved = 0,
+                        .identifier = .{ .data = entry.identifier.ptr, .length = entry.identifier.len },
+                    };
+                    written += 1;
+                }
+                self.item_entries = entries;
+                self.item_entry_count = written;
+            }
+        }
+        const entries = self.item_entries.?;
+        output.* = .{
+            .data = @ptrCast(entries.ptr),
+            .count = self.item_entry_count,
+            .stride = @sizeOf(abi.ItemEntry),
+            .element_version = 1,
+            .reserved = 0,
+        };
+        return abi.result_ok;
+    }
+
+    fn registriesEntityTypes(context: ?*anyopaque, out_view: ?*abi.RegistryView) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = out_view orelse return abi.result_invalid_argument;
+        if (self.entity_type_entries == null) {
+            const registry = EntityTypeRegistry.getRegistry();
+            const entry_count = if (registry) |value| value.types.count() else 0;
+            if (entry_count == 0) {
+                self.entity_type_entries = &.{};
+                self.entity_type_entry_count = 0;
+            } else {
+                const entries = self.allocator.alloc(abi.EntityTypeEntry, entry_count) catch return abi.result_out_of_memory;
+                var written: usize = 0;
+                var iterator = registry.?.types.valueIterator();
+                while (iterator.next()) |entity_type| {
+                    if (written >= entries.len) break;
+                    entries[written] = .{
+                        .network_id = entity_type.network_id,
+                        .reserved = 0,
+                        .identifier = .{ .data = entity_type.identifier.ptr, .length = entity_type.identifier.len },
+                    };
+                    written += 1;
+                }
+                self.entity_type_entries = entries;
+                self.entity_type_entry_count = written;
+            }
+        }
+        const entries = self.entity_type_entries.?;
+        output.* = .{
+            .data = @ptrCast(entries.ptr),
+            .count = self.entity_type_entry_count,
+            .stride = @sizeOf(abi.EntityTypeEntry),
+            .element_version = 1,
+            .reserved = 0,
+        };
+        return abi.result_ok;
+    }
+
+    fn commandRegister(_: ?*anyopaque, _: ?*const abi.CommandDesc, _: ?*u64) callconv(.c) i32 {
         return abi.result_unsupported;
     }
 
-    fn schedulerEvery(_: ?*anyopaque, _: u32, _: ?abi.SchedulerCallbackFn, _: ?*anyopaque, _: ?*u64) callconv(.c) i32 {
+    fn commandUnregister(_: ?*anyopaque, _: u64) callconv(.c) i32 {
         return abi.result_unsupported;
+    }
+
+    fn commandMarkDirty(_: ?*anyopaque) callconv(.c) void {}
+
+    pub fn timerLiveCount(self: *const PluginRuntime) u32 {
+        const wheel = self.timer_wheel orelse return 0;
+        return wheel.live;
+    }
+
+    pub fn deferredLen(self: *const PluginRuntime) usize {
+        return self.deferred_len;
     }
 
     fn itemsCount(_: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
-        const ItemType = @import("../items/item_type.zig").ItemType;
         count_output.* = ItemType.getAll().count();
         return abi.result_ok;
     }
@@ -1095,7 +1670,6 @@ pub const PluginRuntime = struct {
         const self = slot.runtime;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
-        const ItemType = @import("../items/item_type.zig").ItemType;
         var iterator = ItemType.getAll().valueIterator();
         var current: usize = 0;
         while (iterator.next()) |item_ptr| {
@@ -1310,6 +1884,77 @@ test "core and scheduler interfaces are independently discoverable" {
 
 test "network send validates priority and payload before resolving anything else" {
     try @import("runtime_test.zig").Suite(test_scope).case_001();
+}
+
+test "all thirteen interfaces negotiate major and minor versions" {
+    try @import("runtime_test.zig").Suite(test_scope).case_002();
+}
+
+test "logging interface filters by level and truncates the scope" {
+    try @import("runtime_test.zig").Suite(test_scope).case_003();
+}
+
+test "events interface shares subscribe and orders deferred custom emits" {
+    try @import("runtime_test.zig").Suite(test_scope).case_004();
+}
+
+test "immediate custom emits stop at depth sixteen" {
+    try @import("runtime_test.zig").Suite(test_scope).case_005();
+}
+
+test "registries return borrowed contiguous arrays" {
+    try @import("runtime_test.zig").Suite(test_scope).case_006();
+}
+
+test "timer wheel fires every after and cancels by owner" {
+    try @import("runtime_test.zig").Suite(test_scope).case_007();
+}
+
+test "custom subscription from a callback activates at depth zero" {
+    try @import("runtime_test.zig").Suite(test_scope).case_008();
+}
+
+test "custom unsubscribe from a callback compacts at depth zero" {
+    try @import("runtime_test.zig").Suite(test_scope).case_009();
+}
+
+test "cancel result respects the cancelable event flag" {
+    try @import("runtime_test.zig").Suite(test_scope).case_010();
+}
+
+test "timer wheel reports busy at capacity and reuses freed slots" {
+    try @import("runtime_test.zig").Suite(test_scope).case_011();
+}
+
+test "idle hook exists only while a bridge refresh is pending" {
+    try @import("runtime_test.zig").Suite(test_scope).case_012();
+}
+
+test "hot paths do not allocate after cold materialization" {
+    try @import("runtime_test.zig").Suite(test_scope).case_013();
+}
+
+test "core subscription from a custom callback installs the bridge at depth zero" {
+    try @import("runtime_test.zig").Suite(test_scope).case_014();
+}
+
+test "core unsubscribe from a custom callback retires the bridge at depth zero" {
+    try @import("runtime_test.zig").Suite(test_scope).case_015();
+}
+
+test "dispatch with zero subscribers installs no bridge" {
+    var events = Events.Events.init(std.testing.allocator);
+    defer events.deinit();
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+    runtime.attachEvents(&events);
+
+    var tick = Events.types.ServerTickEvent{ .tick = 1 };
+    _ = events.emit(.ServerTick, &tick);
+    try std.testing.expectEqual(@as(u32, 0), runtime.depth);
+    try std.testing.expect(!events.hasListeners(.ServerTick));
+    try std.testing.expectEqual(@as(u32, 0), runtime.active[@intFromEnum(abi.EventId.server_tick)][abi.event_phase_pre]);
+    try std.testing.expectEqual(@as(u32, 0), runtime.bridge_total);
 }
 
 test "unsubscribe is owner scoped and compacts the bucket" {

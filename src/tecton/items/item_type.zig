@@ -94,6 +94,11 @@ pub const ItemType = struct {
         return types;
     }
 
+    pub fn count() usize {
+        if (!types_initialized) return 0;
+        return types.count();
+    }
+
     pub fn hasTag(self: *const ItemType, tag: []const u8) bool {
         for (self.tags) |t| {
             if (std.mem.eql(u8, t, tag)) return true;

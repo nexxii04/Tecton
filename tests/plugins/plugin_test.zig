@@ -12,7 +12,7 @@ fn log(_: ?*anyopaque, _: u32, _: abi.StringView) callconv(.c) void {}
 fn emitCustom(_: ?*anyopaque, _: u32, _: ?*const anyopaque, _: usize, _: u32) callconv(.c) i32 {
     return abi.result_unsupported;
 }
-fn every(_: ?*anyopaque, _: u32, _: ?abi.SchedulerCallbackFn, _: ?*anyopaque, _: ?*u64) callconv(.c) i32 {
+fn every(_: ?*anyopaque, _: u32, _: ?abi.TimerCallbackFn, _: ?*anyopaque, _: ?*u64) callconv(.c) i32 {
     return abi.result_unsupported;
 }
 fn getInterface(_: ?*anyopaque, _: u32, _: u16, _: u16, interface: ?*?abi.InterfacePtr) callconv(.c) i32 {

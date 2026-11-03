@@ -413,6 +413,15 @@ const layout_types = .{
     .{ "tecton_core_api", plugin_abi.CoreApi },
     .{ "tecton_scheduler_api", plugin_abi.SchedulerApi },
     .{ "tecton_network_api", plugin_abi.NetworkApi },
+    .{ "tecton_logging_api", plugin_abi.LoggingApi },
+    .{ "tecton_events_api", plugin_abi.EventsApi },
+    .{ "tecton_registry_view", plugin_abi.RegistryView },
+    .{ "tecton_block_state_entry", plugin_abi.BlockStateEntry },
+    .{ "tecton_item_entry", plugin_abi.ItemEntry },
+    .{ "tecton_entity_type_entry", plugin_abi.EntityTypeEntry },
+    .{ "tecton_registries_api", plugin_abi.RegistriesApi },
+    .{ "tecton_command_desc", plugin_abi.CommandDesc },
+    .{ "tecton_commands_api", plugin_abi.CommandsApi },
 };
 
 fn expectedLayoutHeader(b: *std.Build) ![]const u8 {

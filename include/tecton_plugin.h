@@ -62,6 +62,8 @@ extern "C" {
 #define TECTON_FEATURE_BLOCKS (UINT64_C(1) << 10)
 #define TECTON_FEATURE_INVENTORIES (UINT64_C(1) << 11)
 #define TECTON_FEATURE_NETWORK (UINT64_C(1) << 12)
+#define TECTON_FEATURE_REGISTRIES (UINT64_C(1) << 13)
+#define TECTON_FEATURE_COMMANDS (UINT64_C(1) << 14)
 
 #define TECTON_INTERFACE_CORE 1u
 #define TECTON_INTERFACE_LOGGING 2u
@@ -75,6 +77,10 @@ extern "C" {
 #define TECTON_INTERFACE_INVENTORIES 10u
 #define TECTON_INTERFACE_REGISTRIES 11u
 #define TECTON_INTERFACE_NETWORK 12u
+#define TECTON_INTERFACE_COMMANDS 13u
+
+#define TECTON_MAX_CUSTOM_EVENTS 128u
+#define TECTON_CUSTOM_PAYLOAD_MAX 56u
 
 #define TECTON_EVENT_FLAG_CANCELABLE (UINT16_C(1) << 0)
 #define TECTON_EVENT_FLAG_MUTABLE (UINT16_C(1) << 1)
@@ -269,8 +275,20 @@ typedef struct tecton_allocator {
 } tecton_allocator;
 
 typedef void(TECTON_PLUGIN_CALL *tecton_log_fn)(void *userdata, uint32_t level, tecton_string_view message);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_callback_fn)(void *userdata);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_every_fn)(void *userdata, uint32_t interval_ticks, tecton_scheduler_callback_fn callback, void *callback_userdata, uint64_t *out_task);
+typedef void(TECTON_PLUGIN_CALL *tecton_timer_callback_fn)(void *userdata, uint64_t timer_id);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_after_fn)(void *userdata, uint32_t delay_ticks, tecton_timer_callback_fn callback, void *callback_userdata, uint64_t *out_timer);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_every_fn)(void *userdata, uint32_t interval_ticks, tecton_timer_callback_fn callback, void *callback_userdata, uint64_t *out_timer);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_log_is_enabled_fn)(void *userdata, uint32_t level);
+typedef void(TECTON_PLUGIN_CALL *tecton_log_set_level_fn)(void *userdata, uint32_t level);
+typedef void(TECTON_PLUGIN_CALL *tecton_log_set_scope_fn)(void *userdata, tecton_string_view scope);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_schema_of_fn)(void *userdata, tecton_string_view name, uint32_t flags, uint32_t *out_schema);
+typedef struct tecton_registry_view tecton_registry_view;
+typedef struct tecton_command_desc tecton_command_desc;
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_registry_fn)(void *userdata, tecton_registry_view *out);
+typedef void(TECTON_PLUGIN_CALL *tecton_command_handler_fn)(void *userdata, int32_t argc, const tecton_string_view *argv);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_command_register_fn)(void *userdata, const tecton_command_desc *desc, uint64_t *out_command);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_command_unregister_fn)(void *userdata, uint64_t command);
+typedef void(TECTON_PLUGIN_CALL *tecton_command_mark_dirty_fn)(void *userdata);
 
 struct tecton_host_api {
   uint32_t struct_size;
@@ -371,9 +389,8 @@ typedef int32_t(TECTON_PLUGIN_CALL *tecton_inventory_get_size_fn)(void *userdata
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_inventory_get_item_fn)(void *userdata, uint64_t player, uint32_t slot, tecton_inventory_item_snapshot *snapshot, size_t snapshot_size);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_core_get_tick_fn)(void *userdata, uint64_t *tick);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_core_get_state_fn)(void *userdata, uint32_t *state);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_schedule_fn)(void *userdata, uint32_t owner_id, tecton_scheduler_callback_fn callback, void *callback_userdata, uint64_t *out_task);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_cancel_fn)(void *userdata, uint64_t task);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_cancel_owner_fn)(void *userdata, uint32_t owner_id);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_cancel_fn)(void *userdata, uint64_t timer);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_scheduler_cancel_owner_fn)(void *userdata);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_network_send_fn)(void *userdata, uint64_t player, tecton_string_view packet, uint32_t priority);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_network_broadcast_fn)(void *userdata, tecton_string_view packet, uint32_t priority);
 
@@ -421,7 +438,8 @@ typedef struct tecton_core_api {
 
 typedef struct tecton_scheduler_api {
   tecton_interface_header header;
-  tecton_scheduler_schedule_fn schedule;
+  tecton_scheduler_after_fn after;
+  tecton_scheduler_every_fn every;
   tecton_scheduler_cancel_fn cancel;
   tecton_scheduler_cancel_owner_fn cancel_owner;
 } tecton_scheduler_api;
@@ -431,6 +449,74 @@ typedef struct tecton_network_api {
   tecton_network_send_fn send;
   tecton_network_broadcast_fn broadcast;
 } tecton_network_api;
+
+typedef struct tecton_logging_api {
+  tecton_interface_header header;
+  tecton_log_fn log;
+  tecton_log_is_enabled_fn is_enabled;
+  tecton_log_set_level_fn set_level;
+  tecton_log_set_scope_fn set_scope;
+} tecton_logging_api;
+
+typedef struct tecton_events_api {
+  tecton_interface_header header;
+  tecton_event_subscribe_fn subscribe;
+  tecton_event_unsubscribe_fn unsubscribe;
+  tecton_emit_custom_fn emit;
+  tecton_emit_custom_fn emit_immediate;
+  tecton_schema_of_fn schema_of;
+} tecton_events_api;
+
+typedef struct tecton_registry_view {
+  const void *data; /* borrowed; core-owned; valid until on_unload */
+  size_t count;
+  size_t stride;
+  uint32_t element_version;
+  uint32_t reserved;
+} tecton_registry_view;
+
+typedef struct tecton_block_state_entry {
+  int32_t network_id;
+  uint32_t reserved;
+  tecton_string_view identifier; /* borrowed; core-owned */
+} tecton_block_state_entry;
+
+typedef struct tecton_item_entry {
+  int32_t network_id;
+  uint16_t max_stack_size;
+  uint8_t stackable;
+  uint8_t reserved;
+  tecton_string_view identifier; /* borrowed; core-owned */
+} tecton_item_entry;
+
+typedef struct tecton_entity_type_entry {
+  int32_t network_id;
+  uint32_t reserved;
+  tecton_string_view identifier; /* borrowed; core-owned */
+} tecton_entity_type_entry;
+
+typedef struct tecton_registries_api {
+  tecton_interface_header header;
+  tecton_registry_fn block_states;
+  tecton_registry_fn items;
+  tecton_registry_fn entity_types;
+} tecton_registries_api;
+
+typedef struct tecton_command_desc {
+  uint32_t struct_size;
+  uint32_t flags; /* reserved; must be 0 */
+  tecton_string_view name;        /* borrowed for the call; copied by host */
+  tecton_string_view description; /* borrowed for the call; copied by host */
+  tecton_command_handler_fn handler;
+  void *userdata;
+} tecton_command_desc;
+
+typedef struct tecton_commands_api {
+  tecton_interface_header header;
+  tecton_command_register_fn register_command;
+  tecton_command_unregister_fn unregister;
+  tecton_command_mark_dirty_fn mark_dirty;
+} tecton_commands_api;
 
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_plugin_query_fn)(const tecton_host_query *query, tecton_plugin_info *info);
 
@@ -642,16 +728,76 @@ TECTON_LAYOUT_OFFSET(tecton_core_api, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_core_api, get_tick, 24);
 TECTON_LAYOUT_OFFSET(tecton_core_api, get_state, 32);
 
-TECTON_LAYOUT_SIZE(tecton_scheduler_api, 48);
+TECTON_LAYOUT_SIZE(tecton_scheduler_api, 56);
 TECTON_LAYOUT_OFFSET(tecton_scheduler_api, header, 0);
-TECTON_LAYOUT_OFFSET(tecton_scheduler_api, schedule, 24);
-TECTON_LAYOUT_OFFSET(tecton_scheduler_api, cancel, 32);
-TECTON_LAYOUT_OFFSET(tecton_scheduler_api, cancel_owner, 40);
+TECTON_LAYOUT_OFFSET(tecton_scheduler_api, after, 24);
+TECTON_LAYOUT_OFFSET(tecton_scheduler_api, every, 32);
+TECTON_LAYOUT_OFFSET(tecton_scheduler_api, cancel, 40);
+TECTON_LAYOUT_OFFSET(tecton_scheduler_api, cancel_owner, 48);
 
 TECTON_LAYOUT_SIZE(tecton_network_api, 40);
 TECTON_LAYOUT_OFFSET(tecton_network_api, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_network_api, send, 24);
 TECTON_LAYOUT_OFFSET(tecton_network_api, broadcast, 32);
+
+TECTON_LAYOUT_SIZE(tecton_logging_api, 56);
+TECTON_LAYOUT_OFFSET(tecton_logging_api, header, 0);
+TECTON_LAYOUT_OFFSET(tecton_logging_api, log, 24);
+TECTON_LAYOUT_OFFSET(tecton_logging_api, is_enabled, 32);
+TECTON_LAYOUT_OFFSET(tecton_logging_api, set_level, 40);
+TECTON_LAYOUT_OFFSET(tecton_logging_api, set_scope, 48);
+
+TECTON_LAYOUT_SIZE(tecton_events_api, 64);
+TECTON_LAYOUT_OFFSET(tecton_events_api, header, 0);
+TECTON_LAYOUT_OFFSET(tecton_events_api, subscribe, 24);
+TECTON_LAYOUT_OFFSET(tecton_events_api, unsubscribe, 32);
+TECTON_LAYOUT_OFFSET(tecton_events_api, emit, 40);
+TECTON_LAYOUT_OFFSET(tecton_events_api, emit_immediate, 48);
+TECTON_LAYOUT_OFFSET(tecton_events_api, schema_of, 56);
+
+TECTON_LAYOUT_SIZE(tecton_registry_view, 32);
+TECTON_LAYOUT_OFFSET(tecton_registry_view, data, 0);
+TECTON_LAYOUT_OFFSET(tecton_registry_view, count, 8);
+TECTON_LAYOUT_OFFSET(tecton_registry_view, stride, 16);
+TECTON_LAYOUT_OFFSET(tecton_registry_view, element_version, 24);
+TECTON_LAYOUT_OFFSET(tecton_registry_view, reserved, 28);
+
+TECTON_LAYOUT_SIZE(tecton_block_state_entry, 24);
+TECTON_LAYOUT_OFFSET(tecton_block_state_entry, network_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_block_state_entry, reserved, 4);
+TECTON_LAYOUT_OFFSET(tecton_block_state_entry, identifier, 8);
+
+TECTON_LAYOUT_SIZE(tecton_item_entry, 24);
+TECTON_LAYOUT_OFFSET(tecton_item_entry, network_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_item_entry, max_stack_size, 4);
+TECTON_LAYOUT_OFFSET(tecton_item_entry, stackable, 6);
+TECTON_LAYOUT_OFFSET(tecton_item_entry, reserved, 7);
+TECTON_LAYOUT_OFFSET(tecton_item_entry, identifier, 8);
+
+TECTON_LAYOUT_SIZE(tecton_entity_type_entry, 24);
+TECTON_LAYOUT_OFFSET(tecton_entity_type_entry, network_id, 0);
+TECTON_LAYOUT_OFFSET(tecton_entity_type_entry, reserved, 4);
+TECTON_LAYOUT_OFFSET(tecton_entity_type_entry, identifier, 8);
+
+TECTON_LAYOUT_SIZE(tecton_registries_api, 48);
+TECTON_LAYOUT_OFFSET(tecton_registries_api, header, 0);
+TECTON_LAYOUT_OFFSET(tecton_registries_api, block_states, 24);
+TECTON_LAYOUT_OFFSET(tecton_registries_api, items, 32);
+TECTON_LAYOUT_OFFSET(tecton_registries_api, entity_types, 40);
+
+TECTON_LAYOUT_SIZE(tecton_command_desc, 56);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, struct_size, 0);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, flags, 4);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, name, 8);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, description, 24);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, handler, 40);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, userdata, 48);
+
+TECTON_LAYOUT_SIZE(tecton_commands_api, 48);
+TECTON_LAYOUT_OFFSET(tecton_commands_api, header, 0);
+TECTON_LAYOUT_OFFSET(tecton_commands_api, register_command, 24);
+TECTON_LAYOUT_OFFSET(tecton_commands_api, unregister, 32);
+TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
 
 #define TECTON_ABI_FP_SEED UINT64_C(0xcbf29ce484222325)
 #define TECTON_ABI_FP_PRIME UINT64_C(0x100000001b3)
@@ -774,10 +920,37 @@ TECTON_LAYOUT_OFFSET(tecton_network_api, broadcast, 32);
   TECTON_ABI_FP_4((hash), sizeof(tecton_core_api), offsetof(tecton_core_api, header), offsetof(tecton_core_api, get_tick), offsetof(tecton_core_api, get_state))
 
 #define TECTON_ABI_FP_SCHEDULER_API(hash) \
-  TECTON_ABI_FP_5((hash), sizeof(tecton_scheduler_api), offsetof(tecton_scheduler_api, header), offsetof(tecton_scheduler_api, schedule), offsetof(tecton_scheduler_api, cancel), offsetof(tecton_scheduler_api, cancel_owner))
+  TECTON_ABI_FP_6((hash), sizeof(tecton_scheduler_api), offsetof(tecton_scheduler_api, header), offsetof(tecton_scheduler_api, after), offsetof(tecton_scheduler_api, every), offsetof(tecton_scheduler_api, cancel), offsetof(tecton_scheduler_api, cancel_owner))
 
 #define TECTON_ABI_FP_NETWORK_API(hash) \
   TECTON_ABI_FP_4((hash), sizeof(tecton_network_api), offsetof(tecton_network_api, header), offsetof(tecton_network_api, send), offsetof(tecton_network_api, broadcast))
+
+#define TECTON_ABI_FP_LOGGING_API(hash) \
+  TECTON_ABI_FP_6((hash), sizeof(tecton_logging_api), offsetof(tecton_logging_api, header), offsetof(tecton_logging_api, log), offsetof(tecton_logging_api, is_enabled), offsetof(tecton_logging_api, set_level), offsetof(tecton_logging_api, set_scope))
+
+#define TECTON_ABI_FP_EVENTS_API(hash) \
+  TECTON_ABI_FP_7((hash), sizeof(tecton_events_api), offsetof(tecton_events_api, header), offsetof(tecton_events_api, subscribe), offsetof(tecton_events_api, unsubscribe), offsetof(tecton_events_api, emit), offsetof(tecton_events_api, emit_immediate), offsetof(tecton_events_api, schema_of))
+
+#define TECTON_ABI_FP_REGISTRY_VIEW(hash) \
+  TECTON_ABI_FP_6((hash), sizeof(tecton_registry_view), offsetof(tecton_registry_view, data), offsetof(tecton_registry_view, count), offsetof(tecton_registry_view, stride), offsetof(tecton_registry_view, element_version), offsetof(tecton_registry_view, reserved))
+
+#define TECTON_ABI_FP_BLOCK_STATE_ENTRY(hash) \
+  TECTON_ABI_FP_4((hash), sizeof(tecton_block_state_entry), offsetof(tecton_block_state_entry, network_id), offsetof(tecton_block_state_entry, reserved), offsetof(tecton_block_state_entry, identifier))
+
+#define TECTON_ABI_FP_ITEM_ENTRY(hash) \
+  TECTON_ABI_FP_6((hash), sizeof(tecton_item_entry), offsetof(tecton_item_entry, network_id), offsetof(tecton_item_entry, max_stack_size), offsetof(tecton_item_entry, stackable), offsetof(tecton_item_entry, reserved), offsetof(tecton_item_entry, identifier))
+
+#define TECTON_ABI_FP_ENTITY_TYPE_ENTRY(hash) \
+  TECTON_ABI_FP_4((hash), sizeof(tecton_entity_type_entry), offsetof(tecton_entity_type_entry, network_id), offsetof(tecton_entity_type_entry, reserved), offsetof(tecton_entity_type_entry, identifier))
+
+#define TECTON_ABI_FP_REGISTRIES_API(hash) \
+  TECTON_ABI_FP_5((hash), sizeof(tecton_registries_api), offsetof(tecton_registries_api, header), offsetof(tecton_registries_api, block_states), offsetof(tecton_registries_api, items), offsetof(tecton_registries_api, entity_types))
+
+#define TECTON_ABI_FP_COMMAND_DESC(hash) \
+  TECTON_ABI_FP_7((hash), sizeof(tecton_command_desc), offsetof(tecton_command_desc, struct_size), offsetof(tecton_command_desc, flags), offsetof(tecton_command_desc, name), offsetof(tecton_command_desc, description), offsetof(tecton_command_desc, handler), offsetof(tecton_command_desc, userdata))
+
+#define TECTON_ABI_FP_COMMANDS_API(hash) \
+  TECTON_ABI_FP_5((hash), sizeof(tecton_commands_api), offsetof(tecton_commands_api, header), offsetof(tecton_commands_api, register_command), offsetof(tecton_commands_api, unregister), offsetof(tecton_commands_api, mark_dirty))
 
 #define TECTON_ABI_FP_ITEM(tag, value) TECTON_ABI_FP_VALUE((TECTON_ABI_FP_SEED ^ UINT64_C(tag)), (value))
 
@@ -863,7 +1036,12 @@ TECTON_LAYOUT_OFFSET(tecton_network_api, broadcast, 32);
   (TECTON_ABI_FP_ITEM(1079, TECTON_INTERFACE_BLOCKS)) ^ \
   (TECTON_ABI_FP_ITEM(1080, TECTON_INTERFACE_INVENTORIES)) ^ \
   (TECTON_ABI_FP_ITEM(1081, TECTON_INTERFACE_REGISTRIES)) ^ \
-  (TECTON_ABI_FP_ITEM(1082, TECTON_INTERFACE_NETWORK))
+  (TECTON_ABI_FP_ITEM(1082, TECTON_INTERFACE_NETWORK)) ^ \
+  (TECTON_ABI_FP_ITEM(1083, TECTON_INTERFACE_COMMANDS)) ^ \
+  (TECTON_ABI_FP_ITEM(1084, TECTON_FEATURE_REGISTRIES)) ^ \
+  (TECTON_ABI_FP_ITEM(1085, TECTON_FEATURE_COMMANDS)) ^ \
+  (TECTON_ABI_FP_ITEM(1086, TECTON_CUSTOM_PAYLOAD_MAX)) ^ \
+  (TECTON_ABI_FP_ITEM(1087, TECTON_MAX_CUSTOM_EVENTS))
 
 /* Members use FNV-1a and are XOR-combined: one left-to-right chain exceeds C
    compilers' bracket nesting limit. */
@@ -897,6 +1075,15 @@ TECTON_LAYOUT_OFFSET(tecton_network_api, broadcast, 32);
   (TECTON_ABI_FP_SCHEDULER_API(TECTON_ABI_FP_SEED ^ UINT64_C(25))) ^ \
   (TECTON_ABI_FP_NETWORK_API(TECTON_ABI_FP_SEED ^ UINT64_C(26))) ^ \
   (TECTON_ABI_FP_HOST_API(TECTON_ABI_FP_SEED ^ UINT64_C(27))) ^ \
+  (TECTON_ABI_FP_LOGGING_API(TECTON_ABI_FP_SEED ^ UINT64_C(30))) ^ \
+  (TECTON_ABI_FP_EVENTS_API(TECTON_ABI_FP_SEED ^ UINT64_C(31))) ^ \
+  (TECTON_ABI_FP_REGISTRY_VIEW(TECTON_ABI_FP_SEED ^ UINT64_C(32))) ^ \
+  (TECTON_ABI_FP_BLOCK_STATE_ENTRY(TECTON_ABI_FP_SEED ^ UINT64_C(33))) ^ \
+  (TECTON_ABI_FP_ITEM_ENTRY(TECTON_ABI_FP_SEED ^ UINT64_C(34))) ^ \
+  (TECTON_ABI_FP_ENTITY_TYPE_ENTRY(TECTON_ABI_FP_SEED ^ UINT64_C(35))) ^ \
+  (TECTON_ABI_FP_REGISTRIES_API(TECTON_ABI_FP_SEED ^ UINT64_C(36))) ^ \
+  (TECTON_ABI_FP_COMMAND_DESC(TECTON_ABI_FP_SEED ^ UINT64_C(37))) ^ \
+  (TECTON_ABI_FP_COMMANDS_API(TECTON_ABI_FP_SEED ^ UINT64_C(38))) ^ \
   (TECTON_ABI_FP_CONSTANTS))
 
 #ifdef __cplusplus

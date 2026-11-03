@@ -14,9 +14,9 @@ static void TECTON_PLUGIN_CALL on_tick(void *userdata,
   (void)event;
 }
 
-static int32_t TECTON_PLUGIN_CALL on_task(void *userdata) {
+static void TECTON_PLUGIN_CALL on_task(void *userdata, uint64_t timer_id) {
   (void)userdata;
-  return 0;
+  (void)timer_id;
 }
 
 static int32_t TECTON_PLUGIN_CALL on_load(tecton_plugin_context *value) {
@@ -52,8 +52,7 @@ static int32_t TECTON_PLUGIN_CALL on_start(tecton_plugin_context *value) {
                           (const tecton_interface_header **)&scheduler) ==
           TECTON_RESULT_OK &&
       scheduler != 0) {
-    (void)scheduler->schedule(host_userdata, value->plugin_id, on_task, 0,
-                              &task);
+    (void)scheduler->every(host_userdata, 1, on_task, 0, &task);
   }
 
   (void)host->event_subscribe(host_userdata, TECTON_EVENT_SERVER_TICK,

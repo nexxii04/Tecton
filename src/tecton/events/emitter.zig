@@ -54,6 +54,9 @@ pub fn Emitter() type {
         allocator: std.mem.Allocator,
         listeners: ListenerArrays,
         next_order: u64 = 0,
+        idle_hook: ?*const fn (?*anyopaque) void = null,
+        idle_userdata: ?*anyopaque = null,
+        emit_depth: u32 = 0,
 
         pub fn init(allocator: std.mem.Allocator) Self {
             var listeners: ListenerArrays = undefined;
@@ -63,6 +66,15 @@ pub fn Emitter() type {
                 @field(listeners, field.name ++ "_post") = .empty;
             }
             return .{ .allocator = allocator, .listeners = listeners };
+        }
+
+        pub fn setIdleHook(self: *Self, hook: ?*const fn (?*anyopaque) void, userdata: ?*anyopaque) void {
+            self.idle_hook = hook;
+            self.idle_userdata = userdata;
+        }
+
+        pub fn isEmitting(self: *const Self) bool {
+            return self.emit_depth > 0;
         }
 
         pub fn deinit(self: *Self) void {
@@ -144,6 +156,13 @@ pub fn Emitter() type {
             data: *Event.DataType(event),
             context: *EventContext,
         ) bool {
+            self.emit_depth += 1;
+            defer {
+                self.emit_depth -= 1;
+                if (self.emit_depth == 0) {
+                    if (self.idle_hook) |hook| hook(self.idle_userdata);
+                }
+            }
             context.event = event;
             context.cancelled = false;
             context.phase = .pre;
@@ -156,7 +175,7 @@ pub fn Emitter() type {
                     index += 1;
                     continue;
                 }
-                
+
                 min_order = listener.order + 1;
                 context.listener_userdata = listener.userdata;
                 switch (listener.callback(context, data)) {
@@ -189,7 +208,7 @@ pub fn Emitter() type {
                         context.cancelled = true;
                         break;
                     }
-                    
+
                     if (index < self.listenerList(event, .commit).items.len and self.listenerList(event, .commit).items[index].order == listener.order) index += 1;
                 }
             }

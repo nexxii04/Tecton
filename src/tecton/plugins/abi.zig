@@ -38,7 +38,9 @@ pub const feature_items: u64 = 1 << 9;
 pub const feature_blocks: u64 = 1 << 10;
 pub const feature_inventories: u64 = 1 << 11;
 pub const feature_network: u64 = 1 << 12;
-pub const host_features: u64 = feature_events | feature_world | feature_logging | feature_allocator | feature_interfaces | feature_core | feature_scheduler | feature_players | feature_entities | feature_items | feature_blocks | feature_inventories | feature_network;
+pub const feature_registries: u64 = 1 << 13;
+pub const feature_commands: u64 = 1 << 14;
+pub const host_features: u64 = feature_events | feature_world | feature_logging | feature_allocator | feature_interfaces | feature_core | feature_scheduler | feature_players | feature_entities | feature_items | feature_blocks | feature_inventories | feature_network | feature_registries | feature_commands;
 
 pub const interface_core: u32 = 1;
 pub const interface_logging: u32 = 2;
@@ -52,6 +54,10 @@ pub const interface_blocks: u32 = 9;
 pub const interface_inventories: u32 = 10;
 pub const interface_registries: u32 = 11;
 pub const interface_network: u32 = 12;
+pub const interface_commands: u32 = 13;
+
+pub const max_custom_events: u32 = 128;
+pub const custom_payload_max: usize = 56;
 
 pub const event_flag_cancelable: u16 = 1 << 0;
 pub const event_flag_mutable: u16 = 1 << 1;
@@ -199,6 +205,32 @@ pub const EventId = enum(u32) {
 
 pub const EventResult = enum(i32) { continue_ = 0, cancel = 1 };
 
+pub const PayloadKind = enum { none, tick, player_join, player_disconnect };
+
+pub const EventMeta = struct {
+    external_id: u32,
+    schema: u32,
+    flags: u16,
+    payload: PayloadKind,
+};
+
+pub fn eventMeta(event: EventId) EventMeta {
+    const payload: PayloadKind = switch (event) {
+        .server_tick => .tick,
+        .player_join => .player_join,
+        .player_disconnect => .player_disconnect,
+        else => .none,
+    };
+    const id = @intFromEnum(event);
+    const version: u32 = if (payload == .none) 0 else 1;
+    return .{
+        .external_id = id,
+        .schema = (id << 8) | version,
+        .flags = if (payload == .none) event_flag_callback_only | event_flag_borrowed else event_flag_cancelable | event_flag_callback_only | event_flag_borrowed,
+        .payload = payload,
+    };
+}
+
 pub const EventView = extern struct {
     data: ?*const anyopaque,
     data_size: usize,
@@ -229,8 +261,18 @@ pub const FreeFn = *const fn (?*anyopaque, ?*anyopaque, usize, usize) callconv(.
 pub const ReallocFn = *const fn (?*anyopaque, ?*anyopaque, usize, usize, usize) callconv(.c) ?*anyopaque;
 pub const LogFn = *const fn (?*anyopaque, u32, StringView) callconv(.c) void;
 pub const GetInterfaceFn = *const fn (?*anyopaque, u32, u16, u16, ?*?InterfacePtr) callconv(.c) i32;
-pub const SchedulerCallbackFn = *const fn (?*anyopaque) callconv(.c) i32;
-pub const SchedulerEveryFn = *const fn (?*anyopaque, u32, ?SchedulerCallbackFn, ?*anyopaque, ?*u64) callconv(.c) i32;
+pub const TimerCallbackFn = *const fn (?*anyopaque, u64) callconv(.c) void;
+pub const SchedulerAfterFn = *const fn (?*anyopaque, u32, ?TimerCallbackFn, ?*anyopaque, ?*u64) callconv(.c) i32;
+pub const SchedulerEveryFn = SchedulerAfterFn;
+pub const LogIsEnabledFn = *const fn (?*anyopaque, u32) callconv(.c) i32;
+pub const LogSetLevelFn = *const fn (?*anyopaque, u32) callconv(.c) void;
+pub const LogSetScopeFn = *const fn (?*anyopaque, StringView) callconv(.c) void;
+pub const SchemaOfFn = *const fn (?*anyopaque, StringView, u32, ?*u32) callconv(.c) i32;
+pub const RegistryFn = *const fn (?*anyopaque, ?*RegistryView) callconv(.c) i32;
+pub const CommandHandlerFn = *const fn (?*anyopaque, i32, ?[*]const StringView) callconv(.c) void;
+pub const CommandRegisterFn = *const fn (?*anyopaque, ?*const CommandDesc, ?*u64) callconv(.c) i32;
+pub const CommandUnregisterFn = *const fn (?*anyopaque, u64) callconv(.c) i32;
+pub const CommandMarkDirtyFn = *const fn (?*anyopaque) callconv(.c) void;
 pub const WorldFindFn = *const fn (?*anyopaque, StringView, *u64) callconv(.c) i32;
 pub const WorldGetSnapshotFn = *const fn (?*anyopaque, u64, ?*WorldSnapshot, usize) callconv(.c) i32;
 pub const WorldSetBlockFn = *const fn (?*anyopaque, u64, StringView, i32, i32, i32, StringView) callconv(.c) i32;
@@ -245,9 +287,8 @@ pub const InventoryGetSizeFn = *const fn (?*anyopaque, u64, *u32) callconv(.c) i
 pub const InventoryGetItemFn = *const fn (?*anyopaque, u64, u32, ?*InventoryItemSnapshot, usize) callconv(.c) i32;
 pub const CoreGetTickFn = *const fn (?*anyopaque, ?*u64) callconv(.c) i32;
 pub const CoreGetStateFn = *const fn (?*anyopaque, ?*u32) callconv(.c) i32;
-pub const SchedulerScheduleFn = *const fn (?*anyopaque, u32, SchedulerCallbackFn, ?*anyopaque, ?*u64) callconv(.c) i32;
 pub const SchedulerCancelFn = *const fn (?*anyopaque, u64) callconv(.c) i32;
-pub const SchedulerCancelOwnerFn = *const fn (?*anyopaque, u32) callconv(.c) i32;
+pub const SchedulerCancelOwnerFn = *const fn (?*anyopaque) callconv(.c) i32;
 pub const NetworkSendFn = *const fn (?*anyopaque, u64, StringView, u32) callconv(.c) i32;
 pub const NetworkBroadcastFn = *const fn (?*anyopaque, StringView, u32) callconv(.c) i32;
 
@@ -258,7 +299,33 @@ pub const ItemsApi = extern struct { header: InterfaceHeader, count: ItemsCountF
 pub const BlocksApi = extern struct { header: InterfaceHeader, get_snapshot: BlocksGetSnapshotFn };
 pub const InventoriesApi = extern struct { header: InterfaceHeader, get_size: InventoryGetSizeFn, get_item: InventoryGetItemFn };
 pub const CoreApi = extern struct { header: InterfaceHeader, get_tick: CoreGetTickFn, get_state: CoreGetStateFn };
-pub const SchedulerApi = extern struct { header: InterfaceHeader, schedule: SchedulerScheduleFn, cancel: SchedulerCancelFn, cancel_owner: SchedulerCancelOwnerFn };
+pub const SchedulerApi = extern struct { header: InterfaceHeader, after: SchedulerAfterFn, every: SchedulerEveryFn, cancel: SchedulerCancelFn, cancel_owner: SchedulerCancelOwnerFn };
+pub const LoggingApi = extern struct { header: InterfaceHeader, log: LogFn, is_enabled: LogIsEnabledFn, set_level: LogSetLevelFn, set_scope: LogSetScopeFn };
+pub const EventsApi = extern struct { header: InterfaceHeader, subscribe: EventSubscribeFn, unsubscribe: EventUnsubscribeFn, emit: EmitCustomFn, emit_immediate: EmitCustomFn, schema_of: SchemaOfFn };
+
+pub const RegistryView = extern struct {
+    data: ?*const anyopaque,
+    count: usize,
+    stride: usize,
+    element_version: u32,
+    reserved: u32,
+};
+
+pub const BlockStateEntry = extern struct { network_id: i32, reserved: u32, identifier: StringView };
+pub const ItemEntry = extern struct { network_id: i32, max_stack_size: u16, stackable: u8, reserved: u8, identifier: StringView };
+pub const EntityTypeEntry = extern struct { network_id: i32, reserved: u32, identifier: StringView };
+pub const RegistriesApi = extern struct { header: InterfaceHeader, block_states: RegistryFn, items: RegistryFn, entity_types: RegistryFn };
+
+pub const CommandDesc = extern struct {
+    struct_size: u32,
+    flags: u32,
+    name: StringView,
+    description: StringView,
+    handler: ?CommandHandlerFn,
+    userdata: ?*anyopaque,
+};
+
+pub const CommandsApi = extern struct { header: InterfaceHeader, register_command: CommandRegisterFn, unregister: CommandUnregisterFn, mark_dirty: CommandMarkDirtyFn };
 pub const NetworkApi = extern struct { header: InterfaceHeader, send: NetworkSendFn, broadcast: NetworkBroadcastFn };
 
 pub const HostApi = extern struct {
@@ -535,9 +602,96 @@ fn fpSchedulerApi(hash: u64) u64 {
     var h = hash;
     h = mix(h, @sizeOf(SchedulerApi));
     h = mix(h, @offsetOf(SchedulerApi, "header"));
-    h = mix(h, @offsetOf(SchedulerApi, "schedule"));
+    h = mix(h, @offsetOf(SchedulerApi, "after"));
+    h = mix(h, @offsetOf(SchedulerApi, "every"));
     h = mix(h, @offsetOf(SchedulerApi, "cancel"));
     return mix(h, @offsetOf(SchedulerApi, "cancel_owner"));
+}
+
+fn fpLoggingApi(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(LoggingApi));
+    h = mix(h, @offsetOf(LoggingApi, "header"));
+    h = mix(h, @offsetOf(LoggingApi, "log"));
+    h = mix(h, @offsetOf(LoggingApi, "is_enabled"));
+    h = mix(h, @offsetOf(LoggingApi, "set_level"));
+    return mix(h, @offsetOf(LoggingApi, "set_scope"));
+}
+
+fn fpEventsApi(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EventsApi));
+    h = mix(h, @offsetOf(EventsApi, "header"));
+    h = mix(h, @offsetOf(EventsApi, "subscribe"));
+    h = mix(h, @offsetOf(EventsApi, "unsubscribe"));
+    h = mix(h, @offsetOf(EventsApi, "emit"));
+    h = mix(h, @offsetOf(EventsApi, "emit_immediate"));
+    return mix(h, @offsetOf(EventsApi, "schema_of"));
+}
+
+fn fpRegistryView(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(RegistryView));
+    h = mix(h, @offsetOf(RegistryView, "data"));
+    h = mix(h, @offsetOf(RegistryView, "count"));
+    h = mix(h, @offsetOf(RegistryView, "stride"));
+    h = mix(h, @offsetOf(RegistryView, "element_version"));
+    return mix(h, @offsetOf(RegistryView, "reserved"));
+}
+
+fn fpBlockStateEntry(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(BlockStateEntry));
+    h = mix(h, @offsetOf(BlockStateEntry, "network_id"));
+    h = mix(h, @offsetOf(BlockStateEntry, "reserved"));
+    return mix(h, @offsetOf(BlockStateEntry, "identifier"));
+}
+
+fn fpItemEntry(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(ItemEntry));
+    h = mix(h, @offsetOf(ItemEntry, "network_id"));
+    h = mix(h, @offsetOf(ItemEntry, "max_stack_size"));
+    h = mix(h, @offsetOf(ItemEntry, "stackable"));
+    h = mix(h, @offsetOf(ItemEntry, "reserved"));
+    return mix(h, @offsetOf(ItemEntry, "identifier"));
+}
+
+fn fpEntityTypeEntry(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(EntityTypeEntry));
+    h = mix(h, @offsetOf(EntityTypeEntry, "network_id"));
+    h = mix(h, @offsetOf(EntityTypeEntry, "reserved"));
+    return mix(h, @offsetOf(EntityTypeEntry, "identifier"));
+}
+
+fn fpRegistriesApi(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(RegistriesApi));
+    h = mix(h, @offsetOf(RegistriesApi, "header"));
+    h = mix(h, @offsetOf(RegistriesApi, "block_states"));
+    h = mix(h, @offsetOf(RegistriesApi, "items"));
+    return mix(h, @offsetOf(RegistriesApi, "entity_types"));
+}
+
+fn fpCommandDesc(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(CommandDesc));
+    h = mix(h, @offsetOf(CommandDesc, "struct_size"));
+    h = mix(h, @offsetOf(CommandDesc, "flags"));
+    h = mix(h, @offsetOf(CommandDesc, "name"));
+    h = mix(h, @offsetOf(CommandDesc, "description"));
+    h = mix(h, @offsetOf(CommandDesc, "handler"));
+    return mix(h, @offsetOf(CommandDesc, "userdata"));
+}
+
+fn fpCommandsApi(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(CommandsApi));
+    h = mix(h, @offsetOf(CommandsApi, "header"));
+    h = mix(h, @offsetOf(CommandsApi, "register_command"));
+    h = mix(h, @offsetOf(CommandsApi, "unregister"));
+    return mix(h, @offsetOf(CommandsApi, "mark_dirty"));
 }
 
 fn fpNetworkApi(hash: u64) u64 {
@@ -646,6 +800,11 @@ fn fpConstants() u64 {
     h ^= mix(abi_fp_seed ^ 1080, interface_inventories);
     h ^= mix(abi_fp_seed ^ 1081, interface_registries);
     h ^= mix(abi_fp_seed ^ 1082, interface_network);
+    h ^= mix(abi_fp_seed ^ 1083, interface_commands);
+    h ^= mix(abi_fp_seed ^ 1084, feature_registries);
+    h ^= mix(abi_fp_seed ^ 1085, feature_commands);
+    h ^= mix(abi_fp_seed ^ 1086, custom_payload_max);
+    h ^= mix(abi_fp_seed ^ 1087, max_custom_events);
     return h;
 }
 
@@ -681,6 +840,15 @@ pub const abi_fingerprint: u64 = blk: {
     h ^= fpSchedulerApi(abi_fp_seed ^ 25);
     h ^= fpNetworkApi(abi_fp_seed ^ 26);
     h ^= fpHostApi(abi_fp_seed ^ 27);
+    h ^= fpLoggingApi(abi_fp_seed ^ 30);
+    h ^= fpEventsApi(abi_fp_seed ^ 31);
+    h ^= fpRegistryView(abi_fp_seed ^ 32);
+    h ^= fpBlockStateEntry(abi_fp_seed ^ 33);
+    h ^= fpItemEntry(abi_fp_seed ^ 34);
+    h ^= fpEntityTypeEntry(abi_fp_seed ^ 35);
+    h ^= fpRegistriesApi(abi_fp_seed ^ 36);
+    h ^= fpCommandDesc(abi_fp_seed ^ 37);
+    h ^= fpCommandsApi(abi_fp_seed ^ 38);
     h ^= fpConstants();
     break :blk h;
 };
@@ -738,6 +906,13 @@ test "host api fits the cache budget" {
     try std.testing.expectEqual(@as(usize, 40), @sizeOf(Allocator));
     try std.testing.expectEqual(@as(usize, 40), @sizeOf(HostQuery));
     try std.testing.expectEqual(@as(usize, 56), @sizeOf(PluginInfo));
+    try std.testing.expectEqual(@as(usize, 56), @sizeOf(LoggingApi));
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(EventsApi));
+    try std.testing.expectEqual(@as(usize, 56), @sizeOf(SchedulerApi));
+    try std.testing.expectEqual(@as(usize, 32), @sizeOf(RegistryView));
+    try std.testing.expectEqual(@as(usize, 48), @sizeOf(RegistriesApi));
+    try std.testing.expectEqual(@as(usize, 56), @sizeOf(CommandDesc));
+    try std.testing.expectEqual(@as(usize, 48), @sizeOf(CommandsApi));
 }
 
 test "query and descriptor validation enforce fingerprint and callbacks" {
