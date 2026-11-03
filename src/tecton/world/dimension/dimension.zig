@@ -32,6 +32,7 @@ pub const Dimension = struct {
     dimension_type: Protocol.DimensionType,
     chunks: std.AutoHashMap(ChunkHash, *Chunk),
     entities: std.AutoHashMap(i64, *Entity),
+    entity_serial: u64 = 0,
     entity_index: ChunkEntityIndex,
     blocks: std.AutoHashMap(i64, *Block),
     blocks_by_chunk: std.AutoHashMap(ChunkHash, std.ArrayList(*Block)),
@@ -66,6 +67,7 @@ pub const Dimension = struct {
             .dimension_type = dimension_type,
             .chunks = std.AutoHashMap(ChunkHash, *Chunk).init(allocator),
             .entities = std.AutoHashMap(i64, *Entity).init(allocator),
+            .entity_serial = 0,
             .entity_index = ChunkEntityIndex.init(allocator),
             .blocks = std.AutoHashMap(i64, *Block).init(allocator),
             .blocks_by_chunk = std.AutoHashMap(ChunkHash, std.ArrayList(*Block)).init(allocator),
@@ -376,6 +378,10 @@ pub const Dimension = struct {
 
     pub fn getEntity(self: *Dimension, runtime_id: i64) ?*Entity {
         return self.entities.get(runtime_id);
+    }
+
+    pub fn noteEntityMutation(self: *Dimension) void {
+        self.entity_serial +%= 1;
     }
 
     pub fn reindexEntity(self: *Dimension, entity: *Entity) void {

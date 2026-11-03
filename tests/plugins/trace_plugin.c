@@ -97,7 +97,7 @@ static const tecton_plugin_descriptor descriptor = {
             .version = TECTON_STR("2.0.0"),
             .description = TECTON_STR("Lifecycle order probe"),
             .api = {TECTON_PLUGIN_ABI_MAJOR, TECTON_PLUGIN_ABI_MINOR, 0, 0},
-            .required_features = TECTON_FEATURE_CORE | TECTON_FEATURE_PLAYERS,
+            .required_features = TECTON_FEATURE_PLAYERS,
             .optional_features = 0,
         },
     .on_load = on_load,

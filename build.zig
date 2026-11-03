@@ -418,6 +418,7 @@ const layout_types = .{
     .{ "tecton_snapshot_header", plugin_abi.SnapshotHeader },
     .{ "tecton_world_snapshot", plugin_abi.WorldSnapshot },
     .{ "tecton_player_snapshot", plugin_abi.PlayerSnapshot },
+    .{ "tecton_block_box", plugin_abi.BlockBox },
     .{ "tecton_entity_snapshot", plugin_abi.EntitySnapshot },
     .{ "tecton_item_snapshot", plugin_abi.ItemSnapshot },
     .{ "tecton_block_snapshot", plugin_abi.BlockSnapshot },
@@ -439,6 +440,7 @@ const layout_types = .{
     .{ "tecton_entity_type_entry", plugin_abi.EntityTypeEntry },
     .{ "tecton_registries_api", plugin_abi.RegistriesApi },
     .{ "tecton_command_desc", plugin_abi.CommandDesc },
+    .{ "tecton_command_call", plugin_abi.CommandCall },
     .{ "tecton_commands_api", plugin_abi.CommandsApi },
 };
 

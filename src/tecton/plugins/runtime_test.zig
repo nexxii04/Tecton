@@ -62,6 +62,7 @@ pub fn Suite(comptime scope: type) type {
         const private_pluginruntime_sendPriority = scope.private_pluginruntime_sendPriority;
         const private_pluginruntime_dispatch = scope.private_pluginruntime_dispatch;
         const private_pluginruntime_itemHandle = scope.private_pluginruntime_itemHandle;
+        const private_pluginruntime_serializeBlockUpdate = scope.private_pluginruntime_serializeBlockUpdate;
         pub fn case_000() !void {
             var runtime = PluginRuntime.init(std.testing.allocator);
             defer runtime.deinit();
@@ -117,18 +118,19 @@ pub fn Suite(comptime scope: type) type {
             var slot = HostSlot{ .runtime = &runtime, .plugin_id = 0, .name = "test", .host = undefined };
 
             const ids = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
-            for (ids) |id| {
+            const minors = [_]u16{ 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1 };
+            for (ids, minors) |id, minor| {
                 var interface: ?abi.InterfacePtr = null;
-                try std.testing.expectEqual(abi.result_ok, private_pluginruntime_getInterface(@ptrCast(&slot), id, 1, 0, &interface));
+                try std.testing.expectEqual(abi.result_ok, private_pluginruntime_getInterface(@ptrCast(&slot), id, 1, minor, &interface));
                 try std.testing.expect(interface != null);
                 try std.testing.expectEqual(id, interface.?.interface_id);
                 try std.testing.expectEqual(@as(u16, 1), interface.?.major);
-                try std.testing.expectEqual(@as(u16, 0), interface.?.minor);
+                try std.testing.expectEqual(minor, interface.?.minor);
                 try std.testing.expect(interface.?.struct_size >= @sizeOf(abi.InterfaceHeader));
 
                 try std.testing.expectEqual(abi.result_version, private_pluginruntime_getInterface(@ptrCast(&slot), id, 2, 0, &interface));
                 try std.testing.expect(interface == null);
-                try std.testing.expectEqual(abi.result_version, private_pluginruntime_getInterface(@ptrCast(&slot), id, 1, 1, &interface));
+                try std.testing.expectEqual(abi.result_version, private_pluginruntime_getInterface(@ptrCast(&slot), id, 1, minor + 1, &interface));
                 try std.testing.expect(interface == null);
             }
 
@@ -1532,6 +1534,483 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(SendPriority.normal, private_pluginruntime_sendPriority(abi.packet_priority_normal).?);
             try std.testing.expectEqual(SendPriority.immediate, private_pluginruntime_sendPriority(abi.packet_priority_immediate).?);
             try std.testing.expect(private_pluginruntime_sendPriority(7) == null);
+        }
+
+        pub fn case_036() !void {
+            const allocator = std.testing.allocator;
+            const NBT = @import("nbt");
+            const Protocol = @import("protocol");
+            const ItemType = @import("../items/item_type.zig").ItemType;
+            const Player = @import("../player/player.zig").Player;
+            const Entity = @import("../entity/entity.zig").Entity;
+            const EntityType = @import("../entity/entity_type.zig").EntityType;
+            const PlayerRegistry = @import("../server/players.zig").PlayerRegistry;
+            const Tecton = @import("../tecton.zig").Tecton;
+            const connection_mod = @import("../transport/connection.zig");
+            const Connection = connection_mod.Connection;
+
+            try ItemType.initRegistry(allocator);
+            defer ItemType.deinitRegistry();
+
+            var counted = CountingAllocator.init(allocator);
+            var runtime = PluginRuntime.init(counted.allocator());
+            defer {
+                counted.deny_allocations = false;
+                runtime.deinit();
+            }
+            var tecton: Tecton = undefined;
+            tecton.players = PlayerRegistry.init(std.testing.io, allocator);
+            defer tecton.players.deinit();
+            runtime.tecton = &tecton;
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 1, .name = "snapshots", .host = undefined, .state = .running };
+            var owned: u32 = 0;
+
+            var player: Player = undefined;
+            player.entity.dimension = null;
+            player.entity.runtime_id = 99;
+            player.entity.position = Protocol.Vector3f.init(1.5, 64, -3.5);
+            player.entity.rotation = Protocol.Vector2f.init(10, 20);
+            player.username = "phase5";
+            player.uuid = "00000000-0000-0000-0000-000000000005";
+            player.gamemode = .Creative;
+            player.spawned = true;
+            player.pending_removal = .init(false);
+            const connection = try allocator.create(Connection);
+            connection.* = .{
+                .id = 17,
+                .backend = undefined,
+                .allocator = allocator,
+                .refs = std.atomic.Value(u32).init(1),
+                .state = std.atomic.Value(connection_mod.State).init(.open),
+            };
+            defer connection.release();
+            player.connection = connection;
+            try tecton.players.insert(&player);
+            const player_handle = try runtime.handles.put(.player, @intFromPtr(&player), 1, &owned);
+
+            var player_snapshot: abi.PlayerSnapshot = undefined;
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.players_api.get_snapshot(@ptrCast(&slot), player_handle, null, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.players_api.get_snapshot(@ptrCast(&slot), player_handle, &player_snapshot, @sizeOf(abi.PlayerSnapshot) - 1));
+            try std.testing.expectEqual(abi.result_invalid_handle, runtime.players_api.get_snapshot(@ptrCast(&slot), 0, &player_snapshot, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(abi.result_ok, runtime.players_api.get_snapshot(@ptrCast(&slot), player_handle, &player_snapshot, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(@as(i64, 99), player_snapshot.runtime_id);
+            try std.testing.expectEqual(@as(f32, 1.5), player_snapshot.x);
+            try std.testing.expectEqual(@as(f32, 64), player_snapshot.y);
+            try std.testing.expectEqual(@as(f32, -3.5), player_snapshot.z);
+            try std.testing.expectEqual(@as(u8, @intFromEnum(Protocol.GameMode.Creative)), player_snapshot.gamemode);
+            try std.testing.expectEqual(@as(u8, 1), player_snapshot.spawned);
+            try std.testing.expectEqualStrings("phase5", player_snapshot.name.slice());
+
+            var player_count: usize = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.players_api.count(@ptrCast(&slot), &player_count));
+            try std.testing.expectEqual(@as(usize, 1), player_count);
+            var registry_snapshot: abi.PlayerSnapshot = undefined;
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.players_api.get_by_index(@ptrCast(&slot), 0, null, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.players_api.get_by_index(@ptrCast(&slot), 0, &registry_snapshot, @sizeOf(abi.PlayerSnapshot) - 1));
+            try std.testing.expectEqual(abi.result_ok, runtime.players_api.get_by_index(@ptrCast(&slot), 0, &registry_snapshot, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(@as(i64, 99), registry_snapshot.runtime_id);
+            try std.testing.expectEqualStrings("phase5", registry_snapshot.name.slice());
+            try std.testing.expectEqual(abi.result_not_found, runtime.players_api.get_by_index(@ptrCast(&slot), 1, &registry_snapshot, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(abi.result_ok, runtime.players_api.get_by_runtime(@ptrCast(&slot), 99, &registry_snapshot, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(@as(i64, 99), registry_snapshot.runtime_id);
+            try std.testing.expectEqual(abi.result_not_found, runtime.players_api.get_by_runtime(@ptrCast(&slot), 100, &registry_snapshot, @sizeOf(abi.PlayerSnapshot)));
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.players_api.get_by_runtime(@ptrCast(&slot), 99, null, @sizeOf(abi.PlayerSnapshot)));
+
+            const PlayerProbe = struct {
+                count: usize = 0,
+                name: []const u8 = "",
+
+                fn callback(userdata: ?*anyopaque, snapshot: *const abi.PlayerSnapshot) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    probe.name = snapshot.name.slice();
+                    probe.count += 1;
+                }
+            };
+            var player_probe = PlayerProbe{};
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.players_api.for_each(@ptrCast(&slot), null, &player_probe));
+            try std.testing.expectEqual(abi.result_ok, runtime.players_api.for_each(@ptrCast(&slot), PlayerProbe.callback, &player_probe));
+            try std.testing.expectEqual(@as(usize, 1), player_probe.count);
+            try std.testing.expectEqualStrings("phase5", player_probe.name);
+
+            const entity_type = EntityType.init("minecraft:phase5", 1, &.{}, &.{});
+            const entity = try allocator.create(Entity);
+            entity.* = Entity.init(allocator, &entity_type, null);
+            defer {
+                entity.deinit();
+                allocator.destroy(entity);
+            }
+            const entity_handle = try runtime.handles.put(.entity, @intFromPtr(entity), 1, &owned);
+            var entity_snapshot: abi.EntitySnapshot = undefined;
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.entities_api.get_snapshot(@ptrCast(&slot), entity_handle, &entity_snapshot, @sizeOf(abi.EntitySnapshot) - 1));
+            try std.testing.expectEqual(abi.result_ok, runtime.entities_api.get_snapshot(@ptrCast(&slot), entity_handle, &entity_snapshot, @sizeOf(abi.EntitySnapshot)));
+            try std.testing.expectEqual(entity.runtime_id, entity_snapshot.runtime_id);
+            try std.testing.expectEqualStrings("minecraft:phase5", entity_snapshot.type.slice());
+
+            for (0..2000) |index| {
+                const name = try std.fmt.allocPrint(allocator, "phase5:item{d}", .{index});
+                const item = try ItemType.init(allocator, name, @intCast(10_000 + index), 64, true, &.{}, false, 0, .{ .Compound = NBT.CompoundTag.init(allocator, null) });
+                try item.register();
+            }
+            try std.testing.expectEqual(@as(usize, 2000), ItemType.count());
+
+            var item_snapshot: abi.ItemSnapshot = undefined;
+            counted.deny_allocations = true;
+            var index: usize = 0;
+            while (index < 2000) : (index += 1) {
+                try std.testing.expectEqual(abi.result_ok, runtime.items_api.get_by_index(@ptrCast(&slot), index, &item_snapshot, @sizeOf(abi.ItemSnapshot)));
+                try std.testing.expectEqual(@as(i32, @intCast(10_000 + index)), item_snapshot.network_id);
+                try std.testing.expectEqual(@as(u64, 0), item_snapshot.handle);
+            }
+            try std.testing.expectEqual(abi.result_not_found, runtime.items_api.get_by_index(@ptrCast(&slot), 2000, &item_snapshot, @sizeOf(abi.ItemSnapshot)));
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.items_api.get_by_index(@ptrCast(&slot), 0, null, @sizeOf(abi.ItemSnapshot)));
+            counted.deny_allocations = false;
+
+            const item_handle = try runtime.handles.put(.item, @intFromPtr(ItemType.at(0).?), 1, &owned);
+            try std.testing.expectEqual(abi.result_ok, runtime.items_api.get_snapshot(@ptrCast(&slot), item_handle, &item_snapshot, @sizeOf(abi.ItemSnapshot)));
+            try std.testing.expectEqualStrings("phase5:item0", item_snapshot.identifier.slice());
+
+            try std.testing.expectEqual(abi.result_ok, runtime.items_api.get_by_network_id(@ptrCast(&slot), 10_017, &item_snapshot, @sizeOf(abi.ItemSnapshot)));
+            try std.testing.expectEqual(@as(i32, 10_017), item_snapshot.network_id);
+            try std.testing.expectEqualStrings("phase5:item17", item_snapshot.identifier.slice());
+            try std.testing.expectEqual(abi.result_not_found, runtime.items_api.get_by_network_id(@ptrCast(&slot), 99, &item_snapshot, @sizeOf(abi.ItemSnapshot)));
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.items_api.get_by_network_id(@ptrCast(&slot), 10_017, null, @sizeOf(abi.ItemSnapshot)));
+
+            const ItemProbe = struct {
+                count: usize = 0,
+                first_network_id: i32 = 0,
+                last_network_id: i32 = 0,
+
+                fn callback(userdata: ?*anyopaque, snapshot: *const abi.ItemSnapshot) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    if (probe.count == 0) probe.first_network_id = snapshot.network_id;
+                    probe.last_network_id = snapshot.network_id;
+                    probe.count += 1;
+                }
+            };
+            var item_probe = ItemProbe{};
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.items_api.for_each(@ptrCast(&slot), null, &item_probe));
+            try std.testing.expectEqual(abi.result_ok, runtime.items_api.for_each(@ptrCast(&slot), ItemProbe.callback, &item_probe));
+            try std.testing.expectEqual(@as(usize, 2000), item_probe.count);
+            try std.testing.expectEqual(@as(i32, 10_000), item_probe.first_network_id);
+            try std.testing.expectEqual(@as(i32, 11_999), item_probe.last_network_id);
+        }
+
+        pub fn case_037() !void {
+            const allocator = std.testing.allocator;
+            const block = @import("../world/block/root.zig");
+            const chest = @import("../world/block/traits/chest.zig");
+            const ItemType = @import("../items/item_type.zig").ItemType;
+            const World = @import("../world/world.zig").World;
+            const Dimension = @import("../world/dimension/dimension.zig").Dimension;
+            const Chunk = @import("../world/chunk/chunk.zig").Chunk;
+            const WorldProvider = @import("../world/provider/world_provider.zig").WorldProvider;
+            const Entity = @import("../entity/entity.zig").Entity;
+            const EntityType = @import("../entity/entity_type.zig").EntityType;
+            const BinaryStream = @import("BinaryStream").BinaryStream;
+            const Protocol = @import("protocol");
+
+            try block.BlockPermutation.initRegistry(allocator);
+            defer block.BlockPermutation.deinitRegistry();
+            try block.BlockType.initRegistry(allocator);
+            defer block.BlockType.deinitRegistry();
+            block.initTraitRegistry(allocator);
+            defer block.deinitTraitRegistry();
+            try ItemType.initRegistry(allocator);
+            defer ItemType.deinitRegistry();
+            try chest.ChestTrait.register();
+
+            const air_type = try block.BlockType.init(allocator, "minecraft:air");
+            try air_type.register();
+            const air_perm = try block.BlockPermutation.init(allocator, 0, "minecraft:air", block.BlockState.init(allocator));
+            try air_perm.register();
+            try air_type.addPermutation(air_perm);
+
+            const chest_type = try block.BlockType.init(allocator, "minecraft:chest");
+            try chest_type.register();
+            var chest_state = block.BlockState.init(allocator);
+            try chest_state.put(try allocator.dupe(u8, "minecraft:cardinal_direction"), .{ .string = try allocator.dupe(u8, "north") });
+            const chest_perm = try block.BlockPermutation.init(allocator, 9001, "minecraft:chest", chest_state);
+            try chest_perm.register();
+            try chest_type.addPermutation(chest_perm);
+
+            const StubProvider = struct {
+                fn readChunk(_: *anyopaque, _: i32, _: i32, _: *Dimension) anyerror!*Chunk {
+                    return error.NotSupported;
+                }
+
+                fn writeChunk(_: *anyopaque, _: *Chunk, _: *Dimension) anyerror!void {}
+
+                fn readBuffer(_: *anyopaque, _: []const u8) anyerror!?[]const u8 {
+                    return null;
+                }
+
+                fn writeBuffer(_: *anyopaque, _: []const u8, _: []const u8) anyerror!void {}
+
+                fn deinit(_: *anyopaque) void {}
+
+                const vtable = WorldProvider.VTable{
+                    .read_chunk = readChunk,
+                    .read_chunk_direct = null,
+                    .read_chunk_column = null,
+                    .read_chunk_block_entity_data = null,
+                    .write_chunk = writeChunk,
+                    .uncache_chunk = null,
+                    .read_buffer = readBuffer,
+                    .write_buffer = writeBuffer,
+                    .write_player = null,
+                    .read_player = null,
+                    .write_chunk_entities = null,
+                    .read_chunk_entities = null,
+                    .write_block_entities = null,
+                    .read_block_entities = null,
+                    .deinit_fn = deinit,
+                };
+            };
+
+            var world: World = .{
+                .tecton = undefined,
+                .allocator = allocator,
+                .identifier = "phase5-blocks",
+                .dimensions = std.StringHashMap(*Dimension).init(allocator),
+                .provider = .{ .ptr = undefined, .vtable = &StubProvider.vtable },
+            };
+            defer world.dimensions.deinit();
+            var dimension = Dimension.init(&world, allocator, "overworld", .Overworld, null);
+            defer dimension.deinit();
+            try world.dimensions.put("overworld", &dimension);
+
+            var runtime = PluginRuntime.init(allocator);
+            defer runtime.deinit();
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 3, .name = "blocks", .host = undefined, .state = .running };
+            var owned: u32 = 0;
+            const world_handle = try runtime.handles.put(.world, @intFromPtr(&world), 3, &owned);
+            const name = abi.StringView{ .data = "overworld", .length = 9 };
+            const position = Protocol.BlockPosition{ .x = 4, .y = 64, .z = 4 };
+            const network_id: u32 = @bitCast(chest_perm.network_id);
+
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.world_api.set_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, network_id, 0x8000_0000));
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.set_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, network_id, 0));
+            try std.testing.expect(dimension.getBlock(position).getTrait("chest") == null);
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.set_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, network_id, abi.block_flag_apply_traits));
+            try std.testing.expect(dimension.getBlockPtr(position).?.getTrait("chest") != null);
+
+            var state: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.get_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, &state));
+            try std.testing.expectEqual(network_id, state);
+
+            // UPDATE_CLIENTS serializes through a stack stream even when no host
+            // is attached, so this path must stay allocation-free.
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.set_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, network_id, abi.block_flag_update_clients));
+            var serial_buffer: [64]u8 = undefined;
+            var serial_stream = BinaryStream{
+                .payload = &serial_buffer,
+                .written = 0,
+                .offset = 0,
+                .allocator = std.testing.failing_allocator,
+                .owns_buffer = false,
+            };
+            defer serial_stream.deinit();
+            const payload = try private_pluginruntime_serializeBlockUpdate(position, network_id, &serial_stream);
+            try std.testing.expectEqual(@as(usize, 9), payload.len);
+            try std.testing.expectEqualSlices(u8, &.{ 0x15, 0x08, 0x80, 0x01, 0x08, 0xa9, 0x46, 0x03, 0x00 }, payload);
+            var reader = BinaryStream.init(allocator, payload, null);
+            try std.testing.expectEqual(@as(u32, Protocol.Packet.UpdateBlock), try reader.readVarInt());
+            const decoded_position = try Protocol.BlockPosition.read(&reader);
+            try std.testing.expect(decoded_position.eql(position));
+            try std.testing.expectEqual(network_id, try reader.readVarInt());
+            try std.testing.expectEqual(@as(u32, 0b0011), try reader.readVarInt());
+            try std.testing.expectEqual(@as(u32, 0), try reader.readVarInt());
+
+            var resolved_state: u32 = 0;
+            const chest_name = abi.StringView{ .data = "minecraft:chest", .length = "minecraft:chest".len };
+            try std.testing.expectEqual(abi.result_ok, runtime.blocks_api.resolve_name(@ptrCast(&slot), chest_name, &resolved_state));
+            try std.testing.expectEqual(network_id, resolved_state);
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.blocks_api.resolve_name(@ptrCast(&slot), chest_name, null));
+            const unknown_name = abi.StringView{ .data = "phase5:missing", .length = "phase5:missing".len };
+            try std.testing.expectEqual(abi.result_not_found, runtime.blocks_api.resolve_name(@ptrCast(&slot), unknown_name, &resolved_state));
+
+            const set_position = Protocol.BlockPosition{ .x = 6, .y = 64, .z = 4 };
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.set_block(@ptrCast(&slot), world_handle, name, set_position.x, set_position.y, set_position.z, chest_name));
+            try std.testing.expect(dimension.getBlockPtr(set_position).?.getTrait("chest") != null);
+            var set_state: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.get_block_state(@ptrCast(&slot), world_handle, name, set_position.x, set_position.y, set_position.z, &set_state));
+            try std.testing.expectEqual(network_id, set_state);
+            try std.testing.expectEqual(abi.result_not_found, runtime.world_api.set_block(@ptrCast(&slot), world_handle, name, set_position.x, set_position.y, set_position.z, unknown_name));
+            var after_missing_state: u32 = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.get_block_state(@ptrCast(&slot), world_handle, name, set_position.x, set_position.y, set_position.z, &after_missing_state));
+            try std.testing.expectEqual(network_id, after_missing_state);
+            try std.testing.expect(dimension.getBlockPtr(set_position).?.getTrait("chest") != null);
+
+            const box_position = Protocol.BlockPosition{ .x = 5, .y = 64, .z = 4 };
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.set_block(@ptrCast(&slot), world_handle, name, box_position.x, box_position.y, box_position.z, chest_name));
+            var block_snapshot: abi.BlockSnapshot = undefined;
+            try std.testing.expectEqual(abi.result_ok, runtime.blocks_api.get_snapshot(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, &block_snapshot, @sizeOf(abi.BlockSnapshot)));
+            try std.testing.expectEqual(chest_perm.network_id, block_snapshot.network_id);
+            try std.testing.expectEqualStrings("minecraft:chest", block_snapshot.identifier.slice());
+
+            const unloaded = Protocol.BlockPosition{ .x = 100, .y = 64, .z = 100 };
+            try std.testing.expect(dimension.getChunk(unloaded.x >> 4, unloaded.z >> 4) == null);
+            var missing_state: u32 = 0;
+            try std.testing.expectEqual(abi.result_not_found, runtime.world_api.get_block_state(@ptrCast(&slot), world_handle, name, unloaded.x, unloaded.y, unloaded.z, &missing_state));
+            try std.testing.expect(dimension.getChunk(unloaded.x >> 4, unloaded.z >> 4) == null);
+            var missing_snapshot: abi.BlockSnapshot = undefined;
+            try std.testing.expectEqual(abi.result_not_found, runtime.blocks_api.get_snapshot(@ptrCast(&slot), world_handle, name, unloaded.x, unloaded.y, unloaded.z, &missing_snapshot, @sizeOf(abi.BlockSnapshot)));
+            try std.testing.expect(dimension.getChunk(unloaded.x >> 4, unloaded.z >> 4) == null);
+            try std.testing.expectEqual(abi.result_not_found, runtime.world_api.set_block(@ptrCast(&slot), world_handle, name, unloaded.x, unloaded.y, unloaded.z, unknown_name));
+            try std.testing.expect(dimension.getChunk(unloaded.x >> 4, unloaded.z >> 4) == null);
+
+            const BlockProbe = struct {
+                count: usize = 0,
+                state_sum: u64 = 0,
+
+                fn callback(userdata: ?*anyopaque, _: i32, _: i32, _: i32, value: u32) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    probe.count += 1;
+                    probe.state_sum += value;
+                }
+            };
+            var empty_probe = BlockProbe{};
+            const unloaded_box = abi.BlockBox{ .min_x = 100, .min_y = 64, .min_z = 100, .max_x = 101, .max_y = 65, .max_z = 101 };
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.world_api.for_each_in_box(@ptrCast(&slot), world_handle, name, unloaded_box, null, &empty_probe));
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.for_each_in_box(@ptrCast(&slot), world_handle, name, unloaded_box, BlockProbe.callback, &empty_probe));
+            try std.testing.expectEqual(@as(usize, 0), empty_probe.count);
+            try std.testing.expect(dimension.getChunk(unloaded.x >> 4, unloaded.z >> 4) == null);
+
+            var box_probe = BlockProbe{};
+            const loaded_box = abi.BlockBox{ .min_x = 4, .min_y = 64, .min_z = 4, .max_x = 5, .max_y = 64, .max_z = 4 };
+            try std.testing.expectEqual(abi.result_ok, runtime.world_api.for_each_in_box(@ptrCast(&slot), world_handle, name, loaded_box, BlockProbe.callback, &box_probe));
+            try std.testing.expectEqual(@as(usize, 2), box_probe.count);
+            try std.testing.expectEqual(@as(u64, network_id) * 2, box_probe.state_sum);
+
+            const entity_type = EntityType.init("minecraft:phase5_entity", 500, &.{}, &.{});
+            const entity_a = try allocator.create(Entity);
+            entity_a.* = Entity.init(allocator, &entity_type, &dimension);
+            entity_a.position = Protocol.Vector3f.init(8.5, 64, 8.5);
+            defer {
+                entity_a.deinit();
+                allocator.destroy(entity_a);
+            }
+            try dimension.entities.put(entity_a.runtime_id, entity_a);
+            defer _ = dimension.entities.remove(entity_a.runtime_id);
+
+            const entity_b = try allocator.create(Entity);
+            entity_b.* = Entity.init(allocator, &entity_type, &dimension);
+            entity_b.position = Protocol.Vector3f.init(-8.5, 64, -8.5);
+            defer {
+                entity_b.deinit();
+                allocator.destroy(entity_b);
+            }
+            try dimension.entities.put(entity_b.runtime_id, entity_b);
+            defer _ = dimension.entities.remove(entity_b.runtime_id);
+            dimension.noteEntityMutation();
+
+            var entity_count: usize = 0;
+            try std.testing.expectEqual(abi.result_ok, runtime.entities_api.count(@ptrCast(&slot), world_handle, name, &entity_count));
+            try std.testing.expectEqual(@as(usize, 2), entity_count);
+            var entity_snapshot: abi.EntitySnapshot = undefined;
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.entities_api.get_by_index(@ptrCast(&slot), world_handle, name, 0, null, @sizeOf(abi.EntitySnapshot)));
+            var seen_a = false;
+            var seen_b = false;
+            for (0..2) |index| {
+                try std.testing.expectEqual(abi.result_ok, runtime.entities_api.get_by_index(@ptrCast(&slot), world_handle, name, index, &entity_snapshot, @sizeOf(abi.EntitySnapshot)));
+                if (entity_snapshot.runtime_id == entity_a.runtime_id) seen_a = true;
+                if (entity_snapshot.runtime_id == entity_b.runtime_id) seen_b = true;
+            }
+            try std.testing.expect(seen_a and seen_b);
+            try std.testing.expectEqual(abi.result_not_found, runtime.entities_api.get_by_index(@ptrCast(&slot), world_handle, name, 2, &entity_snapshot, @sizeOf(abi.EntitySnapshot)));
+            try std.testing.expectEqual(abi.result_ok, runtime.entities_api.get_by_runtime(@ptrCast(&slot), world_handle, name, entity_b.runtime_id, &entity_snapshot, @sizeOf(abi.EntitySnapshot)));
+            try std.testing.expectEqual(entity_b.runtime_id, entity_snapshot.runtime_id);
+            try std.testing.expectEqualStrings("minecraft:phase5_entity", entity_snapshot.type.slice());
+            try std.testing.expectEqual(abi.result_not_found, runtime.entities_api.get_by_runtime(@ptrCast(&slot), world_handle, name, 123_456_789, &entity_snapshot, @sizeOf(abi.EntitySnapshot)));
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.entities_api.get_by_runtime(@ptrCast(&slot), world_handle, name, entity_b.runtime_id, null, @sizeOf(abi.EntitySnapshot)));
+
+            const EntityProbe = struct {
+                count: usize = 0,
+                runtime_ids: [2]i64 = .{ 0, 0 },
+
+                fn callback(userdata: ?*anyopaque, snapshot: *const abi.EntitySnapshot) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    if (probe.count < probe.runtime_ids.len) probe.runtime_ids[probe.count] = snapshot.runtime_id;
+                    probe.count += 1;
+                }
+            };
+            var entity_probe = EntityProbe{};
+            try std.testing.expectEqual(abi.result_invalid_argument, runtime.entities_api.for_each(@ptrCast(&slot), world_handle, name, null, &entity_probe));
+            try std.testing.expectEqual(abi.result_ok, runtime.entities_api.for_each(@ptrCast(&slot), world_handle, name, EntityProbe.callback, &entity_probe));
+            try std.testing.expectEqual(@as(usize, 2), entity_probe.count);
+            var probe_seen_a = false;
+            var probe_seen_b = false;
+            for (entity_probe.runtime_ids) |runtime_id| {
+                if (runtime_id == entity_a.runtime_id) probe_seen_a = true;
+                if (runtime_id == entity_b.runtime_id) probe_seen_b = true;
+            }
+            try std.testing.expect(probe_seen_a and probe_seen_b);
+        }
+
+        pub fn case_038() !void {
+            const allocator = std.testing.allocator;
+            const CommandRegistry = @import("../command/registry.zig").CommandRegistry;
+
+            var registry = CommandRegistry.init(allocator);
+            defer registry.deinit();
+            var runtime = PluginRuntime.init(allocator);
+            defer runtime.deinit();
+            runtime.command_registry = &registry;
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 9, .name = "command-exec", .host = undefined, .state = .running };
+
+            const Probe = struct {
+                called: u32 = 0,
+                argc: u32 = 0,
+                raw_line: []const u8 = "",
+                first: []const u8 = "",
+                second: []const u8 = "",
+                player: u64 = 1,
+                world: u64 = 1,
+
+                fn run(call: *const abi.CommandCall) callconv(.c) i32 {
+                    const probe: *@This() = @ptrCast(@alignCast(call.userdata.?));
+                    probe.called += 1;
+                    probe.argc = call.argc;
+                    probe.raw_line = call.raw_line.slice();
+                    probe.player = call.player;
+                    probe.world = call.world;
+                    if (call.argc > 0) probe.first = call.argv.?[0].slice();
+                    if (call.argc > 1) probe.second = call.argv.?[1].slice();
+                    return abi.result_ok;
+                }
+            };
+            var probe = Probe{};
+            const name = "phase5-exec";
+            var desc = abi.CommandDesc{
+                .struct_size = @sizeOf(abi.CommandDesc),
+                .flags = 0,
+                .name = .{ .data = name.ptr, .length = name.len },
+                .description = .{},
+                .permission = .{},
+                .aliases = null,
+                .alias_count = 0,
+                .reserved = 0,
+                .handler = Probe.run,
+                .userdata = &probe,
+            };
+            var handle: u64 = 0;
+            try std.testing.expectEqual(abi.result_ok, PluginRuntime.commandRegister(@ptrCast(&slot), &desc, &handle));
+
+            const result = registry.dispatch(null, undefined, undefined, "/phase5-exec alpha beta", "console", .{0} ** 16, "");
+            try std.testing.expect(result.success);
+            try std.testing.expectEqual(@as(u32, 1), probe.called);
+            try std.testing.expectEqual(@as(u32, 3), probe.argc);
+            try std.testing.expectEqualStrings("phase5-exec alpha beta", probe.raw_line);
+            try std.testing.expectEqualStrings("phase5-exec", probe.first);
+            try std.testing.expectEqualStrings("alpha", probe.second);
+            try std.testing.expectEqual(@as(u64, 0), probe.player);
+            try std.testing.expectEqual(@as(u64, 0), probe.world);
+
+            runtime.unregisterCommandsFor(9);
+            try std.testing.expect(registry.findCommand("phase5-exec") == null);
+            const missing = registry.dispatch(null, undefined, undefined, "/phase5-exec alpha", "console", .{0} ** 16, "");
+            try std.testing.expect(!missing.success);
+            try std.testing.expectEqual(@as(u32, 1), probe.called);
         }
     };
 }

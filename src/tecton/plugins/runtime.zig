@@ -2,9 +2,16 @@ const std = @import("std");
 const logger = @import("../core/log.zig");
 const builtin = @import("builtin");
 
+const BinaryStream = @import("BinaryStream").BinaryStream;
+const Protocol = @import("protocol");
 const Tecton = @import("../tecton.zig").Tecton;
 const Events = @import("../events/root.zig");
 const World = @import("../world/world.zig").World;
+const Command = @import("../command/command.zig").Command;
+const CommandContext = @import("../command/context.zig").CommandContext;
+const CommandRegistry = @import("../command/registry.zig").CommandRegistry;
+const applyTraitsForBlock = @import("../world/block/traits/trait.zig").applyTraitsForBlock;
+const block_broadcast = @import("../world/dimension/broadcast.zig");
 const abi = @import("abi.zig");
 const native_loader = @import("dynamic_loader.zig");
 const NativePlugin = native_loader.NativePlugin;
@@ -16,6 +23,7 @@ const Entity = @import("../entity/entity.zig").Entity;
 const EntityType = @import("../entity/entity_type.zig").EntityType;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const entities_mod = @import("../world/dimension/entities.zig");
+const BlockType = @import("../world/block/block_type.zig").BlockType;
 const BlockPermutation = @import("../world/block/block_permutation.zig").BlockPermutation;
 const ItemType = @import("../items/item_type.zig").ItemType;
 const EntityTypeRegistry = @import("../entity/entity_type_registry.zig").EntityTypeRegistry;
@@ -100,6 +108,15 @@ pub const PluginRuntime = struct {
     timer_wheel: ?*TimerWheel = null,
     timer_tick: u64 = 0,
     timer_task_registered: bool = false,
+    command_dirty: bool = false,
+    command_broadcasts: u32 = 0,
+    command_registry: ?*CommandRegistry = null,
+    /// Snapshot cache for entities.get_by_index. It mirrors the dimension's hash
+    /// map instead of acting as a stable dense cursor: the first access after
+    /// `entity_serial` changes rebuilds it in O(n) and may allocate.
+    entity_cache: std.ArrayList(*Entity) = .empty,
+    entity_cache_dimension: ?*Dimension = null,
+    entity_cache_serial: u64 = 0,
 
     pub const NATIVE_BRIDGE_OWNER_ID: u16 = 0xC001;
 
@@ -245,44 +262,57 @@ pub const PluginRuntime = struct {
             .get_state = coreGetState,
         };
         runtime.world_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.WorldApi), .major = 1, .minor = 0, .interface_id = abi.interface_world, .reserved = 0, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.WorldApi), .major = 1, .minor = 1, .interface_id = abi.interface_world, .reserved = 0, .features = abi.feature_world },
             .find = worldFind,
             .get_snapshot = worldGetSnapshot,
             .set_block = worldSetBlock,
+            .get_block_state = worldGetBlockState,
+            .set_block_state = worldSetBlockState,
+            .for_each_in_box = worldForEachInBox,
         };
         runtime.players_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.PlayersApi), .major = 1, .minor = 0, .interface_id = abi.interface_players, .reserved = 0, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.PlayersApi), .major = 1, .minor = 1, .interface_id = abi.interface_players, .reserved = 0, .features = abi.feature_players },
             .count = playersCount,
             .get_snapshot = playersGetSnapshot,
+            .get_by_index = playersGetByIndex,
+            .get_by_runtime = playersGetByRuntime,
+            .for_each = playersForEach,
         };
         runtime.entities_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.EntitiesApi), .major = 1, .minor = 0, .interface_id = abi.interface_entities, .reserved = 0, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.EntitiesApi), .major = 1, .minor = 1, .interface_id = abi.interface_entities, .reserved = 0, .features = abi.feature_entities },
             .count = entitiesCount,
             .get_snapshot = entitiesGetSnapshot,
+            .get_by_index = entitiesGetByIndex,
+            .get_by_runtime = entitiesGetByRuntime,
+            .for_each = entitiesForEach,
         };
         runtime.items_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.ItemsApi), .major = 1, .minor = 0, .interface_id = abi.interface_items, .reserved = 0, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.ItemsApi), .major = 1, .minor = 1, .interface_id = abi.interface_items, .reserved = 0, .features = abi.feature_items },
             .count = itemsCount,
             .get_snapshot = itemsGetSnapshot,
+            .get_by_index = itemsGetByIndex,
+            .get_by_network_id = itemsGetByNetworkId,
+            .for_each = itemsForEach,
         };
         runtime.blocks_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.BlocksApi), .major = 1, .minor = 0, .interface_id = abi.interface_blocks, .reserved = 0, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.BlocksApi), .major = 1, .minor = 1, .interface_id = abi.interface_blocks, .reserved = 0, .features = abi.feature_blocks },
             .get_snapshot = blocksGetSnapshot,
+            .resolve_name = blocksResolveName,
         };
         runtime.inventories_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.InventoriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_inventories, .reserved = 0, .features = 0 },
+            .header = .{ .struct_size = @sizeOf(abi.InventoriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_inventories, .reserved = 0, .features = abi.interfaceFeature(abi.interface_inventories) },
             .get_size = inventoryGetSize,
             .get_item = inventoryGetItem,
         };
         runtime.logging_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.LoggingApi), .major = 1, .minor = 0, .interface_id = abi.interface_logging, .reserved = 0, .features = abi.feature_logging },
+            .header = .{ .struct_size = @sizeOf(abi.LoggingApi), .major = 1, .minor = 0, .interface_id = abi.interface_logging, .reserved = 0, .features = abi.interfaceFeature(abi.interface_logging) },
             .log = log,
             .is_enabled = logIsEnabled,
             .set_level = logSetLevel,
             .set_scope = logSetScope,
         };
         runtime.events_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.EventsApi), .major = 1, .minor = 0, .interface_id = abi.interface_events, .reserved = 0, .features = abi.feature_events },
+            .header = .{ .struct_size = @sizeOf(abi.EventsApi), .major = 1, .minor = 0, .interface_id = abi.interface_events, .reserved = 0, .features = abi.interfaceFeature(abi.interface_events) },
             .subscribe = eventSubscribe,
             .unsubscribe = eventUnsubscribe,
             .emit = emitCustom,
@@ -290,25 +320,25 @@ pub const PluginRuntime = struct {
             .schema_of = schemaOf,
         };
         runtime.scheduler_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .reserved = 0, .features = abi.feature_scheduler },
+            .header = .{ .struct_size = @sizeOf(abi.SchedulerApi), .major = 1, .minor = 0, .interface_id = abi.interface_scheduler, .reserved = 0, .features = abi.interfaceFeature(abi.interface_scheduler) },
             .after = schedulerAfter,
             .every = schedulerEvery,
             .cancel = schedulerCancel,
             .cancel_owner = schedulerCancelOwner,
         };
         runtime.network_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.NetworkApi), .major = 1, .minor = 0, .interface_id = abi.interface_network, .reserved = 0, .features = abi.feature_network },
+            .header = .{ .struct_size = @sizeOf(abi.NetworkApi), .major = 1, .minor = 0, .interface_id = abi.interface_network, .reserved = 0, .features = abi.interfaceFeature(abi.interface_network) },
             .send = networkSend,
             .broadcast = networkBroadcast,
         };
         runtime.registries_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.RegistriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_registries, .reserved = 0, .features = abi.feature_registries },
+            .header = .{ .struct_size = @sizeOf(abi.RegistriesApi), .major = 1, .minor = 0, .interface_id = abi.interface_registries, .reserved = 0, .features = abi.interfaceFeature(abi.interface_registries) },
             .block_states = registriesBlockStates,
             .items = registriesItems,
             .entity_types = registriesEntityTypes,
         };
         runtime.commands_api = .{
-            .header = .{ .struct_size = @sizeOf(abi.CommandsApi), .major = 1, .minor = 0, .interface_id = abi.interface_commands, .reserved = 0, .features = abi.feature_commands },
+            .header = .{ .struct_size = @sizeOf(abi.CommandsApi), .major = 1, .minor = 1, .interface_id = abi.interface_commands, .reserved = 0, .features = abi.interfaceFeature(abi.interface_commands) },
             .register_command = commandRegister,
             .unregister = commandUnregister,
             .mark_dirty = commandMarkDirty,
@@ -334,6 +364,7 @@ pub const PluginRuntime = struct {
     pub fn attach(self: *PluginRuntime, tecton: *Tecton, events: *Events.Events) void {
         self.tecton = tecton;
         self.tasks = &tecton.tasks;
+        self.command_registry = &tecton.command_registry;
         self.attachEvents(events);
         self.server_state = 0;
         _ = self.ensureDeferredRing() catch {};
@@ -433,10 +464,12 @@ pub const PluginRuntime = struct {
             self.timer_wheel = null;
         }
         self.pending_unloads.deinit(self.allocator);
+        self.entity_cache.deinit(self.allocator);
         self.plugins.deinit(self.allocator);
         self.slots.deinit(self.allocator);
         self.handles.deinit();
         self.tasks = null;
+        self.command_registry = null;
         self.events = null;
         self.tecton = null;
     }
@@ -580,6 +613,7 @@ pub const PluginRuntime = struct {
             if (slot.state != .running) continue;
             if (slot.native) |native| native.ready();
         }
+        self.flushCommands();
     }
 
     fn registerLoadingSlot(self: *PluginRuntime, slot: *HostSlot) !void {
@@ -612,6 +646,7 @@ pub const PluginRuntime = struct {
 
     fn teardownSlot(self: *PluginRuntime, slot: *HostSlot, reason: abi.ShutdownReason) void {
         if (slot.native) |native| native.shutdown(reason);
+        self.unregisterCommandsFor(slot.plugin_id);
         self.cancelTasksFor(slot.plugin_id);
         self.cancelTimersFor(slot.plugin_id);
         self.releaseSchemas(slot.plugin_id);
@@ -1225,15 +1260,15 @@ pub const PluginRuntime = struct {
         .{ .id = abi.interface_logging, .major = 1, .minor = 0, .field = "logging_api" },
         .{ .id = abi.interface_events, .major = 1, .minor = 0, .field = "events_api" },
         .{ .id = abi.interface_scheduler, .major = 1, .minor = 0, .field = "scheduler_api" },
-        .{ .id = abi.interface_world, .major = 1, .minor = 0, .field = "world_api" },
-        .{ .id = abi.interface_players, .major = 1, .minor = 0, .field = "players_api" },
-        .{ .id = abi.interface_entities, .major = 1, .minor = 0, .field = "entities_api" },
-        .{ .id = abi.interface_items, .major = 1, .minor = 0, .field = "items_api" },
-        .{ .id = abi.interface_blocks, .major = 1, .minor = 0, .field = "blocks_api" },
+        .{ .id = abi.interface_world, .major = 1, .minor = 1, .field = "world_api" },
+        .{ .id = abi.interface_players, .major = 1, .minor = 1, .field = "players_api" },
+        .{ .id = abi.interface_entities, .major = 1, .minor = 1, .field = "entities_api" },
+        .{ .id = abi.interface_items, .major = 1, .minor = 1, .field = "items_api" },
+        .{ .id = abi.interface_blocks, .major = 1, .minor = 1, .field = "blocks_api" },
         .{ .id = abi.interface_inventories, .major = 1, .minor = 0, .field = "inventories_api" },
         .{ .id = abi.interface_registries, .major = 1, .minor = 0, .field = "registries_api" },
         .{ .id = abi.interface_network, .major = 1, .minor = 0, .field = "network_api" },
-        .{ .id = abi.interface_commands, .major = 1, .minor = 0, .field = "commands_api" },
+        .{ .id = abi.interface_commands, .major = 1, .minor = 1, .field = "commands_api" },
     };
 
     fn getInterface(context: ?*anyopaque, interface_id: u32, major: u16, minor: u16, interface: ?*?abi.InterfacePtr) callconv(.c) i32 {
@@ -1773,18 +1808,23 @@ pub const PluginRuntime = struct {
     }
 
     pub fn endTick(self: *PluginRuntime) void {
-        if (self.deferred_len == 0 or self.depth > 0) return;
-        const ring = self.deferred_ring orelse return;
-        const pending = self.deferred_len;
-        var processed: usize = 0;
-        while (processed < pending) : (processed += 1) {
-            var entry = ring[self.deferred_head];
-            self.deferred_head = (self.deferred_head + 1) % deferred_capacity;
-            self.deferred_len -= 1;
-            const payload: ?*const anyopaque = if (entry.size == 0) null else @ptrCast(&entry.payload);
-            if (self.schemaLive(entry.schema)) self.dispatchCustom(entry.schema, payload, entry.size, entry.flags);
-            if (builtin.mode == .Debug) @memset(entry.payload[0..entry.size], 0xDD);
+        if (self.deferred_len != 0 and self.depth == 0) {
+            if (self.deferred_ring) |ring| {
+                const pending = self.deferred_len;
+                var processed: usize = 0;
+                while (processed < pending) : (processed += 1) {
+                    var entry = ring[self.deferred_head];
+                    self.deferred_head = (self.deferred_head + 1) % deferred_capacity;
+                    self.deferred_len -= 1;
+                    const payload: ?*const anyopaque = if (entry.size == 0) null else @ptrCast(&entry.payload);
+                    if (self.schemaLive(entry.schema)) self.dispatchCustom(entry.schema, payload, entry.size, entry.flags);
+                    if (builtin.mode == .Debug) @memset(entry.payload[0..entry.size], 0xDD);
+                }
+            }
         }
+        // Deferred callbacks may register commands; flushing here keeps them in
+        // the same tick instead of waiting for the next one.
+        self.flushCommands();
     }
 
     fn registriesBlockStates(context: ?*anyopaque, out_view: ?*abi.RegistryView) callconv(.c) i32 {
@@ -1900,15 +1940,178 @@ pub const PluginRuntime = struct {
         return abi.result_ok;
     }
 
-    fn commandRegister(_: ?*anyopaque, _: ?*const abi.CommandDesc, _: ?*u64) callconv(.c) i32 {
-        return abi.result_unsupported;
+    const OwnedCommandStrings = struct {
+        allocator: std.mem.Allocator,
+        name: []u8,
+        description: []u8,
+        permission: []u8,
+        aliases: [][]const u8,
+        alias_len: usize,
+
+        fn deinit(self: *OwnedCommandStrings) void {
+            self.allocator.free(self.name);
+            self.allocator.free(self.description);
+            self.allocator.free(self.permission);
+            for (self.aliases[0..self.alias_len]) |alias| self.allocator.free(alias);
+            self.allocator.free(self.aliases);
+        }
+    };
+
+    fn stringView(value: []const u8) abi.StringView {
+        return .{ .data = if (value.len == 0) null else value.ptr, .length = value.len };
     }
 
-    fn commandUnregister(_: ?*anyopaque, _: u64) callconv(.c) i32 {
-        return abi.result_unsupported;
+    fn validCommandName(name: []const u8) bool {
+        if (name.len == 0 or name.len > 31) return false;
+        for (name) |c| {
+            if (c >= 'A' and c <= 'Z') return false;
+            if (c <= 0x20 or c >= 0x7f) return false;
+            if (c == '/') return false;
+        }
+        return true;
     }
 
-    fn commandMarkDirty(_: ?*anyopaque) callconv(.c) void {}
+    fn commandTrampoline(raw: *anyopaque) void {
+        const ctx: *CommandContext = @ptrCast(@alignCast(raw));
+        const cmd = ctx.command orelse return;
+        const handler: abi.CommandHandlerFn = @ptrCast(cmd.plugin_handler orelse return);
+        const self: *PluginRuntime = @ptrCast(@alignCast(cmd.plugin_runtime orelse return));
+        var argc: usize = 1;
+        var count_tokens = std.mem.tokenizeAny(u8, ctx.args, " \t");
+        while (count_tokens.next()) |_| argc += 1;
+        const argv = ctx.allocator.alloc(abi.StringView, argc) catch {
+            ctx.sendOutput(false, "Command execution failed");
+            return;
+        };
+        defer ctx.allocator.free(argv);
+        argv[0] = stringView(cmd.name);
+        var index: usize = 1;
+        var tokens = std.mem.tokenizeAny(u8, ctx.args, " \t");
+        while (tokens.next()) |token| : (index += 1) argv[index] = stringView(token);
+        const player_handle = if (ctx.player) |player| self.handles.handleFor(.player, @intFromPtr(player)) orelse 0 else 0;
+        const world_handle = if (ctx.player) |player| blk: {
+            const dimension = player.entity.dimension orelse break :blk 0;
+            break :blk self.handles.handleFor(.world, @intFromPtr(dimension.world)) orelse 0;
+        } else 0;
+        const call = abi.CommandCall{
+            .struct_size = @sizeOf(abi.CommandCall),
+            .argc = @intCast(argv.len),
+            .argv = argv.ptr,
+            .raw_line = stringView(ctx.raw_line),
+            .player = player_handle,
+            .world = world_handle,
+            .userdata = cmd.userdata,
+        };
+        if (handler(&call) != abi.result_ok) ctx.sendOutput(false, "Command execution failed");
+    }
+
+    pub fn commandRegister(context: ?*anyopaque, desc: ?*const abi.CommandDesc, out_command: ?*u64) callconv(.c) i32 {
+        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const value = desc orelse return abi.result_invalid_argument;
+        const output = out_command orelse return abi.result_invalid_argument;
+        if (value.struct_size < @sizeOf(abi.CommandDesc) or value.flags != 0) return abi.result_invalid_argument;
+        const handler = value.handler orelse return abi.result_invalid_argument;
+        if (!validCommandName(value.name.slice())) return abi.result_invalid_argument;
+        if (value.alias_count > 0 and value.aliases == null) return abi.result_invalid_argument;
+        const self = slot.runtime;
+        const registry = self.command_registry orelse return abi.result_not_found;
+        const allocator = self.allocator;
+        var owned = OwnedCommandStrings{
+            .allocator = allocator,
+            .name = allocator.dupe(u8, value.name.slice()) catch return abi.result_out_of_memory,
+            .description = undefined,
+            .permission = undefined,
+            .aliases = undefined,
+            .alias_len = 0,
+        };
+        owned.description = allocator.dupe(u8, value.description.slice()) catch {
+            allocator.free(owned.name);
+            return abi.result_out_of_memory;
+        };
+        owned.permission = allocator.dupe(u8, value.permission.slice()) catch {
+            allocator.free(owned.name);
+            allocator.free(owned.description);
+            return abi.result_out_of_memory;
+        };
+        owned.aliases = allocator.alloc([]const u8, value.alias_count) catch {
+            allocator.free(owned.name);
+            allocator.free(owned.description);
+            allocator.free(owned.permission);
+            return abi.result_out_of_memory;
+        };
+        for (0..value.alias_count) |alias_index| {
+            const alias = value.aliases.?[alias_index].slice();
+            if (!validCommandName(alias)) {
+                owned.deinit();
+                return abi.result_invalid_argument;
+            }
+            const copy = allocator.dupe(u8, alias) catch {
+                owned.deinit();
+                return abi.result_out_of_memory;
+            };
+            owned.aliases[alias_index] = copy;
+            owned.alias_len = alias_index + 1;
+        }
+        const cmd = Command.init(allocator, owned.name, owned.description, owned.permission, owned.aliases, commandTrampoline) catch {
+            owned.deinit();
+            return abi.result_out_of_memory;
+        };
+        cmd.owned_strings = true;
+        cmd.owner_plugin_id = slot.plugin_id;
+        cmd.plugin_handler = @ptrCast(handler);
+        cmd.plugin_runtime = @ptrCast(self);
+        cmd.userdata = value.userdata;
+        registry.registerOwnedCommand(cmd) catch |err| {
+            cmd.deinit();
+            return switch (err) {
+                error.Conflict => abi.result_conflict,
+                else => abi.result_out_of_memory,
+            };
+        };
+        const handle = self.handles.put(.command, @intFromPtr(cmd), slot.plugin_id, &slot.owns_handles) catch {
+            registry.unregisterCommand(cmd);
+            return abi.result_out_of_memory;
+        };
+        registry.markDirty();
+        self.command_dirty = true;
+        output.* = handle;
+        return abi.result_ok;
+    }
+
+    fn commandUnregister(context: ?*anyopaque, command: u64) callconv(.c) i32 {
+        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const self = slot.runtime;
+        const marker = self.handles.get(.command, command) orelse return abi.result_invalid_handle;
+        if (self.handles.ownerOf(marker) != slot.plugin_id) return abi.result_invalid_handle;
+        const registry = self.command_registry orelse return abi.result_not_found;
+        _ = self.handles.remove(.command, command);
+        registry.unregisterCommand(@ptrFromInt(marker));
+        registry.markDirty();
+        self.command_dirty = true;
+        return abi.result_ok;
+    }
+
+    fn commandMarkDirty(context: ?*anyopaque) callconv(.c) void {
+        const slot = slotFrom(context) orelse return;
+        const registry = slot.runtime.command_registry orelse return;
+        registry.markDirty();
+        slot.runtime.command_dirty = true;
+    }
+
+    pub fn unregisterCommandsFor(self: *PluginRuntime, plugin_id: u32) void {
+        const registry = self.command_registry orelse return;
+        if (registry.removeOwned(plugin_id) == 0) return;
+        registry.markDirty();
+        self.command_dirty = true;
+    }
+
+    pub fn flushCommands(self: *PluginRuntime) void {
+        if (!self.command_dirty) return;
+        self.command_dirty = false;
+        if (self.command_registry) |registry| _ = registry.consumeDirty();
+        if (self.tecton) |tecton| tecton.broadcastAvailableCommands();
+        self.command_broadcasts +%= 1;
+    }
 
     pub fn timerLiveCount(self: *const PluginRuntime) u32 {
         const wheel = self.timer_wheel orelse return 0;
@@ -1920,28 +2123,59 @@ pub const PluginRuntime = struct {
     }
 
     fn itemsCount(_: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
-        count_output.* = ItemType.getAll().count();
+        count_output.* = ItemType.count();
         return abi.result_ok;
     }
 
-    fn itemsGetSnapshot(context: ?*anyopaque, index: usize, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
-        const self = slot.runtime;
+    fn fillItemSnapshot(item: *const ItemType, handle: u64, output: *abi.ItemSnapshot) void {
+        output.* = .{
+            .header = .{ .struct_size = @sizeOf(abi.ItemSnapshot), .version = 1, .reserved = 0 },
+            .handle = handle,
+            .network_id = item.network_id,
+            .max_stack_size = item.max_stack_size,
+            .stackable = if (item.stackable) 1 else 0,
+            .reserved = .{0} ** 5,
+            .identifier = stringView(item.identifier),
+        };
+    }
+
+    fn itemsGetSnapshot(context: ?*anyopaque, handle: u64, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
-        var iterator = ItemType.getAll().valueIterator();
-        var current: usize = 0;
-        while (iterator.next()) |item_ptr| {
-            if (current != index) {
-                current += 1;
-                continue;
-            }
-            const item = item_ptr.*;
-            const handle = self.handles.put(.item, @intFromPtr(item), slot.plugin_id, &slot.owns_handles) catch return abi.result_out_of_memory;
-            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.ItemSnapshot), .version = 1, .reserved = 0 }, .handle = handle, .network_id = item.network_id, .max_stack_size = item.max_stack_size, .stackable = if (item.stackable) 1 else 0, .reserved = .{0} ** 5, .identifier = .{ .data = item.identifier.ptr, .length = item.identifier.len } };
-            return abi.result_ok;
+        const pointer = self.handles.get(.item, handle) orelse return abi.result_invalid_handle;
+        const item: *ItemType = @ptrFromInt(pointer);
+        fillItemSnapshot(item, handle, output);
+        return abi.result_ok;
+    }
+
+    fn itemsGetByIndex(context: ?*anyopaque, index: usize, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
+        const item = ItemType.at(index) orelse return abi.result_not_found;
+        fillItemSnapshot(item, self.handles.handleFor(.item, @intFromPtr(item)) orelse 0, output);
+        return abi.result_ok;
+    }
+
+    fn itemsGetByNetworkId(context: ?*anyopaque, network_id: i32, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
+        const item = ItemType.getByNetworkId(network_id) orelse return abi.result_not_found;
+        fillItemSnapshot(item, self.handles.handleFor(.item, @intFromPtr(item)) orelse 0, output);
+        return abi.result_ok;
+    }
+
+    fn itemsForEach(context: ?*anyopaque, callback: ?abi.ItemCallbackFn, callback_userdata: ?*anyopaque) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const cb = callback orelse return abi.result_invalid_argument;
+        for (ItemType.denseItems()) |item| {
+            var snapshot: abi.ItemSnapshot = undefined;
+            fillItemSnapshot(item, self.handles.handleFor(.item, @intFromPtr(item)) orelse 0, &snapshot);
+            cb(callback_userdata, &snapshot);
         }
-        return abi.result_not_found;
+        return abi.result_ok;
     }
 
     fn blocksGetSnapshot(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, x: i32, y: i32, z: i32, snapshot: ?*abi.BlockSnapshot, snapshot_size: usize) callconv(.c) i32 {
@@ -1950,7 +2184,7 @@ pub const PluginRuntime = struct {
         if (snapshot_size < @sizeOf(abi.BlockSnapshot)) return abi.result_invalid_argument;
         const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
         const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
-        const permutation = dimension.getPermutation(.{ .x = x, .y = y, .z = z }, 0) catch return abi.result_not_found;
+        const permutation = readBlockPermutation(dimension, x, y, z) orelse return abi.result_not_found;
         output.* = .{ .header = .{ .struct_size = @sizeOf(abi.BlockSnapshot), .version = 1, .reserved = 0 }, .world = world_handle, .dimension = .{ .data = dimension.identifier.ptr, .length = dimension.identifier.len }, .x = x, .y = y, .z = z, .network_id = permutation.network_id, .identifier = .{ .data = permutation.identifier.ptr, .length = permutation.identifier.len } };
         return abi.result_ok;
     }
@@ -2008,19 +2242,67 @@ pub const PluginRuntime = struct {
         return abi.result_ok;
     }
 
-    fn playersGetSnapshot(context: ?*anyopaque, index: usize, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
-        const self = slot.runtime;
+    fn fillPlayerSnapshot(self: *PluginRuntime, player: *Player, handle: u64, output: *abi.PlayerSnapshot) void {
+        const dimension = player.entity.dimension;
+        output.* = .{
+            .header = .{ .struct_size = @sizeOf(abi.PlayerSnapshot), .version = 1, .reserved = 0 },
+            .handle = handle,
+            .runtime_id = player.entity.runtime_id,
+            .name = stringView(player.username),
+            .uuid = stringView(player.uuid[0..]),
+            .world = if (dimension) |value| self.handles.handleFor(.world, @intFromPtr(value.world)) orelse 0 else 0,
+            .dimension = if (dimension) |value| stringView(value.identifier) else .{},
+            .x = player.entity.position.x,
+            .y = player.entity.position.y,
+            .z = player.entity.position.z,
+            .yaw = player.entity.rotation.y,
+            .pitch = player.entity.rotation.x,
+            .gamemode = @intCast(@intFromEnum(player.gamemode)),
+            .spawned = if (player.spawned) 1 else 0,
+        };
+    }
+
+    fn playersGetSnapshot(context: ?*anyopaque, handle: u64, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) return abi.result_invalid_argument;
+        const pointer = self.handles.get(.player, handle) orelse return abi.result_invalid_handle;
+        const player: *Player = @ptrFromInt(pointer);
+        self.fillPlayerSnapshot(player, handle, output);
+        return abi.result_ok;
+    }
+
+    fn playersGetByIndex(context: ?*anyopaque, index: usize, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) return abi.result_invalid_argument;
         const tecton = self.tecton orelse return abi.result_not_found;
         const players = tecton.getPlayerSnapshots();
         if (index >= players.len) return abi.result_not_found;
         const player = players[index];
-        const world_handle = if (player.entity.dimension) |dimension| self.handles.put(.world, @intFromPtr(dimension.world), slot.plugin_id, &slot.owns_handles) catch return abi.result_out_of_memory else 0;
-        const dimension_name = if (player.entity.dimension) |dimension| dimension.identifier else "";
-        const handle = self.handles.put(.player, @intFromPtr(player), slot.plugin_id, &slot.owns_handles) catch return abi.result_out_of_memory;
-        output.* = .{ .header = .{ .struct_size = @sizeOf(abi.PlayerSnapshot), .version = 1, .reserved = 0 }, .handle = handle, .runtime_id = player.entity.runtime_id, .name = .{ .data = player.username.ptr, .length = player.username.len }, .uuid = .{ .data = player.uuid.ptr, .length = player.uuid.len }, .world = world_handle, .dimension = .{ .data = dimension_name.ptr, .length = dimension_name.len }, .x = player.entity.position.x, .y = player.entity.position.y, .z = player.entity.position.z };
+        self.fillPlayerSnapshot(player, self.handles.handleFor(.player, @intFromPtr(player)) orelse 0, output);
+        return abi.result_ok;
+    }
+
+    fn playersGetByRuntime(context: ?*anyopaque, runtime_id: i64, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) return abi.result_invalid_argument;
+        const tecton = self.tecton orelse return abi.result_not_found;
+        const player = tecton.findPlayerByRuntimeId(runtime_id) orelse return abi.result_not_found;
+        self.fillPlayerSnapshot(player, self.handles.handleFor(.player, @intFromPtr(player)) orelse 0, output);
+        return abi.result_ok;
+    }
+
+    fn playersForEach(context: ?*anyopaque, callback: ?abi.PlayerCallbackFn, callback_userdata: ?*anyopaque) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const cb = callback orelse return abi.result_invalid_argument;
+        const tecton = self.tecton orelse return abi.result_not_found;
+        for (tecton.getPlayerSnapshots()) |player| {
+            var snapshot: abi.PlayerSnapshot = undefined;
+            self.fillPlayerSnapshot(player, self.handles.handleFor(.player, @intFromPtr(player)) orelse 0, &snapshot);
+            cb(callback_userdata, &snapshot);
+        }
         return abi.result_ok;
     }
 
@@ -2032,26 +2314,77 @@ pub const PluginRuntime = struct {
         return abi.result_ok;
     }
 
-    fn entitiesGetSnapshot(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, index: usize, snapshot: ?*abi.EntitySnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
-        const self = slot.runtime;
+    fn fillEntitySnapshot(self: *PluginRuntime, entity: *Entity, handle: u64, output: *abi.EntitySnapshot) void {
+        const dimension = entity.dimension;
+        output.* = .{
+            .header = .{ .struct_size = @sizeOf(abi.EntitySnapshot), .version = 1, .reserved = 0 },
+            .handle = handle,
+            .runtime_id = entity.runtime_id,
+            .type = stringView(entity.entity_type.identifier),
+            .world = if (dimension) |value| self.handles.handleFor(.world, @intFromPtr(value.world)) orelse 0 else 0,
+            .dimension = if (dimension) |value| stringView(value.identifier) else .{},
+            .x = entity.position.x,
+            .y = entity.position.y,
+            .z = entity.position.z,
+        };
+    }
+
+    fn entitiesGetSnapshot(context: ?*anyopaque, handle: u64, snapshot: ?*abi.EntitySnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.EntitySnapshot)) return abi.result_invalid_argument;
+        const pointer = self.handles.get(.entity, handle) orelse return abi.result_invalid_handle;
+        const entity: *Entity = @ptrFromInt(pointer);
+        self.fillEntitySnapshot(entity, handle, output);
+        return abi.result_ok;
+    }
+
+    fn entityAt(self: *PluginRuntime, dimension: *Dimension, index: usize) ?*Entity {
+        if (self.entity_cache_dimension != dimension or self.entity_cache_serial != dimension.entity_serial) {
+            self.entity_cache.clearRetainingCapacity();
+            var iterator = dimension.entities.valueIterator();
+            while (iterator.next()) |entity| self.entity_cache.append(self.allocator, entity.*) catch return null;
+            self.entity_cache_dimension = dimension;
+            self.entity_cache_serial = dimension.entity_serial;
+        }
+        if (index >= self.entity_cache.items.len) return null;
+        return self.entity_cache.items[index];
+    }
+
+    fn entitiesGetByIndex(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, index: usize, snapshot: ?*abi.EntitySnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const output = snapshot orelse return abi.result_invalid_argument;
         if (snapshot_size < @sizeOf(abi.EntitySnapshot)) return abi.result_invalid_argument;
         const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
         const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
+        const entity = self.entityAt(dimension, index) orelse return abi.result_not_found;
+        self.fillEntitySnapshot(entity, self.handles.handleFor(.entity, @intFromPtr(entity)) orelse 0, output);
+        return abi.result_ok;
+    }
+
+    fn entitiesGetByRuntime(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, runtime_id: i64, snapshot: ?*abi.EntitySnapshot, snapshot_size: usize) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = snapshot orelse return abi.result_invalid_argument;
+        if (snapshot_size < @sizeOf(abi.EntitySnapshot)) return abi.result_invalid_argument;
+        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
+        const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
+        const entity = dimension.getEntity(runtime_id) orelse return abi.result_not_found;
+        self.fillEntitySnapshot(entity, self.handles.handleFor(.entity, @intFromPtr(entity)) orelse 0, output);
+        return abi.result_ok;
+    }
+
+    fn entitiesForEach(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, callback: ?abi.EntityCallbackFn, callback_userdata: ?*anyopaque) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const cb = callback orelse return abi.result_invalid_argument;
+        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
+        const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
         var iterator = dimension.entities.valueIterator();
-        var current: usize = 0;
-        while (iterator.next()) |entity_ptr| {
-            if (current != index) {
-                current += 1;
-                continue;
-            }
-            const entity = entity_ptr.*;
-            const handle = self.handles.put(.entity, @intFromPtr(entity), slot.plugin_id, &slot.owns_handles) catch return abi.result_out_of_memory;
-            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.EntitySnapshot), .version = 1, .reserved = 0 }, .handle = handle, .runtime_id = entity.runtime_id, .type = .{ .data = entity.entity_type.identifier.ptr, .length = entity.entity_type.identifier.len }, .world = world_handle, .dimension = .{ .data = dimension.identifier.ptr, .length = dimension.identifier.len }, .x = entity.position.x, .y = entity.position.y, .z = entity.position.z };
-            return abi.result_ok;
+        while (iterator.next()) |entity| {
+            var snapshot: abi.EntitySnapshot = undefined;
+            self.fillEntitySnapshot(entity.*, self.handles.handleFor(.entity, @intFromPtr(entity.*)) orelse 0, &snapshot);
+            cb(callback_userdata, &snapshot);
         }
-        return abi.result_not_found;
+        return abi.result_ok;
     }
 
     fn worldFind(context: ?*anyopaque, name: abi.StringView, handle: *u64) callconv(.c) i32 {
@@ -2066,9 +2399,92 @@ pub const PluginRuntime = struct {
     fn worldSetBlock(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, x: i32, y: i32, z: i32, block: abi.StringView) callconv(.c) i32 {
         const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
         const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
+        const permutation = resolveBlockPermutation(self.allocator, block.slice()) orelse return abi.result_not_found;
+        const state: u32 = @bitCast(permutation.network_id);
+        return self.setBlockState(world, dimension, x, y, z, state, abi.block_flag_apply_traits | abi.block_flag_update_clients);
+    }
+
+    fn worldGetBlockState(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, x: i32, y: i32, z: i32, state: ?*u32) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = state orelse return abi.result_invalid_argument;
+        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
         const dimension_value = world.getDimension(dimension.slice()) orelse return abi.result_not_found;
-        const permutation = @import("../world/block/block_permutation.zig").BlockPermutation.resolve(self.allocator, block.slice(), null) catch return abi.result_not_found;
-        dimension_value.setPermutation(.{ .x = x, .y = y, .z = z }, permutation, 0) catch return abi.result_not_found;
+        const permutation = readBlockPermutation(dimension_value, x, y, z) orelse return abi.result_not_found;
+        output.* = @bitCast(permutation.network_id);
+        return abi.result_ok;
+    }
+
+    fn setBlockState(self: *PluginRuntime, world: *World, dimension: abi.StringView, x: i32, y: i32, z: i32, state: u32, flags: u32) i32 {
+        const known = abi.block_flag_apply_traits | abi.block_flag_update_clients | abi.block_flag_silent;
+        if (flags & ~known != 0) return abi.result_invalid_argument;
+        const dimension_value = world.getDimension(dimension.slice()) orelse return abi.result_not_found;
+        const network_id: i32 = @bitCast(state);
+        const permutation = BlockPermutation.getByNetworkId(network_id) orelse return abi.result_not_found;
+        const position = Protocol.BlockPosition{ .x = x, .y = y, .z = z };
+        // Write path: unlike the read lookups, set_block_state is allowed to
+        // materialize the target chunk before storing the new permutation on
+        // the first write.
+        dimension_value.setPermutation(position, permutation, 0) catch return abi.result_not_found;
+        if (flags & abi.block_flag_apply_traits != 0) {
+            applyTraitsForBlock(self.allocator, dimension_value, position) catch return abi.result_not_found;
+        }
+        if (flags & abi.block_flag_update_clients != 0 and flags & abi.block_flag_silent == 0) {
+            var buffer: [64]u8 = undefined;
+            var stream = BinaryStream{
+                .payload = &buffer,
+                .written = 0,
+                .offset = 0,
+                .allocator = self.allocator,
+                .owns_buffer = false,
+            };
+            defer stream.deinit();
+            const serialized = serializeBlockUpdate(position, state, &stream) catch return abi.result_out_of_memory;
+            // Tests run without a network; production always has a Tecton here.
+            if (self.tecton != null) block_broadcast.broadcastBlockUpdateToViewers(dimension_value, position, serialized);
+        }
+        return abi.result_ok;
+    }
+
+    fn worldSetBlockState(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, x: i32, y: i32, z: i32, state: u32, flags: u32) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
+        return self.setBlockState(world, dimension, x, y, z, state, flags);
+    }
+
+    fn worldForEachInBox(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, box: abi.BlockBox, callback: ?abi.BlockCallbackFn, callback_userdata: ?*anyopaque) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const cb = callback orelse return abi.result_invalid_argument;
+        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
+        const dimension_value = world.getDimension(dimension.slice()) orelse return abi.result_not_found;
+        const min_x = @min(box.min_x, box.max_x);
+        const max_x = @max(box.min_x, box.max_x);
+        const min_y = @min(box.min_y, box.max_y);
+        const max_y = @max(box.min_y, box.max_y);
+        const min_z = @min(box.min_z, box.max_z);
+        const max_z = @max(box.min_z, box.max_z);
+        var y: i64 = min_y;
+        while (y <= max_y) : (y += 1) {
+            var z: i64 = min_z;
+            while (z <= max_z) : (z += 1) {
+                var x: i64 = min_x;
+                while (x <= max_x) : (x += 1) {
+                    const permutation = readBlockPermutation(dimension_value, @intCast(x), @intCast(y), @intCast(z)) orelse continue;
+                    cb(callback_userdata, @intCast(x), @intCast(y), @intCast(z), @bitCast(permutation.network_id));
+                }
+            }
+        }
+        return abi.result_ok;
+    }
+
+    fn blocksResolveName(context: ?*anyopaque, name: abi.StringView, state: ?*u32) callconv(.c) i32 {
+        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
+        const output = state orelse return abi.result_invalid_argument;
+        const identifier = name.slice();
+        // BlockPermutation.resolve intentionally falls back to air for unknown
+        // names. This lookup reports the miss instead of returning a state the
+        // caller did not ask for.
+        const permutation = resolveBlockPermutation(self.allocator, identifier) orelse return abi.result_not_found;
+        output.* = @bitCast(permutation.network_id);
         return abi.result_ok;
     }
 
@@ -2112,6 +2528,21 @@ pub const PluginRuntime = struct {
     }
 };
 
+fn readBlockPermutation(dimension: *Dimension, x: i32, y: i32, z: i32) ?*BlockPermutation {
+    const chunk = dimension.getChunk(x >> 4, z >> 4) orelse return null;
+    return chunk.getPermutationReadOnly(x, y, z, 0) catch null;
+}
+
+fn resolveBlockPermutation(allocator: std.mem.Allocator, identifier: []const u8) ?*BlockPermutation {
+    if (BlockType.get(identifier) == null) return null;
+    return BlockPermutation.resolve(allocator, identifier, null) catch null;
+}
+
+fn serializeBlockUpdate(position: Protocol.BlockPosition, state: u32, stream: *BinaryStream) ![]const u8 {
+    const update = Protocol.UpdateBlockPacket{ .position = position, .network_block_id = state };
+    return update.serialize(stream);
+}
+
 fn slotFrom(context: ?*anyopaque) ?*PluginRuntime.HostSlot {
     const slot: *PluginRuntime.HostSlot = @ptrCast(@alignCast(context orelse return null));
     return slot;
@@ -2137,6 +2568,7 @@ const test_scope = struct {
     pub const private_pluginruntime_sendPriority = test_owner.PluginRuntime.sendPriority;
     pub const private_pluginruntime_dispatch = test_owner.PluginRuntime.dispatch;
     pub const private_pluginruntime_itemHandle = test_owner.PluginRuntime.itemHandle;
+    pub const private_pluginruntime_serializeBlockUpdate = test_owner.serializeBlockUpdate;
 };
 
 test "core and scheduler interfaces are independently discoverable" {
@@ -2702,8 +3134,6 @@ test "removing an entity invalidates the handle taken from the snapshot" {
 
     const entity_type = EntityType.init("minecraft:test", 1, &.{}, &.{});
     var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 1, .state = .running };
-    const world_handle = try runtime.handles.put(.world, @intFromPtr(&world), slot.plugin_id, &slot.owns_handles);
-    const dimension_view = abi.StringView{ .data = dimension.identifier.ptr, .length = dimension.identifier.len };
 
     const first = try allocator.create(Entity);
     first.* = Entity.init(allocator, &entity_type, &dimension);
@@ -2715,8 +3145,9 @@ test "removing an entity invalidates the handle taken from the snapshot" {
         allocator.destroy(first);
     };
 
+    const first_handle = try runtime.handles.put(.entity, @intFromPtr(first), slot.plugin_id, &slot.owns_handles);
     var first_snapshot: abi.EntitySnapshot = undefined;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.entitiesGetSnapshot(@ptrCast(&slot), world_handle, dimension_view, 0, &first_snapshot, @sizeOf(abi.EntitySnapshot)));
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.entitiesGetSnapshot(@ptrCast(&slot), first_handle, &first_snapshot, @sizeOf(abi.EntitySnapshot)));
     try std.testing.expectEqual(@as(?usize, @intFromPtr(first)), runtime.handles.get(.entity, first_snapshot.handle));
 
     try entities_mod.removeEntity(&dimension, first);
@@ -2726,10 +3157,135 @@ test "removing an entity invalidates the handle taken from the snapshot" {
     const second = try allocator.create(Entity);
     second.* = Entity.init(allocator, &entity_type, &dimension);
     try dimension.entities.put(second.runtime_id, second);
+    const second_handle = try runtime.handles.put(.entity, @intFromPtr(second), slot.plugin_id, &slot.owns_handles);
     var second_snapshot: abi.EntitySnapshot = undefined;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.entitiesGetSnapshot(@ptrCast(&slot), world_handle, dimension_view, 0, &second_snapshot, @sizeOf(abi.EntitySnapshot)));
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.entitiesGetSnapshot(@ptrCast(&slot), second_handle, &second_snapshot, @sizeOf(abi.EntitySnapshot)));
 
     dimension.deinit();
     dimension_deinited = true;
     try std.testing.expect(runtime.handles.get(.entity, second_snapshot.handle) == null);
+}
+
+test "every served interface advertises exactly its feature bit" {
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+    var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 1 };
+
+    var served: u64 = 0;
+    var output: ?abi.InterfacePtr = null;
+    for (PluginRuntime.interface_specs) |spec| {
+        try std.testing.expectEqual(abi.result_ok, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, spec.major, spec.minor, &output));
+        const header = output orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(spec.major, header.major);
+        try std.testing.expectEqual(spec.minor, header.minor);
+        try std.testing.expectEqual(abi.interfaceFeature(spec.id), header.features);
+        served |= header.features;
+
+        try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, spec.major + 1, 0, &output));
+        try std.testing.expectEqual(abi.result_version, PluginRuntime.getInterface(@ptrCast(&slot), spec.id, spec.major, spec.minor + 1, &output));
+    }
+    try std.testing.expectEqual(abi.result_unsupported, PluginRuntime.getInterface(@ptrCast(&slot), 0, 1, 0, &output));
+    const behaviors = abi.feature_allocator | abi.feature_custom_events | abi.feature_traits | abi.feature_hot_unload;
+    try std.testing.expectEqual(abi.host_features, served | behaviors);
+}
+
+fn testCommandHandler(_: *const abi.CommandCall) callconv(.c) i32 {
+    return abi.result_ok;
+}
+
+fn registerTestCommand(runtime: *PluginRuntime, slot: *PluginRuntime.HostSlot, name: []const u8, aliases: []const abi.StringView) !u64 {
+    const description = abi.StringView{};
+    const permission = abi.StringView{};
+    var desc = abi.CommandDesc{
+        .struct_size = @sizeOf(abi.CommandDesc),
+        .flags = 0,
+        .name = .{ .data = name.ptr, .length = name.len },
+        .description = description,
+        .permission = permission,
+        .aliases = if (aliases.len == 0) null else aliases.ptr,
+        .alias_count = @intCast(aliases.len),
+        .reserved = 0,
+        .handler = testCommandHandler,
+        .userdata = null,
+    };
+    var handle: u64 = 0;
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.commandRegister(@ptrCast(slot), &desc, &handle));
+    _ = runtime;
+    return handle;
+}
+
+test "fifty command registrations coalesce into one broadcast" {
+    const allocator = std.testing.allocator;
+    var registry = CommandRegistry.init(allocator);
+    defer registry.deinit();
+    var runtime = PluginRuntime.init(allocator);
+    defer runtime.deinit();
+    runtime.command_registry = &registry;
+    var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 7, .state = .running };
+
+    for (0..50) |index| {
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "phase5-{d}", .{index});
+        const handle = try registerTestCommand(&runtime, &slot, name, &.{});
+        try std.testing.expect(handle != 0);
+    }
+    try std.testing.expectEqual(@as(usize, 50), registry.commands.count());
+    try std.testing.expect(runtime.command_dirty);
+
+    runtime.flushCommands();
+    try std.testing.expectEqual(@as(u32, 1), runtime.command_broadcasts);
+    try std.testing.expect(!runtime.command_dirty);
+    runtime.flushCommands();
+    try std.testing.expectEqual(@as(u32, 1), runtime.command_broadcasts);
+}
+
+test "command collisions and aliases are owner scoped" {
+    const allocator = std.testing.allocator;
+    var registry = CommandRegistry.init(allocator);
+    defer registry.deinit();
+    var runtime = PluginRuntime.init(allocator);
+    defer runtime.deinit();
+    runtime.command_registry = &registry;
+    var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 3, .state = .running };
+    var foreign = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 4, .state = .running };
+
+    const handle = try registerTestCommand(&runtime, &slot, "phase5-owner", &.{});
+    const alias_view = abi.StringView{ .data = "phase5-alias", .length = 12 };
+    _ = try registerTestCommand(&runtime, &slot, "phase5-alias-target", &.{alias_view});
+    var conflict_handle: u64 = 0;
+
+    try std.testing.expectEqual(abi.result_conflict, PluginRuntime.commandRegister(@ptrCast(&slot), &abi.CommandDesc{
+        .struct_size = @sizeOf(abi.CommandDesc),
+        .flags = 0,
+        .name = .{ .data = "phase5-owner", .length = 12 },
+        .handler = testCommandHandler,
+        .description = .{},
+        .permission = .{},
+        .aliases = null,
+        .alias_count = 0,
+        .reserved = 0,
+        .userdata = null,
+    }, &conflict_handle));
+
+    try std.testing.expectEqual(abi.result_invalid_handle, PluginRuntime.commandUnregister(@ptrCast(&foreign), handle));
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.commandUnregister(@ptrCast(&slot), handle));
+    try std.testing.expect(registry.findCommand("phase5-owner") == null);
+    try std.testing.expect(registry.findCommand("phase5-alias") != null);
+
+    runtime.unregisterCommandsFor(3);
+    try std.testing.expect(registry.findCommand("phase5-alias") == null);
+    try std.testing.expect(registry.findCommand("phase5-alias-target") == null);
+    try std.testing.expect(runtime.command_dirty);
+}
+
+test "player entity and item snapshots expose live data" {
+    try @import("runtime_test.zig").Suite(test_scope).case_036();
+}
+
+test "set block applies traits only when requested" {
+    try @import("runtime_test.zig").Suite(test_scope).case_037();
+}
+
+test "plugin commands execute with borrowed argv and disappear on owner unload" {
+    try @import("runtime_test.zig").Suite(test_scope).case_038();
 }

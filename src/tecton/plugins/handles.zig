@@ -8,6 +8,7 @@ pub const Kind = enum(u8) {
     block = 5,
     inventory = 6,
     registration = 7,
+    command = 8,
 };
 
 pub const none: u32 = std.math.maxInt(u32);
@@ -217,6 +218,7 @@ pub const Table = struct {
             5 => .block,
             6 => .inventory,
             7 => .registration,
+            8 => .command,
             else => return null,
         };
         return .{

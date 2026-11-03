@@ -26,21 +26,26 @@ pub const event_phase_commit: u16 = 1;
 pub const event_phase_post: u16 = 2;
 
 pub const feature_events: u64 = 1 << 0;
-pub const feature_world: u64 = 1 << 1;
-pub const feature_logging: u64 = 1 << 2;
-pub const feature_allocator: u64 = 1 << 3;
-pub const feature_interfaces: u64 = 1 << 4;
-pub const feature_core: u64 = 1 << 5;
-pub const feature_scheduler: u64 = 1 << 6;
-pub const feature_players: u64 = 1 << 7;
-pub const feature_entities: u64 = 1 << 8;
-pub const feature_items: u64 = 1 << 9;
-pub const feature_blocks: u64 = 1 << 10;
-pub const feature_inventories: u64 = 1 << 11;
-pub const feature_network: u64 = 1 << 12;
-pub const feature_registries: u64 = 1 << 13;
-pub const feature_commands: u64 = 1 << 14;
-pub const host_features: u64 = feature_events | feature_world | feature_logging | feature_allocator | feature_interfaces | feature_core | feature_scheduler | feature_players | feature_entities | feature_items | feature_blocks | feature_inventories | feature_network | feature_registries | feature_commands;
+pub const feature_logging: u64 = 1 << 1;
+pub const feature_allocator: u64 = 1 << 2;
+pub const feature_scheduler: u64 = 1 << 3;
+pub const feature_world: u64 = 1 << 4;
+pub const feature_players: u64 = 1 << 5;
+pub const feature_entities: u64 = 1 << 6;
+pub const feature_items: u64 = 1 << 7;
+pub const feature_blocks: u64 = 1 << 8;
+pub const feature_inventories: u64 = 1 << 9;
+pub const feature_registries: u64 = 1 << 10;
+pub const feature_network: u64 = 1 << 11;
+pub const feature_commands: u64 = 1 << 12;
+pub const feature_custom_events: u64 = 1 << 13;
+pub const feature_traits: u64 = 1 << 14;
+pub const feature_hot_unload: u64 = 1 << 15;
+pub const host_features: u64 = feature_events | feature_logging | feature_allocator | feature_scheduler | feature_world | feature_players | feature_entities | feature_items | feature_blocks | feature_inventories | feature_registries | feature_network | feature_commands | feature_custom_events | feature_traits | feature_hot_unload;
+
+pub const block_flag_apply_traits: u32 = 1 << 0;
+pub const block_flag_update_clients: u32 = 1 << 1;
+pub const block_flag_silent: u32 = 1 << 2;
 
 pub const interface_core: u32 = 1;
 pub const interface_logging: u32 = 2;
@@ -55,6 +60,24 @@ pub const interface_inventories: u32 = 10;
 pub const interface_registries: u32 = 11;
 pub const interface_network: u32 = 12;
 pub const interface_commands: u32 = 13;
+
+pub fn interfaceFeature(interface_id: u32) u64 {
+    return switch (interface_id) {
+        interface_logging => feature_logging,
+        interface_events => feature_events,
+        interface_scheduler => feature_scheduler,
+        interface_world => feature_world,
+        interface_players => feature_players,
+        interface_entities => feature_entities,
+        interface_items => feature_items,
+        interface_blocks => feature_blocks,
+        interface_inventories => feature_inventories,
+        interface_registries => feature_registries,
+        interface_network => feature_network,
+        interface_commands => feature_commands,
+        else => 0,
+    };
+}
 
 pub const max_custom_events: u32 = 128;
 pub const custom_payload_max: usize = 56;
@@ -379,7 +402,7 @@ pub const EventPayload = union {
 
 pub const SnapshotHeader = extern struct { struct_size: u32, version: u16, reserved: u16 };
 pub const WorldSnapshot = extern struct { header: SnapshotHeader, handle: u64, name: StringView };
-pub const PlayerSnapshot = extern struct { header: SnapshotHeader, handle: u64, runtime_id: i64, name: StringView, uuid: StringView, world: u64, dimension: StringView, x: f32, y: f32, z: f32 };
+pub const PlayerSnapshot = extern struct { header: SnapshotHeader, handle: u64, runtime_id: i64, name: StringView, uuid: StringView, world: u64, dimension: StringView, x: f32, y: f32, z: f32, yaw: f32, pitch: f32, gamemode: u32, spawned: u32 };
 pub const EntitySnapshot = extern struct { header: SnapshotHeader, handle: u64, runtime_id: i64, type: StringView, world: u64, dimension: StringView, x: f32, y: f32, z: f32 };
 pub const ItemSnapshot = extern struct { header: SnapshotHeader, handle: u64, network_id: i32, max_stack_size: u16, stackable: u8, reserved: [5]u8, identifier: StringView };
 pub const BlockSnapshot = extern struct { header: SnapshotHeader, world: u64, dimension: StringView, x: i32, y: i32, z: i32, network_id: i32, identifier: StringView };
@@ -402,20 +425,38 @@ pub const LogSetLevelFn = *const fn (?*anyopaque, u32) callconv(.c) void;
 pub const LogSetScopeFn = *const fn (?*anyopaque, StringView) callconv(.c) void;
 pub const SchemaOfFn = *const fn (?*anyopaque, StringView, u32, ?*u32) callconv(.c) i32;
 pub const RegistryFn = *const fn (?*anyopaque, ?*RegistryView) callconv(.c) i32;
-pub const CommandHandlerFn = *const fn (?*anyopaque, i32, ?[*]const StringView) callconv(.c) void;
+pub const BlockBox = extern struct { min_x: i32, min_y: i32, min_z: i32, max_x: i32, max_y: i32, max_z: i32 };
+pub const CommandHandlerFn = *const fn (*const CommandCall) callconv(.c) i32;
 pub const CommandRegisterFn = *const fn (?*anyopaque, ?*const CommandDesc, ?*u64) callconv(.c) i32;
 pub const CommandUnregisterFn = *const fn (?*anyopaque, u64) callconv(.c) i32;
 pub const CommandMarkDirtyFn = *const fn (?*anyopaque) callconv(.c) void;
 pub const WorldFindFn = *const fn (?*anyopaque, StringView, *u64) callconv(.c) i32;
 pub const WorldGetSnapshotFn = *const fn (?*anyopaque, u64, ?*WorldSnapshot, usize) callconv(.c) i32;
 pub const WorldSetBlockFn = *const fn (?*anyopaque, u64, StringView, i32, i32, i32, StringView) callconv(.c) i32;
+pub const WorldGetBlockStateFn = *const fn (?*anyopaque, u64, StringView, i32, i32, i32, ?*u32) callconv(.c) i32;
+pub const WorldSetBlockStateFn = *const fn (?*anyopaque, u64, StringView, i32, i32, i32, u32, u32) callconv(.c) i32;
+pub const BlockCallbackFn = *const fn (?*anyopaque, i32, i32, i32, u32) callconv(.c) void;
+pub const WorldForEachInBoxFn = *const fn (?*anyopaque, u64, StringView, BlockBox, ?BlockCallbackFn, ?*anyopaque) callconv(.c) i32;
 pub const PlayersCountFn = *const fn (?*anyopaque, *usize) callconv(.c) i32;
-pub const PlayersGetSnapshotFn = *const fn (?*anyopaque, usize, ?*PlayerSnapshot, usize) callconv(.c) i32;
+pub const PlayersGetSnapshotFn = *const fn (?*anyopaque, u64, ?*PlayerSnapshot, usize) callconv(.c) i32;
+pub const PlayersGetByIndexFn = *const fn (?*anyopaque, usize, ?*PlayerSnapshot, usize) callconv(.c) i32;
+pub const PlayersGetByRuntimeFn = *const fn (?*anyopaque, i64, ?*PlayerSnapshot, usize) callconv(.c) i32;
+pub const PlayerCallbackFn = *const fn (?*anyopaque, *const PlayerSnapshot) callconv(.c) void;
+pub const PlayersForEachFn = *const fn (?*anyopaque, ?PlayerCallbackFn, ?*anyopaque) callconv(.c) i32;
 pub const EntitiesCountFn = *const fn (?*anyopaque, u64, StringView, *usize) callconv(.c) i32;
-pub const EntitiesGetSnapshotFn = *const fn (?*anyopaque, u64, StringView, usize, ?*EntitySnapshot, usize) callconv(.c) i32;
+pub const EntitiesGetSnapshotFn = *const fn (?*anyopaque, u64, ?*EntitySnapshot, usize) callconv(.c) i32;
+pub const EntitiesGetByIndexFn = *const fn (?*anyopaque, u64, StringView, usize, ?*EntitySnapshot, usize) callconv(.c) i32;
+pub const EntitiesGetByRuntimeFn = *const fn (?*anyopaque, u64, StringView, i64, ?*EntitySnapshot, usize) callconv(.c) i32;
+pub const EntityCallbackFn = *const fn (?*anyopaque, *const EntitySnapshot) callconv(.c) void;
+pub const EntitiesForEachFn = *const fn (?*anyopaque, u64, StringView, ?EntityCallbackFn, ?*anyopaque) callconv(.c) i32;
 pub const ItemsCountFn = *const fn (?*anyopaque, *usize) callconv(.c) i32;
-pub const ItemsGetSnapshotFn = *const fn (?*anyopaque, usize, ?*ItemSnapshot, usize) callconv(.c) i32;
+pub const ItemsGetSnapshotFn = *const fn (?*anyopaque, u64, ?*ItemSnapshot, usize) callconv(.c) i32;
+pub const ItemsGetByIndexFn = *const fn (?*anyopaque, usize, ?*ItemSnapshot, usize) callconv(.c) i32;
+pub const ItemsGetByNetworkIdFn = *const fn (?*anyopaque, i32, ?*ItemSnapshot, usize) callconv(.c) i32;
+pub const ItemCallbackFn = *const fn (?*anyopaque, *const ItemSnapshot) callconv(.c) void;
+pub const ItemsForEachFn = *const fn (?*anyopaque, ?ItemCallbackFn, ?*anyopaque) callconv(.c) i32;
 pub const BlocksGetSnapshotFn = *const fn (?*anyopaque, u64, StringView, i32, i32, i32, ?*BlockSnapshot, usize) callconv(.c) i32;
+pub const BlocksResolveNameFn = *const fn (?*anyopaque, StringView, ?*u32) callconv(.c) i32;
 pub const InventoryGetSizeFn = *const fn (?*anyopaque, u64, *u32) callconv(.c) i32;
 pub const InventoryGetItemFn = *const fn (?*anyopaque, u64, u32, ?*InventoryItemSnapshot, usize) callconv(.c) i32;
 pub const CoreGetTickFn = *const fn (?*anyopaque, ?*u64) callconv(.c) i32;
@@ -425,11 +466,11 @@ pub const SchedulerCancelOwnerFn = *const fn (?*anyopaque) callconv(.c) i32;
 pub const NetworkSendFn = *const fn (?*anyopaque, u64, StringView, u32) callconv(.c) i32;
 pub const NetworkBroadcastFn = *const fn (?*anyopaque, StringView, u32) callconv(.c) i32;
 
-pub const WorldApi = extern struct { header: InterfaceHeader, find: WorldFindFn, get_snapshot: WorldGetSnapshotFn, set_block: WorldSetBlockFn };
-pub const PlayersApi = extern struct { header: InterfaceHeader, count: PlayersCountFn, get_snapshot: PlayersGetSnapshotFn };
-pub const EntitiesApi = extern struct { header: InterfaceHeader, count: EntitiesCountFn, get_snapshot: EntitiesGetSnapshotFn };
-pub const ItemsApi = extern struct { header: InterfaceHeader, count: ItemsCountFn, get_snapshot: ItemsGetSnapshotFn };
-pub const BlocksApi = extern struct { header: InterfaceHeader, get_snapshot: BlocksGetSnapshotFn };
+pub const WorldApi = extern struct { header: InterfaceHeader, find: WorldFindFn, get_snapshot: WorldGetSnapshotFn, set_block: WorldSetBlockFn, get_block_state: WorldGetBlockStateFn, set_block_state: WorldSetBlockStateFn, for_each_in_box: WorldForEachInBoxFn };
+pub const PlayersApi = extern struct { header: InterfaceHeader, count: PlayersCountFn, get_snapshot: PlayersGetSnapshotFn, get_by_index: PlayersGetByIndexFn, get_by_runtime: PlayersGetByRuntimeFn, for_each: PlayersForEachFn };
+pub const EntitiesApi = extern struct { header: InterfaceHeader, count: EntitiesCountFn, get_snapshot: EntitiesGetSnapshotFn, get_by_index: EntitiesGetByIndexFn, get_by_runtime: EntitiesGetByRuntimeFn, for_each: EntitiesForEachFn };
+pub const ItemsApi = extern struct { header: InterfaceHeader, count: ItemsCountFn, get_snapshot: ItemsGetSnapshotFn, get_by_index: ItemsGetByIndexFn, get_by_network_id: ItemsGetByNetworkIdFn, for_each: ItemsForEachFn };
+pub const BlocksApi = extern struct { header: InterfaceHeader, get_snapshot: BlocksGetSnapshotFn, resolve_name: BlocksResolveNameFn };
 pub const InventoriesApi = extern struct { header: InterfaceHeader, get_size: InventoryGetSizeFn, get_item: InventoryGetItemFn };
 pub const CoreApi = extern struct { header: InterfaceHeader, get_tick: CoreGetTickFn, get_state: CoreGetStateFn };
 pub const SchedulerApi = extern struct { header: InterfaceHeader, after: SchedulerAfterFn, every: SchedulerEveryFn, cancel: SchedulerCancelFn, cancel_owner: SchedulerCancelOwnerFn };
@@ -454,7 +495,21 @@ pub const CommandDesc = extern struct {
     flags: u32,
     name: StringView,
     description: StringView,
+    permission: StringView,
+    aliases: ?[*]const StringView,
+    alias_count: u32,
+    reserved: u32,
     handler: ?CommandHandlerFn,
+    userdata: ?*anyopaque,
+};
+
+pub const CommandCall = extern struct {
+    struct_size: u32,
+    argc: u32,
+    argv: ?[*]const StringView,
+    raw_line: StringView,
+    player: u64,
+    world: u64,
     userdata: ?*anyopaque,
 };
 
@@ -819,7 +874,11 @@ fn fpPlayerSnapshot(hash: u64) u64 {
     h = mix(h, @offsetOf(PlayerSnapshot, "dimension"));
     h = mix(h, @offsetOf(PlayerSnapshot, "x"));
     h = mix(h, @offsetOf(PlayerSnapshot, "y"));
-    return mix(h, @offsetOf(PlayerSnapshot, "z"));
+    h = mix(h, @offsetOf(PlayerSnapshot, "z"));
+    h = mix(h, @offsetOf(PlayerSnapshot, "yaw"));
+    h = mix(h, @offsetOf(PlayerSnapshot, "pitch"));
+    h = mix(h, @offsetOf(PlayerSnapshot, "gamemode"));
+    return mix(h, @offsetOf(PlayerSnapshot, "spawned"));
 }
 
 fn fpEntitySnapshot(hash: u64) u64 {
@@ -875,23 +934,56 @@ fn fpInventoryItemSnapshot(hash: u64) u64 {
 }
 
 fn fpWorldApi(hash: u64) u64 {
-    return mix(mix(mix(mix(mix(hash, @sizeOf(WorldApi)), @offsetOf(WorldApi, "header")), @offsetOf(WorldApi, "find")), @offsetOf(WorldApi, "get_snapshot")), @offsetOf(WorldApi, "set_block"));
+    var h = hash;
+    h = mix(h, @sizeOf(WorldApi));
+    h = mix(h, @offsetOf(WorldApi, "header"));
+    h = mix(h, @offsetOf(WorldApi, "find"));
+    h = mix(h, @offsetOf(WorldApi, "get_snapshot"));
+    h = mix(h, @offsetOf(WorldApi, "set_block"));
+    h = mix(h, @offsetOf(WorldApi, "get_block_state"));
+    h = mix(h, @offsetOf(WorldApi, "set_block_state"));
+    return mix(h, @offsetOf(WorldApi, "for_each_in_box"));
 }
 
 fn fpPlayersApi(hash: u64) u64 {
-    return mix(mix(mix(mix(hash, @sizeOf(PlayersApi)), @offsetOf(PlayersApi, "header")), @offsetOf(PlayersApi, "count")), @offsetOf(PlayersApi, "get_snapshot"));
+    var h = hash;
+    h = mix(h, @sizeOf(PlayersApi));
+    h = mix(h, @offsetOf(PlayersApi, "header"));
+    h = mix(h, @offsetOf(PlayersApi, "count"));
+    h = mix(h, @offsetOf(PlayersApi, "get_snapshot"));
+    h = mix(h, @offsetOf(PlayersApi, "get_by_index"));
+    h = mix(h, @offsetOf(PlayersApi, "get_by_runtime"));
+    return mix(h, @offsetOf(PlayersApi, "for_each"));
 }
 
 fn fpEntitiesApi(hash: u64) u64 {
-    return mix(mix(mix(mix(hash, @sizeOf(EntitiesApi)), @offsetOf(EntitiesApi, "header")), @offsetOf(EntitiesApi, "count")), @offsetOf(EntitiesApi, "get_snapshot"));
+    var h = hash;
+    h = mix(h, @sizeOf(EntitiesApi));
+    h = mix(h, @offsetOf(EntitiesApi, "header"));
+    h = mix(h, @offsetOf(EntitiesApi, "count"));
+    h = mix(h, @offsetOf(EntitiesApi, "get_snapshot"));
+    h = mix(h, @offsetOf(EntitiesApi, "get_by_index"));
+    h = mix(h, @offsetOf(EntitiesApi, "get_by_runtime"));
+    return mix(h, @offsetOf(EntitiesApi, "for_each"));
 }
 
 fn fpItemsApi(hash: u64) u64 {
-    return mix(mix(mix(mix(hash, @sizeOf(ItemsApi)), @offsetOf(ItemsApi, "header")), @offsetOf(ItemsApi, "count")), @offsetOf(ItemsApi, "get_snapshot"));
+    var h = hash;
+    h = mix(h, @sizeOf(ItemsApi));
+    h = mix(h, @offsetOf(ItemsApi, "header"));
+    h = mix(h, @offsetOf(ItemsApi, "count"));
+    h = mix(h, @offsetOf(ItemsApi, "get_snapshot"));
+    h = mix(h, @offsetOf(ItemsApi, "get_by_index"));
+    h = mix(h, @offsetOf(ItemsApi, "get_by_network_id"));
+    return mix(h, @offsetOf(ItemsApi, "for_each"));
 }
 
 fn fpBlocksApi(hash: u64) u64 {
-    return mix(mix(mix(hash, @sizeOf(BlocksApi)), @offsetOf(BlocksApi, "header")), @offsetOf(BlocksApi, "get_snapshot"));
+    var h = hash;
+    h = mix(h, @sizeOf(BlocksApi));
+    h = mix(h, @offsetOf(BlocksApi, "header"));
+    h = mix(h, @offsetOf(BlocksApi, "get_snapshot"));
+    return mix(h, @offsetOf(BlocksApi, "resolve_name"));
 }
 
 fn fpInventoriesApi(hash: u64) u64 {
@@ -985,8 +1077,35 @@ fn fpCommandDesc(hash: u64) u64 {
     h = mix(h, @offsetOf(CommandDesc, "flags"));
     h = mix(h, @offsetOf(CommandDesc, "name"));
     h = mix(h, @offsetOf(CommandDesc, "description"));
+    h = mix(h, @offsetOf(CommandDesc, "permission"));
+    h = mix(h, @offsetOf(CommandDesc, "aliases"));
+    h = mix(h, @offsetOf(CommandDesc, "alias_count"));
+    h = mix(h, @offsetOf(CommandDesc, "reserved"));
     h = mix(h, @offsetOf(CommandDesc, "handler"));
     return mix(h, @offsetOf(CommandDesc, "userdata"));
+}
+
+fn fpCommandCall(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(CommandCall));
+    h = mix(h, @offsetOf(CommandCall, "struct_size"));
+    h = mix(h, @offsetOf(CommandCall, "argc"));
+    h = mix(h, @offsetOf(CommandCall, "argv"));
+    h = mix(h, @offsetOf(CommandCall, "raw_line"));
+    h = mix(h, @offsetOf(CommandCall, "player"));
+    h = mix(h, @offsetOf(CommandCall, "world"));
+    return mix(h, @offsetOf(CommandCall, "userdata"));
+}
+
+fn fpBlockBox(hash: u64) u64 {
+    var h = hash;
+    h = mix(h, @sizeOf(BlockBox));
+    h = mix(h, @offsetOf(BlockBox, "min_x"));
+    h = mix(h, @offsetOf(BlockBox, "min_y"));
+    h = mix(h, @offsetOf(BlockBox, "min_z"));
+    h = mix(h, @offsetOf(BlockBox, "max_x"));
+    h = mix(h, @offsetOf(BlockBox, "max_y"));
+    return mix(h, @offsetOf(BlockBox, "max_z"));
 }
 
 fn fpCommandsApi(hash: u64) u64 {
@@ -1043,18 +1162,24 @@ fn fpConstants() u64 {
     h ^= mix(abi_fp_seed ^ 1019, event_phase_commit);
     h ^= mix(abi_fp_seed ^ 1020, event_phase_post);
     h ^= mix(abi_fp_seed ^ 1021, feature_events);
-    h ^= mix(abi_fp_seed ^ 1022, feature_world);
-    h ^= mix(abi_fp_seed ^ 1023, feature_logging);
-    h ^= mix(abi_fp_seed ^ 1024, feature_allocator);
-    h ^= mix(abi_fp_seed ^ 1025, feature_interfaces);
-    h ^= mix(abi_fp_seed ^ 1026, feature_core);
-    h ^= mix(abi_fp_seed ^ 1027, feature_scheduler);
-    h ^= mix(abi_fp_seed ^ 1028, feature_players);
-    h ^= mix(abi_fp_seed ^ 1029, feature_entities);
-    h ^= mix(abi_fp_seed ^ 1030, feature_items);
-    h ^= mix(abi_fp_seed ^ 1031, feature_blocks);
-    h ^= mix(abi_fp_seed ^ 1032, feature_inventories);
-    h ^= mix(abi_fp_seed ^ 1033, feature_network);
+    h ^= mix(abi_fp_seed ^ 1022, feature_logging);
+    h ^= mix(abi_fp_seed ^ 1023, feature_allocator);
+    h ^= mix(abi_fp_seed ^ 1024, feature_scheduler);
+    h ^= mix(abi_fp_seed ^ 1025, feature_world);
+    h ^= mix(abi_fp_seed ^ 1026, feature_players);
+    h ^= mix(abi_fp_seed ^ 1027, feature_entities);
+    h ^= mix(abi_fp_seed ^ 1028, feature_items);
+    h ^= mix(abi_fp_seed ^ 1029, feature_blocks);
+    h ^= mix(abi_fp_seed ^ 1030, feature_inventories);
+    h ^= mix(abi_fp_seed ^ 1031, feature_registries);
+    h ^= mix(abi_fp_seed ^ 1032, feature_network);
+    h ^= mix(abi_fp_seed ^ 1033, feature_commands);
+    h ^= mix(abi_fp_seed ^ 1096, feature_custom_events);
+    h ^= mix(abi_fp_seed ^ 1097, feature_traits);
+    h ^= mix(abi_fp_seed ^ 1098, feature_hot_unload);
+    h ^= mix(abi_fp_seed ^ 1099, block_flag_apply_traits);
+    h ^= mix(abi_fp_seed ^ 1100, block_flag_update_clients);
+    h ^= mix(abi_fp_seed ^ 1101, block_flag_silent);
     h ^= mix(abi_fp_seed ^ 1034, @intFromEnum(EventId.server_start));
     h ^= mix(abi_fp_seed ^ 1035, @intFromEnum(EventId.server_shutdown));
     h ^= mix(abi_fp_seed ^ 1036, @intFromEnum(EventId.server_tick));
@@ -1105,8 +1230,6 @@ fn fpConstants() u64 {
     h ^= mix(abi_fp_seed ^ 1081, interface_registries);
     h ^= mix(abi_fp_seed ^ 1082, interface_network);
     h ^= mix(abi_fp_seed ^ 1083, interface_commands);
-    h ^= mix(abi_fp_seed ^ 1084, feature_registries);
-    h ^= mix(abi_fp_seed ^ 1085, feature_commands);
     h ^= mix(abi_fp_seed ^ 1086, custom_payload_max);
     h ^= mix(abi_fp_seed ^ 1087, max_custom_events);
     h ^= mix(abi_fp_seed ^ 1088, @intFromEnum(EventId.entity_combust));
@@ -1179,6 +1302,8 @@ pub const abi_fingerprint: u64 = blk: {
     h ^= fpRegistriesApi(abi_fp_seed ^ 36);
     h ^= fpCommandDesc(abi_fp_seed ^ 37);
     h ^= fpCommandsApi(abi_fp_seed ^ 38);
+    h ^= fpCommandCall(abi_fp_seed ^ 57);
+    h ^= fpBlockBox(abi_fp_seed ^ 58);
     h ^= fpConstants();
     break :blk h;
 };
@@ -1241,7 +1366,15 @@ test "host api fits the cache budget" {
     try std.testing.expectEqual(@as(usize, 56), @sizeOf(SchedulerApi));
     try std.testing.expectEqual(@as(usize, 32), @sizeOf(RegistryView));
     try std.testing.expectEqual(@as(usize, 48), @sizeOf(RegistriesApi));
-    try std.testing.expectEqual(@as(usize, 56), @sizeOf(CommandDesc));
+    try std.testing.expectEqual(@as(usize, 112), @sizeOf(PlayerSnapshot));
+    try std.testing.expectEqual(@as(usize, 72), @sizeOf(WorldApi));
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(PlayersApi));
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(EntitiesApi));
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(ItemsApi));
+    try std.testing.expectEqual(@as(usize, 40), @sizeOf(BlocksApi));
+    try std.testing.expectEqual(@as(usize, 88), @sizeOf(CommandDesc));
+    try std.testing.expectEqual(@as(usize, 56), @sizeOf(CommandCall));
+    try std.testing.expectEqual(@as(usize, 24), @sizeOf(BlockBox));
     try std.testing.expectEqual(@as(usize, 48), @sizeOf(CommandsApi));
 }
 
@@ -1316,6 +1449,9 @@ test "query and descriptor validation enforce fingerprint and callbacks" {
     descriptor.metadata.required_features = 1 << 63;
     try std.testing.expectError(error.RequiredFeature, validateDescriptor(&descriptor, host_features));
     descriptor.metadata.required_features = 0;
+    descriptor.metadata.optional_features = 1 << 63;
+    try validateDescriptor(&descriptor, host_features);
+    descriptor.metadata.optional_features = 0;
 
     descriptor.on_start = null;
     try std.testing.expectError(error.MissingCallback, validateDescriptor(&descriptor, host_features));

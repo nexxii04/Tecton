@@ -50,20 +50,25 @@ extern "C" {
 #define TECTON_EVENT_PHASE_POST 2u
 
 #define TECTON_FEATURE_EVENTS (UINT64_C(1) << 0)
-#define TECTON_FEATURE_WORLD (UINT64_C(1) << 1)
-#define TECTON_FEATURE_LOGGING (UINT64_C(1) << 2)
-#define TECTON_FEATURE_ALLOCATOR (UINT64_C(1) << 3)
-#define TECTON_FEATURE_INTERFACES (UINT64_C(1) << 4)
-#define TECTON_FEATURE_CORE (UINT64_C(1) << 5)
-#define TECTON_FEATURE_SCHEDULER (UINT64_C(1) << 6)
-#define TECTON_FEATURE_PLAYERS (UINT64_C(1) << 7)
-#define TECTON_FEATURE_ENTITIES (UINT64_C(1) << 8)
-#define TECTON_FEATURE_ITEMS (UINT64_C(1) << 9)
-#define TECTON_FEATURE_BLOCKS (UINT64_C(1) << 10)
-#define TECTON_FEATURE_INVENTORIES (UINT64_C(1) << 11)
-#define TECTON_FEATURE_NETWORK (UINT64_C(1) << 12)
-#define TECTON_FEATURE_REGISTRIES (UINT64_C(1) << 13)
-#define TECTON_FEATURE_COMMANDS (UINT64_C(1) << 14)
+#define TECTON_FEATURE_LOGGING (UINT64_C(1) << 1)
+#define TECTON_FEATURE_ALLOCATOR (UINT64_C(1) << 2)
+#define TECTON_FEATURE_SCHEDULER (UINT64_C(1) << 3)
+#define TECTON_FEATURE_WORLD (UINT64_C(1) << 4)
+#define TECTON_FEATURE_PLAYERS (UINT64_C(1) << 5)
+#define TECTON_FEATURE_ENTITIES (UINT64_C(1) << 6)
+#define TECTON_FEATURE_ITEMS (UINT64_C(1) << 7)
+#define TECTON_FEATURE_BLOCKS (UINT64_C(1) << 8)
+#define TECTON_FEATURE_INVENTORIES (UINT64_C(1) << 9)
+#define TECTON_FEATURE_REGISTRIES (UINT64_C(1) << 10)
+#define TECTON_FEATURE_NETWORK (UINT64_C(1) << 11)
+#define TECTON_FEATURE_COMMANDS (UINT64_C(1) << 12)
+#define TECTON_FEATURE_CUSTOM_EVENTS (UINT64_C(1) << 13)
+#define TECTON_FEATURE_TRAITS (UINT64_C(1) << 14)
+#define TECTON_FEATURE_HOT_UNLOAD (UINT64_C(1) << 15)
+
+#define TECTON_BLOCK_APPLY_TRAITS (UINT32_C(1) << 0)
+#define TECTON_BLOCK_UPDATE_CLIENTS (UINT32_C(1) << 1)
+#define TECTON_BLOCK_SILENT (UINT32_C(1) << 2)
 
 #define TECTON_INTERFACE_CORE 1u
 #define TECTON_INTERFACE_LOGGING 2u
@@ -449,8 +454,9 @@ typedef void(TECTON_PLUGIN_CALL *tecton_log_set_scope_fn)(void *userdata, tecton
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_schema_of_fn)(void *userdata, tecton_string_view name, uint32_t flags, uint32_t *out_schema); /* low byte of flags is the schema version */
 typedef struct tecton_registry_view tecton_registry_view;
 typedef struct tecton_command_desc tecton_command_desc;
+typedef struct tecton_command_call tecton_command_call;
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_registry_fn)(void *userdata, tecton_registry_view *out);
-typedef void(TECTON_PLUGIN_CALL *tecton_command_handler_fn)(void *userdata, int32_t argc, const tecton_string_view *argv);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_command_handler_fn)(const tecton_command_call *call);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_command_register_fn)(void *userdata, const tecton_command_desc *desc, uint64_t *out_command);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_command_unregister_fn)(void *userdata, uint64_t command);
 typedef void(TECTON_PLUGIN_CALL *tecton_command_mark_dirty_fn)(void *userdata);
@@ -494,7 +500,20 @@ typedef struct tecton_player_snapshot {
   float x;
   float y;
   float z;
+  float yaw;
+  float pitch;
+  uint32_t gamemode;
+  uint32_t spawned;
 } tecton_player_snapshot;
+
+typedef struct tecton_block_box {
+  int32_t min_x;
+  int32_t min_y;
+  int32_t min_z;
+  int32_t max_x;
+  int32_t max_y;
+  int32_t max_z;
+} tecton_block_box;
 
 typedef struct tecton_entity_snapshot {
   tecton_snapshot_header header;
@@ -543,13 +562,30 @@ typedef struct tecton_inventory_item_snapshot {
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_world_find_fn)(void *userdata, tecton_string_view name, uint64_t *handle);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_world_get_snapshot_fn)(void *userdata, uint64_t handle, tecton_world_snapshot *snapshot, size_t snapshot_size);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_world_set_block_fn)(void *userdata, uint64_t world, tecton_string_view dimension, int32_t x, int32_t y, int32_t z, tecton_string_view block);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_world_get_block_state_fn)(void *userdata, uint64_t world, tecton_string_view dimension, int32_t x, int32_t y, int32_t z, uint32_t *state);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_world_set_block_state_fn)(void *userdata, uint64_t world, tecton_string_view dimension, int32_t x, int32_t y, int32_t z, uint32_t state, uint32_t flags);
+typedef void(TECTON_PLUGIN_CALL *tecton_block_callback_fn)(void *userdata, int32_t x, int32_t y, int32_t z, uint32_t state);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_world_for_each_in_box_fn)(void *userdata, uint64_t world, tecton_string_view dimension, tecton_block_box box, tecton_block_callback_fn callback, void *callback_userdata);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_players_count_fn)(void *userdata, size_t *count);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_players_get_snapshot_fn)(void *userdata, size_t index, tecton_player_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_players_get_snapshot_fn)(void *userdata, uint64_t handle, tecton_player_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_players_get_by_index_fn)(void *userdata, size_t index, tecton_player_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_players_get_by_runtime_fn)(void *userdata, int64_t runtime_id, tecton_player_snapshot *snapshot, size_t snapshot_size);
+typedef void(TECTON_PLUGIN_CALL *tecton_player_callback_fn)(void *userdata, const tecton_player_snapshot *snapshot);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_players_for_each_fn)(void *userdata, tecton_player_callback_fn callback, void *callback_userdata);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_entities_count_fn)(void *userdata, uint64_t world, tecton_string_view dimension, size_t *count);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_entities_get_snapshot_fn)(void *userdata, uint64_t world, tecton_string_view dimension, size_t index, tecton_entity_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_entities_get_snapshot_fn)(void *userdata, uint64_t handle, tecton_entity_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_entities_get_by_index_fn)(void *userdata, uint64_t world, tecton_string_view dimension, size_t index, tecton_entity_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_entities_get_by_runtime_fn)(void *userdata, uint64_t world, tecton_string_view dimension, int64_t runtime_id, tecton_entity_snapshot *snapshot, size_t snapshot_size);
+typedef void(TECTON_PLUGIN_CALL *tecton_entity_callback_fn)(void *userdata, const tecton_entity_snapshot *snapshot);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_entities_for_each_fn)(void *userdata, uint64_t world, tecton_string_view dimension, tecton_entity_callback_fn callback, void *callback_userdata);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_items_count_fn)(void *userdata, size_t *count);
-typedef int32_t(TECTON_PLUGIN_CALL *tecton_items_get_snapshot_fn)(void *userdata, size_t index, tecton_item_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_items_get_snapshot_fn)(void *userdata, uint64_t handle, tecton_item_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_items_get_by_index_fn)(void *userdata, size_t index, tecton_item_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_items_get_by_network_id_fn)(void *userdata, int32_t network_id, tecton_item_snapshot *snapshot, size_t snapshot_size);
+typedef void(TECTON_PLUGIN_CALL *tecton_item_callback_fn)(void *userdata, const tecton_item_snapshot *snapshot);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_items_for_each_fn)(void *userdata, tecton_item_callback_fn callback, void *callback_userdata);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_blocks_get_snapshot_fn)(void *userdata, uint64_t world, tecton_string_view dimension, int32_t x, int32_t y, int32_t z, tecton_block_snapshot *snapshot, size_t snapshot_size);
+typedef int32_t(TECTON_PLUGIN_CALL *tecton_blocks_resolve_name_fn)(void *userdata, tecton_string_view name, uint32_t *state);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_inventory_get_size_fn)(void *userdata, uint64_t player, uint32_t *size);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_inventory_get_item_fn)(void *userdata, uint64_t player, uint32_t slot, tecton_inventory_item_snapshot *snapshot, size_t snapshot_size);
 typedef int32_t(TECTON_PLUGIN_CALL *tecton_core_get_tick_fn)(void *userdata, uint64_t *tick);
@@ -564,29 +600,42 @@ typedef struct tecton_world_api {
   tecton_world_find_fn find;
   tecton_world_get_snapshot_fn get_snapshot;
   tecton_world_set_block_fn set_block;
+  tecton_world_get_block_state_fn get_block_state;
+  tecton_world_set_block_state_fn set_block_state;
+  tecton_world_for_each_in_box_fn for_each_in_box;
 } tecton_world_api;
 
 typedef struct tecton_players_api {
   tecton_interface_header header;
   tecton_players_count_fn count;
   tecton_players_get_snapshot_fn get_snapshot;
+  tecton_players_get_by_index_fn get_by_index;
+  tecton_players_get_by_runtime_fn get_by_runtime;
+  tecton_players_for_each_fn for_each;
 } tecton_players_api;
 
 typedef struct tecton_entities_api {
   tecton_interface_header header;
   tecton_entities_count_fn count;
   tecton_entities_get_snapshot_fn get_snapshot;
+  tecton_entities_get_by_index_fn get_by_index;
+  tecton_entities_get_by_runtime_fn get_by_runtime;
+  tecton_entities_for_each_fn for_each;
 } tecton_entities_api;
 
 typedef struct tecton_items_api {
   tecton_interface_header header;
   tecton_items_count_fn count;
   tecton_items_get_snapshot_fn get_snapshot;
+  tecton_items_get_by_index_fn get_by_index;
+  tecton_items_get_by_network_id_fn get_by_network_id;
+  tecton_items_for_each_fn for_each;
 } tecton_items_api;
 
 typedef struct tecton_blocks_api {
   tecton_interface_header header;
   tecton_blocks_get_snapshot_fn get_snapshot;
+  tecton_blocks_resolve_name_fn resolve_name;
 } tecton_blocks_api;
 
 typedef struct tecton_inventories_api {
@@ -670,11 +719,25 @@ typedef struct tecton_registries_api {
 typedef struct tecton_command_desc {
   uint32_t struct_size;
   uint32_t flags; /* reserved; must be 0 */
-  tecton_string_view name;        /* borrowed for the call; copied by host */
-  tecton_string_view description; /* borrowed for the call; copied by host */
+  tecton_string_view name;         /* borrowed for the call; copied by host */
+  tecton_string_view description;  /* borrowed for the call; copied by host */
+  tecton_string_view permission;   /* borrowed for the call; copied by host */
+  const tecton_string_view *aliases; /* borrowed for the call; copied by host */
+  uint32_t alias_count;
+  uint32_t reserved;
   tecton_command_handler_fn handler;
   void *userdata;
 } tecton_command_desc;
+
+struct tecton_command_call {
+  uint32_t struct_size;
+  uint32_t argc;
+  const tecton_string_view *argv; /* borrowed; argv[0] is the command name */
+  tecton_string_view raw_line;    /* borrowed; no leading '/' */
+  uint64_t player;                /* 0 for the console */
+  uint64_t world;                 /* 0 when the executor has no world */
+  void *userdata;
+};
 
 typedef struct tecton_commands_api {
   tecton_interface_header header;
@@ -923,7 +986,7 @@ TECTON_LAYOUT_OFFSET(tecton_world_snapshot, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_world_snapshot, handle, 8);
 TECTON_LAYOUT_OFFSET(tecton_world_snapshot, name, 16);
 
-TECTON_LAYOUT_SIZE(tecton_player_snapshot, 96);
+TECTON_LAYOUT_SIZE(tecton_player_snapshot, 112);
 TECTON_LAYOUT_OFFSET(tecton_player_snapshot, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_player_snapshot, handle, 8);
 TECTON_LAYOUT_OFFSET(tecton_player_snapshot, runtime_id, 16);
@@ -934,6 +997,18 @@ TECTON_LAYOUT_OFFSET(tecton_player_snapshot, dimension, 64);
 TECTON_LAYOUT_OFFSET(tecton_player_snapshot, x, 80);
 TECTON_LAYOUT_OFFSET(tecton_player_snapshot, y, 84);
 TECTON_LAYOUT_OFFSET(tecton_player_snapshot, z, 88);
+TECTON_LAYOUT_OFFSET(tecton_player_snapshot, yaw, 92);
+TECTON_LAYOUT_OFFSET(tecton_player_snapshot, pitch, 96);
+TECTON_LAYOUT_OFFSET(tecton_player_snapshot, gamemode, 100);
+TECTON_LAYOUT_OFFSET(tecton_player_snapshot, spawned, 104);
+
+TECTON_LAYOUT_SIZE(tecton_block_box, 24);
+TECTON_LAYOUT_OFFSET(tecton_block_box, min_x, 0);
+TECTON_LAYOUT_OFFSET(tecton_block_box, min_y, 4);
+TECTON_LAYOUT_OFFSET(tecton_block_box, min_z, 8);
+TECTON_LAYOUT_OFFSET(tecton_block_box, max_x, 12);
+TECTON_LAYOUT_OFFSET(tecton_block_box, max_y, 16);
+TECTON_LAYOUT_OFFSET(tecton_block_box, max_z, 20);
 
 TECTON_LAYOUT_SIZE(tecton_entity_snapshot, 80);
 TECTON_LAYOUT_OFFSET(tecton_entity_snapshot, header, 0);
@@ -975,30 +1050,43 @@ TECTON_LAYOUT_OFFSET(tecton_inventory_item_snapshot, network_id, 16);
 TECTON_LAYOUT_OFFSET(tecton_inventory_item_snapshot, metadata, 20);
 TECTON_LAYOUT_OFFSET(tecton_inventory_item_snapshot, identifier, 24);
 
-TECTON_LAYOUT_SIZE(tecton_world_api, 48);
+TECTON_LAYOUT_SIZE(tecton_world_api, 72);
 TECTON_LAYOUT_OFFSET(tecton_world_api, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_world_api, find, 24);
 TECTON_LAYOUT_OFFSET(tecton_world_api, get_snapshot, 32);
 TECTON_LAYOUT_OFFSET(tecton_world_api, set_block, 40);
+TECTON_LAYOUT_OFFSET(tecton_world_api, get_block_state, 48);
+TECTON_LAYOUT_OFFSET(tecton_world_api, set_block_state, 56);
+TECTON_LAYOUT_OFFSET(tecton_world_api, for_each_in_box, 64);
 
-TECTON_LAYOUT_SIZE(tecton_players_api, 40);
+TECTON_LAYOUT_SIZE(tecton_players_api, 64);
 TECTON_LAYOUT_OFFSET(tecton_players_api, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_players_api, count, 24);
 TECTON_LAYOUT_OFFSET(tecton_players_api, get_snapshot, 32);
+TECTON_LAYOUT_OFFSET(tecton_players_api, get_by_index, 40);
+TECTON_LAYOUT_OFFSET(tecton_players_api, get_by_runtime, 48);
+TECTON_LAYOUT_OFFSET(tecton_players_api, for_each, 56);
 
-TECTON_LAYOUT_SIZE(tecton_entities_api, 40);
+TECTON_LAYOUT_SIZE(tecton_entities_api, 64);
 TECTON_LAYOUT_OFFSET(tecton_entities_api, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_entities_api, count, 24);
 TECTON_LAYOUT_OFFSET(tecton_entities_api, get_snapshot, 32);
+TECTON_LAYOUT_OFFSET(tecton_entities_api, get_by_index, 40);
+TECTON_LAYOUT_OFFSET(tecton_entities_api, get_by_runtime, 48);
+TECTON_LAYOUT_OFFSET(tecton_entities_api, for_each, 56);
 
-TECTON_LAYOUT_SIZE(tecton_items_api, 40);
+TECTON_LAYOUT_SIZE(tecton_items_api, 64);
 TECTON_LAYOUT_OFFSET(tecton_items_api, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_items_api, count, 24);
 TECTON_LAYOUT_OFFSET(tecton_items_api, get_snapshot, 32);
+TECTON_LAYOUT_OFFSET(tecton_items_api, get_by_index, 40);
+TECTON_LAYOUT_OFFSET(tecton_items_api, get_by_network_id, 48);
+TECTON_LAYOUT_OFFSET(tecton_items_api, for_each, 56);
 
-TECTON_LAYOUT_SIZE(tecton_blocks_api, 32);
+TECTON_LAYOUT_SIZE(tecton_blocks_api, 40);
 TECTON_LAYOUT_OFFSET(tecton_blocks_api, header, 0);
 TECTON_LAYOUT_OFFSET(tecton_blocks_api, get_snapshot, 24);
+TECTON_LAYOUT_OFFSET(tecton_blocks_api, resolve_name, 32);
 
 TECTON_LAYOUT_SIZE(tecton_inventories_api, 40);
 TECTON_LAYOUT_OFFSET(tecton_inventories_api, header, 0);
@@ -1067,13 +1155,26 @@ TECTON_LAYOUT_OFFSET(tecton_registries_api, block_states, 24);
 TECTON_LAYOUT_OFFSET(tecton_registries_api, items, 32);
 TECTON_LAYOUT_OFFSET(tecton_registries_api, entity_types, 40);
 
-TECTON_LAYOUT_SIZE(tecton_command_desc, 56);
+TECTON_LAYOUT_SIZE(tecton_command_desc, 88);
 TECTON_LAYOUT_OFFSET(tecton_command_desc, struct_size, 0);
 TECTON_LAYOUT_OFFSET(tecton_command_desc, flags, 4);
 TECTON_LAYOUT_OFFSET(tecton_command_desc, name, 8);
 TECTON_LAYOUT_OFFSET(tecton_command_desc, description, 24);
-TECTON_LAYOUT_OFFSET(tecton_command_desc, handler, 40);
-TECTON_LAYOUT_OFFSET(tecton_command_desc, userdata, 48);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, permission, 40);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, aliases, 56);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, alias_count, 64);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, reserved, 68);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, handler, 72);
+TECTON_LAYOUT_OFFSET(tecton_command_desc, userdata, 80);
+
+TECTON_LAYOUT_SIZE(tecton_command_call, 56);
+TECTON_LAYOUT_OFFSET(tecton_command_call, struct_size, 0);
+TECTON_LAYOUT_OFFSET(tecton_command_call, argc, 4);
+TECTON_LAYOUT_OFFSET(tecton_command_call, argv, 8);
+TECTON_LAYOUT_OFFSET(tecton_command_call, raw_line, 16);
+TECTON_LAYOUT_OFFSET(tecton_command_call, player, 32);
+TECTON_LAYOUT_OFFSET(tecton_command_call, world, 40);
+TECTON_LAYOUT_OFFSET(tecton_command_call, userdata, 48);
 
 TECTON_LAYOUT_SIZE(tecton_commands_api, 48);
 TECTON_LAYOUT_OFFSET(tecton_commands_api, header, 0);
@@ -1220,7 +1321,7 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   TECTON_ABI_FP_4((hash), sizeof(tecton_world_snapshot), offsetof(tecton_world_snapshot, header), offsetof(tecton_world_snapshot, handle), offsetof(tecton_world_snapshot, name))
 
 #define TECTON_ABI_FP_PLAYER_SNAPSHOT(hash) \
-  TECTON_ABI_FP_11((hash), sizeof(tecton_player_snapshot), offsetof(tecton_player_snapshot, header), offsetof(tecton_player_snapshot, handle), offsetof(tecton_player_snapshot, runtime_id), offsetof(tecton_player_snapshot, name), offsetof(tecton_player_snapshot, uuid), offsetof(tecton_player_snapshot, world), offsetof(tecton_player_snapshot, dimension), offsetof(tecton_player_snapshot, x), offsetof(tecton_player_snapshot, y), offsetof(tecton_player_snapshot, z))
+  TECTON_ABI_FP_15((hash), sizeof(tecton_player_snapshot), offsetof(tecton_player_snapshot, header), offsetof(tecton_player_snapshot, handle), offsetof(tecton_player_snapshot, runtime_id), offsetof(tecton_player_snapshot, name), offsetof(tecton_player_snapshot, uuid), offsetof(tecton_player_snapshot, world), offsetof(tecton_player_snapshot, dimension), offsetof(tecton_player_snapshot, x), offsetof(tecton_player_snapshot, y), offsetof(tecton_player_snapshot, z), offsetof(tecton_player_snapshot, yaw), offsetof(tecton_player_snapshot, pitch), offsetof(tecton_player_snapshot, gamemode), offsetof(tecton_player_snapshot, spawned))
 
 #define TECTON_ABI_FP_ENTITY_SNAPSHOT(hash) \
   TECTON_ABI_FP_10((hash), sizeof(tecton_entity_snapshot), offsetof(tecton_entity_snapshot, header), offsetof(tecton_entity_snapshot, handle), offsetof(tecton_entity_snapshot, runtime_id), offsetof(tecton_entity_snapshot, type), offsetof(tecton_entity_snapshot, world), offsetof(tecton_entity_snapshot, dimension), offsetof(tecton_entity_snapshot, x), offsetof(tecton_entity_snapshot, y), offsetof(tecton_entity_snapshot, z))
@@ -1235,19 +1336,19 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   TECTON_ABI_FP_9((hash), sizeof(tecton_inventory_item_snapshot), offsetof(tecton_inventory_item_snapshot, header), offsetof(tecton_inventory_item_snapshot, present), offsetof(tecton_inventory_item_snapshot, reserved), offsetof(tecton_inventory_item_snapshot, count), offsetof(tecton_inventory_item_snapshot, reserved_count), offsetof(tecton_inventory_item_snapshot, network_id), offsetof(tecton_inventory_item_snapshot, metadata), offsetof(tecton_inventory_item_snapshot, identifier))
 
 #define TECTON_ABI_FP_WORLD_API(hash) \
-  TECTON_ABI_FP_5((hash), sizeof(tecton_world_api), offsetof(tecton_world_api, header), offsetof(tecton_world_api, find), offsetof(tecton_world_api, get_snapshot), offsetof(tecton_world_api, set_block))
+  TECTON_ABI_FP_8((hash), sizeof(tecton_world_api), offsetof(tecton_world_api, header), offsetof(tecton_world_api, find), offsetof(tecton_world_api, get_snapshot), offsetof(tecton_world_api, set_block), offsetof(tecton_world_api, get_block_state), offsetof(tecton_world_api, set_block_state), offsetof(tecton_world_api, for_each_in_box))
 
 #define TECTON_ABI_FP_PLAYERS_API(hash) \
-  TECTON_ABI_FP_4((hash), sizeof(tecton_players_api), offsetof(tecton_players_api, header), offsetof(tecton_players_api, count), offsetof(tecton_players_api, get_snapshot))
+  TECTON_ABI_FP_7((hash), sizeof(tecton_players_api), offsetof(tecton_players_api, header), offsetof(tecton_players_api, count), offsetof(tecton_players_api, get_snapshot), offsetof(tecton_players_api, get_by_index), offsetof(tecton_players_api, get_by_runtime), offsetof(tecton_players_api, for_each))
 
 #define TECTON_ABI_FP_ENTITIES_API(hash) \
-  TECTON_ABI_FP_4((hash), sizeof(tecton_entities_api), offsetof(tecton_entities_api, header), offsetof(tecton_entities_api, count), offsetof(tecton_entities_api, get_snapshot))
+  TECTON_ABI_FP_7((hash), sizeof(tecton_entities_api), offsetof(tecton_entities_api, header), offsetof(tecton_entities_api, count), offsetof(tecton_entities_api, get_snapshot), offsetof(tecton_entities_api, get_by_index), offsetof(tecton_entities_api, get_by_runtime), offsetof(tecton_entities_api, for_each))
 
 #define TECTON_ABI_FP_ITEMS_API(hash) \
-  TECTON_ABI_FP_4((hash), sizeof(tecton_items_api), offsetof(tecton_items_api, header), offsetof(tecton_items_api, count), offsetof(tecton_items_api, get_snapshot))
+  TECTON_ABI_FP_7((hash), sizeof(tecton_items_api), offsetof(tecton_items_api, header), offsetof(tecton_items_api, count), offsetof(tecton_items_api, get_snapshot), offsetof(tecton_items_api, get_by_index), offsetof(tecton_items_api, get_by_network_id), offsetof(tecton_items_api, for_each))
 
 #define TECTON_ABI_FP_BLOCKS_API(hash) \
-  TECTON_ABI_FP_3((hash), sizeof(tecton_blocks_api), offsetof(tecton_blocks_api, header), offsetof(tecton_blocks_api, get_snapshot))
+  TECTON_ABI_FP_4((hash), sizeof(tecton_blocks_api), offsetof(tecton_blocks_api, header), offsetof(tecton_blocks_api, get_snapshot), offsetof(tecton_blocks_api, resolve_name))
 
 #define TECTON_ABI_FP_INVENTORIES_API(hash) \
   TECTON_ABI_FP_4((hash), sizeof(tecton_inventories_api), offsetof(tecton_inventories_api, header), offsetof(tecton_inventories_api, get_size), offsetof(tecton_inventories_api, get_item))
@@ -1283,7 +1384,13 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   TECTON_ABI_FP_5((hash), sizeof(tecton_registries_api), offsetof(tecton_registries_api, header), offsetof(tecton_registries_api, block_states), offsetof(tecton_registries_api, items), offsetof(tecton_registries_api, entity_types))
 
 #define TECTON_ABI_FP_COMMAND_DESC(hash) \
-  TECTON_ABI_FP_7((hash), sizeof(tecton_command_desc), offsetof(tecton_command_desc, struct_size), offsetof(tecton_command_desc, flags), offsetof(tecton_command_desc, name), offsetof(tecton_command_desc, description), offsetof(tecton_command_desc, handler), offsetof(tecton_command_desc, userdata))
+  TECTON_ABI_FP_11((hash), sizeof(tecton_command_desc), offsetof(tecton_command_desc, struct_size), offsetof(tecton_command_desc, flags), offsetof(tecton_command_desc, name), offsetof(tecton_command_desc, description), offsetof(tecton_command_desc, permission), offsetof(tecton_command_desc, aliases), offsetof(tecton_command_desc, alias_count), offsetof(tecton_command_desc, reserved), offsetof(tecton_command_desc, handler), offsetof(tecton_command_desc, userdata))
+
+#define TECTON_ABI_FP_COMMAND_CALL(hash) \
+  TECTON_ABI_FP_8((hash), sizeof(tecton_command_call), offsetof(tecton_command_call, struct_size), offsetof(tecton_command_call, argc), offsetof(tecton_command_call, argv), offsetof(tecton_command_call, raw_line), offsetof(tecton_command_call, player), offsetof(tecton_command_call, world), offsetof(tecton_command_call, userdata))
+
+#define TECTON_ABI_FP_BLOCK_BOX(hash) \
+  TECTON_ABI_FP_7((hash), sizeof(tecton_block_box), offsetof(tecton_block_box, min_x), offsetof(tecton_block_box, min_y), offsetof(tecton_block_box, min_z), offsetof(tecton_block_box, max_x), offsetof(tecton_block_box, max_y), offsetof(tecton_block_box, max_z))
 
 #define TECTON_ABI_FP_COMMANDS_API(hash) \
   TECTON_ABI_FP_5((hash), sizeof(tecton_commands_api), offsetof(tecton_commands_api, header), offsetof(tecton_commands_api, register_command), offsetof(tecton_commands_api, unregister), offsetof(tecton_commands_api, mark_dirty))
@@ -1312,18 +1419,24 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   (TECTON_ABI_FP_ITEM(1019, TECTON_EVENT_PHASE_COMMIT)) ^ \
   (TECTON_ABI_FP_ITEM(1020, TECTON_EVENT_PHASE_POST)) ^ \
   (TECTON_ABI_FP_ITEM(1021, TECTON_FEATURE_EVENTS)) ^ \
-  (TECTON_ABI_FP_ITEM(1022, TECTON_FEATURE_WORLD)) ^ \
-  (TECTON_ABI_FP_ITEM(1023, TECTON_FEATURE_LOGGING)) ^ \
-  (TECTON_ABI_FP_ITEM(1024, TECTON_FEATURE_ALLOCATOR)) ^ \
-  (TECTON_ABI_FP_ITEM(1025, TECTON_FEATURE_INTERFACES)) ^ \
-  (TECTON_ABI_FP_ITEM(1026, TECTON_FEATURE_CORE)) ^ \
-  (TECTON_ABI_FP_ITEM(1027, TECTON_FEATURE_SCHEDULER)) ^ \
-  (TECTON_ABI_FP_ITEM(1028, TECTON_FEATURE_PLAYERS)) ^ \
-  (TECTON_ABI_FP_ITEM(1029, TECTON_FEATURE_ENTITIES)) ^ \
-  (TECTON_ABI_FP_ITEM(1030, TECTON_FEATURE_ITEMS)) ^ \
-  (TECTON_ABI_FP_ITEM(1031, TECTON_FEATURE_BLOCKS)) ^ \
-  (TECTON_ABI_FP_ITEM(1032, TECTON_FEATURE_INVENTORIES)) ^ \
-  (TECTON_ABI_FP_ITEM(1033, TECTON_FEATURE_NETWORK)) ^ \
+  (TECTON_ABI_FP_ITEM(1022, TECTON_FEATURE_LOGGING)) ^ \
+  (TECTON_ABI_FP_ITEM(1023, TECTON_FEATURE_ALLOCATOR)) ^ \
+  (TECTON_ABI_FP_ITEM(1024, TECTON_FEATURE_SCHEDULER)) ^ \
+  (TECTON_ABI_FP_ITEM(1025, TECTON_FEATURE_WORLD)) ^ \
+  (TECTON_ABI_FP_ITEM(1026, TECTON_FEATURE_PLAYERS)) ^ \
+  (TECTON_ABI_FP_ITEM(1027, TECTON_FEATURE_ENTITIES)) ^ \
+  (TECTON_ABI_FP_ITEM(1028, TECTON_FEATURE_ITEMS)) ^ \
+  (TECTON_ABI_FP_ITEM(1029, TECTON_FEATURE_BLOCKS)) ^ \
+  (TECTON_ABI_FP_ITEM(1030, TECTON_FEATURE_INVENTORIES)) ^ \
+  (TECTON_ABI_FP_ITEM(1031, TECTON_FEATURE_REGISTRIES)) ^ \
+  (TECTON_ABI_FP_ITEM(1032, TECTON_FEATURE_NETWORK)) ^ \
+  (TECTON_ABI_FP_ITEM(1033, TECTON_FEATURE_COMMANDS)) ^ \
+  (TECTON_ABI_FP_ITEM(1096, TECTON_FEATURE_CUSTOM_EVENTS)) ^ \
+  (TECTON_ABI_FP_ITEM(1097, TECTON_FEATURE_TRAITS)) ^ \
+  (TECTON_ABI_FP_ITEM(1098, TECTON_FEATURE_HOT_UNLOAD)) ^ \
+  (TECTON_ABI_FP_ITEM(1099, TECTON_BLOCK_APPLY_TRAITS)) ^ \
+  (TECTON_ABI_FP_ITEM(1100, TECTON_BLOCK_UPDATE_CLIENTS)) ^ \
+  (TECTON_ABI_FP_ITEM(1101, TECTON_BLOCK_SILENT)) ^ \
   (TECTON_ABI_FP_ITEM(1034, TECTON_EVENT_SERVER_START)) ^ \
   (TECTON_ABI_FP_ITEM(1035, TECTON_EVENT_SERVER_SHUTDOWN)) ^ \
   (TECTON_ABI_FP_ITEM(1036, TECTON_EVENT_SERVER_TICK)) ^ \
@@ -1374,8 +1487,6 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   (TECTON_ABI_FP_ITEM(1081, TECTON_INTERFACE_REGISTRIES)) ^ \
   (TECTON_ABI_FP_ITEM(1082, TECTON_INTERFACE_NETWORK)) ^ \
   (TECTON_ABI_FP_ITEM(1083, TECTON_INTERFACE_COMMANDS)) ^ \
-  (TECTON_ABI_FP_ITEM(1084, TECTON_FEATURE_REGISTRIES)) ^ \
-  (TECTON_ABI_FP_ITEM(1085, TECTON_FEATURE_COMMANDS)) ^ \
   (TECTON_ABI_FP_ITEM(1086, TECTON_CUSTOM_PAYLOAD_MAX)) ^ \
   (TECTON_ABI_FP_ITEM(1087, TECTON_MAX_CUSTOM_EVENTS)) ^ \
   (TECTON_ABI_FP_ITEM(1088, TECTON_EVENT_ENTITY_COMBUST)) ^ \
@@ -1446,6 +1557,8 @@ TECTON_LAYOUT_OFFSET(tecton_commands_api, mark_dirty, 40);
   (TECTON_ABI_FP_REGISTRIES_API(TECTON_ABI_FP_SEED ^ UINT64_C(36))) ^ \
   (TECTON_ABI_FP_COMMAND_DESC(TECTON_ABI_FP_SEED ^ UINT64_C(37))) ^ \
   (TECTON_ABI_FP_COMMANDS_API(TECTON_ABI_FP_SEED ^ UINT64_C(38))) ^ \
+  (TECTON_ABI_FP_COMMAND_CALL(TECTON_ABI_FP_SEED ^ UINT64_C(57))) ^ \
+  (TECTON_ABI_FP_BLOCK_BOX(TECTON_ABI_FP_SEED ^ UINT64_C(58))) ^ \
   (TECTON_ABI_FP_CONSTANTS))
 
 #ifdef __cplusplus
