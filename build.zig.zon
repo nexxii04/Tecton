@@ -9,11 +9,11 @@
             .hash = "zlib-1.3.2-ZZQ7lc8NAAAHm9MDfplvwoesXvk4tVm6VCsiI8KnIbT0",
         },
         .nbt = .{
-            .url = "git+https://github.com/nexxii04/Nbt.git#c585051a99f4aa84fe82962af54ed68230022a3c",
+            .url = "git+https://github.com/tecton-mc/Nbt.git#c585051a99f4aa84fe82962af54ed68230022a3c",
             .hash = "nbt-0.0.0-lsUufBbRAADwshsxsdoTDCgpvBLDRo-QUa8QdhdKQMGW",
         },
         .BinaryStream = .{
-            .url = "git+https://github.com/nexxii04/BinaryStream.git#b0953025800d6069ceccaad2315a1c8a818105b1",
+            .url = "git+https://github.com/tecton-mc/BinaryStream?ref=master#b0953025800d6069ceccaad2315a1c8a818105b1",
             .hash = "BinaryStream-0.0.0-gn8mmkJfAQB7hx3EiIoUs228mEqfXMqE78Fjf_Bdq7We",
         },
 
@@ -27,8 +27,8 @@
             .hash = "nethernet_zig-0.1.0-y6Rr0VElDABzEiCRsrQ3PwEG1Z8IyrKkn_C-tHpVgB-L",
         },
         .protocol = .{
-            .url = "git+https://github.com/nexxii04/Protocol.git#4a679d20ab01736c0fa97a5caa3ed55e696617b2",
-            .hash = "protocol-0.0.0-129wXlT2cwBUadjRwq8i27N9f4Q5jeCQyXKNcs9vgmGf",
+            .url = "git+https://github.com/tecton-mc/Protocol.git#f83b766a75de338155436a9d941466b6d634a906",
+            .hash = "protocol-0.0.0-129wXrTAeQDGP7Ady9nVWUAoZNhwF-HlvW67YnLErGVs",
         },
     },
     .paths = .{
