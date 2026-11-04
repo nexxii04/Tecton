@@ -27,8 +27,8 @@
             .hash = "nethernet_zig-0.1.0-y6Rr0VElDABzEiCRsrQ3PwEG1Z8IyrKkn_C-tHpVgB-L",
         },
         .protocol = .{
-            .url = "git+https://github.com/tecton-mc/Protocol.git#f83b766a75de338155436a9d941466b6d634a906",
-            .hash = "protocol-0.0.0-129wXrTAeQDGP7Ady9nVWUAoZNhwF-HlvW67YnLErGVs",
+            .url = "git+https://github.com/tecton-mc/Protocol.git#54988548017c4a1943e232a56127ef410d2ded4e",
+            .hash = "protocol-0.0.0-129wXr3AeQAzamOIMiDfXf0PPINgmfIHkFr0MgJ_W0_C",
         },
     },
     .paths = .{
