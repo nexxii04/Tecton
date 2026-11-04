@@ -408,7 +408,7 @@ Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
 Tecton is built upon the solid foundation laid by the original **Conduit** project.
 
 * 🏛️ **Original Author & Architecture:** Conduit by [@AnyBananaGAME](https://github.com/AnyBananaGAME).
-* 🛠️ **Active Maintenance & Evolution:** Developed and maintained by [@nexxii04](https://github.com/nexxii04).
+* 🛠️ **Active Maintenance & Evolution:** Developed and maintained by [@nexxii04](https://github.com/nexxii04) and [@xoappo](https://github.com/Xoappo).
 
 Huge thanks to [@AnyBananaGAME](https://github.com/AnyBananaGAME) for designing and creating the original codebase this engine is built on. 💚
 
