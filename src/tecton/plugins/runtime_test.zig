@@ -153,7 +153,8 @@ pub fn Suite(comptime scope: type) type {
         pub fn case_003() !void {
             var runtime = PluginRuntime.init(std.testing.allocator);
             defer runtime.deinit();
-            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 4, .name = "logging", .host = undefined };
+            var diagnostics = PluginRuntime.HostDiagnostics{ .host = undefined };
+            var slot = HostSlot{ .runtime = &runtime, .plugin_id = 4, .name = "logging", .host = &diagnostics.host, .diagnostics = &diagnostics };
 
             runtime.logging_api.set_level(@ptrCast(&slot), abi.log_warn);
             try std.testing.expectEqual(@as(i32, 0), runtime.logging_api.is_enabled(@ptrCast(&slot), abi.log_info));
@@ -164,13 +165,13 @@ pub fn Suite(comptime scope: type) type {
 
             const scope_name = "net/inbound";
             runtime.logging_api.set_scope(@ptrCast(&slot), .{ .data = scope_name.ptr, .length = scope_name.len });
-            try std.testing.expectEqual(@as(u8, scope_name.len), slot.scope_len);
-            try std.testing.expectEqualStrings(scope_name, slot.scope[0..@as(usize, slot.scope_len)]);
+            try std.testing.expectEqual(@as(u8, scope_name.len), diagnostics.scope_len);
+            try std.testing.expectEqualStrings(scope_name, diagnostics.scope[0..@as(usize, diagnostics.scope_len)]);
 
             const long = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
             runtime.logging_api.set_scope(@ptrCast(&slot), .{ .data = long.ptr, .length = long.len });
-            try std.testing.expectEqual(@as(u8, 64), slot.scope_len);
-            try std.testing.expectEqualStrings(long[0..64], slot.scope[0..64]);
+            try std.testing.expectEqual(@as(u8, 64), diagnostics.scope_len);
+            try std.testing.expectEqualStrings(long[0..64], diagnostics.scope[0..64]);
 
             runtime.logging_api.set_level(@ptrCast(&slot), abi.log_error);
             const message = "filtered";
@@ -806,7 +807,9 @@ pub fn Suite(comptime scope: type) type {
                 try std.testing.expectEqual(id < 2, meta.payload == .none);
             }
             try std.testing.expect(@sizeOf(abi.EventPayload) <= 64);
-            try std.testing.expect(@sizeOf(abi.EventView) == 40);
+            try std.testing.expect(@sizeOf(abi.EventView) <= 40);
+            try std.testing.expect(@sizeOf(abi.HostApi) <= 128);
+            try std.testing.expect(@sizeOf(HostSlot) <= 128);
         }
 
         pub fn case_017() !void {
@@ -1640,6 +1643,30 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(usize, 1), player_probe.count);
             try std.testing.expectEqualStrings("phase5", player_probe.name);
 
+            const DenyPlayerProbe = struct {
+                calls: usize = 0,
+
+                fn callback(userdata: ?*anyopaque, _: *const abi.PlayerSnapshot) callconv(.c) void {
+                    const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+                    probe.calls += 1;
+                }
+            };
+            var deny_player_probe = DenyPlayerProbe{};
+            var denied_count: usize = 0;
+            var denied_snapshot: abi.PlayerSnapshot = undefined;
+            counted.allocations = 0;
+            counted.deny_allocations = true;
+            var denied_iteration: usize = 0;
+            while (denied_iteration < 1000) : (denied_iteration += 1) {
+                try std.testing.expectEqual(abi.result_ok, runtime.players_api.count(@ptrCast(&slot), &denied_count));
+                try std.testing.expectEqual(abi.result_ok, runtime.players_api.get_by_index(@ptrCast(&slot), 0, &denied_snapshot, @sizeOf(abi.PlayerSnapshot)));
+                try std.testing.expectEqual(abi.result_ok, runtime.players_api.for_each(@ptrCast(&slot), DenyPlayerProbe.callback, &deny_player_probe));
+            }
+            counted.deny_allocations = false;
+            try std.testing.expectEqual(@as(usize, 1), denied_count);
+            try std.testing.expectEqual(@as(usize, 1000), deny_player_probe.calls);
+            try std.testing.expectEqual(@as(usize, 0), counted.allocations);
+
             const entity_type = EntityType.init("minecraft:phase5", 1, &.{}, &.{});
             const entity = try allocator.create(Entity);
             entity.* = Entity.init(allocator, &entity_type, null);
@@ -1787,8 +1814,13 @@ pub fn Suite(comptime scope: type) type {
             defer dimension.deinit();
             try world.dimensions.put("overworld", &dimension);
 
-            var runtime = PluginRuntime.init(allocator);
-            defer runtime.deinit();
+            var counted = CountingAllocator.init(allocator);
+            defer counted.deinit();
+            var runtime = PluginRuntime.init(counted.allocator());
+            defer {
+                counted.deny_allocations = false;
+                runtime.deinit();
+            }
             var slot = HostSlot{ .runtime = &runtime, .plugin_id = 3, .name = "blocks", .host = undefined, .state = .running };
             var owned: u32 = 0;
             const world_handle = try runtime.handles.put(.world, @intFromPtr(&world), 3, &owned);
@@ -1805,6 +1837,18 @@ pub fn Suite(comptime scope: type) type {
             var state: u32 = 0;
             try std.testing.expectEqual(abi.result_ok, runtime.world_api.get_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, &state));
             try std.testing.expectEqual(network_id, state);
+
+            var denied_state: u32 = 0;
+            counted.allocations = 0;
+            counted.deny_allocations = true;
+            var denied_iteration: usize = 0;
+            while (denied_iteration < 1000) : (denied_iteration += 1) {
+                try std.testing.expectEqual(abi.result_ok, runtime.world_api.set_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, network_id, 0));
+                try std.testing.expectEqual(abi.result_ok, runtime.world_api.get_block_state(@ptrCast(&slot), world_handle, name, position.x, position.y, position.z, &denied_state));
+            }
+            counted.deny_allocations = false;
+            try std.testing.expectEqual(network_id, denied_state);
+            try std.testing.expectEqual(@as(usize, 0), counted.allocations);
 
             // UPDATE_CLIENTS serializes through a stack stream even when no host
             // is attached, so this path must stay allocation-free.

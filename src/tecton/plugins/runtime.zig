@@ -144,6 +144,21 @@ pub const PluginRuntime = struct {
 
     pub const NATIVE_BRIDGE_OWNER_ID: u16 = 0xC001;
 
+    pub const HostDiagnostics = struct {
+        host: abi.HostApi,
+        load_detail: [128]u8 = undefined,
+        load_detail_len: u8 = 0,
+        scope: [64]u8 = undefined,
+        scope_len: u8 = 0,
+        load_reason: u32 = abi.load_ok,
+        abi_major: u16 = 0,
+        abi_minor: u16 = 0,
+        fingerprint: u64 = 0,
+        required_features: u64 = 0,
+        optional_features: u64 = 0,
+        native: ?*NativePlugin = null,
+    };
+
     pub const HostSlot = struct {
         runtime: *PluginRuntime,
         plugin_id: u32,
@@ -154,19 +169,9 @@ pub const PluginRuntime = struct {
         commands_owned: u32 = 0,
         events_dispatched: u64 = 0,
         tasks_run: u64 = 0,
-        host: abi.HostApi = undefined,
+        host: *abi.HostApi = undefined,
         name: []const u8 = "",
-        load_reason: u32 = abi.load_ok,
-        load_detail: [128]u8 = undefined,
-        load_detail_len: u8 = 0,
-        abi_major: u16 = 0,
-        abi_minor: u16 = 0,
-        fingerprint: u64 = 0,
-        required_features: u64 = 0,
-        optional_features: u64 = 0,
-        native: ?*NativePlugin = null,
-        scope: [64]u8 = undefined,
-        scope_len: u8 = 0,
+        diagnostics: ?*HostDiagnostics = null,
         log_level: u32 = abi.log_trace,
 
         fn logEnabled(self: *const HostSlot, level: u32) bool {
@@ -464,6 +469,7 @@ pub const PluginRuntime = struct {
             const slot = maybe_slot orelse continue;
             self.teardownSlot(slot, .server_exit);
             if (slot.name.len > 0) self.allocator.free(slot.name);
+            if (slot.diagnostics) |diagnostics| self.allocator.destroy(diagnostics);
             slot.state = .unloaded;
             self.allocator.destroy(slot);
         }
@@ -523,12 +529,14 @@ pub const PluginRuntime = struct {
 
     pub fn loadReasonFor(self: *PluginRuntime, plugin_id: u32) ?u32 {
         const slot = self.slotFor(plugin_id) orelse return null;
-        return slot.load_reason;
+        const diagnostics = slot.diagnostics orelse return abi.load_ok;
+        return diagnostics.load_reason;
     }
 
     pub fn loadDetailFor(self: *PluginRuntime, plugin_id: u32) ?[]const u8 {
         const slot = self.slotFor(plugin_id) orelse return null;
-        return slot.load_detail[0..slot.load_detail_len];
+        const diagnostics = slot.diagnostics orelse return "";
+        return diagnostics.load_detail[0..diagnostics.load_detail_len];
     }
 
     pub fn snapshotPlugins(self: *PluginRuntime, allocator: std.mem.Allocator) ![]PluginSnapshot {
@@ -544,17 +552,18 @@ pub const PluginRuntime = struct {
         for (self.slots.items) |maybe_slot| {
             const slot = maybe_slot orelse continue;
             if (slot.state == .unloaded) continue;
+            const diagnostics = slot.diagnostics;
             snapshots[index] = .{
                 .name = slot.name,
                 .state = slot.state,
                 .previous_state = slot.previous_state,
-                .abi_major = slot.abi_major,
-                .abi_minor = slot.abi_minor,
-                .fingerprint = slot.fingerprint,
-                .required_features = slot.required_features,
-                .optional_features = slot.optional_features,
-                .load_reason = slot.load_reason,
-                .load_detail = slot.load_detail[0..slot.load_detail_len],
+                .abi_major = if (diagnostics) |value| value.abi_major else 0,
+                .abi_minor = if (diagnostics) |value| value.abi_minor else 0,
+                .fingerprint = if (diagnostics) |value| value.fingerprint else 0,
+                .required_features = if (diagnostics) |value| value.required_features else 0,
+                .optional_features = if (diagnostics) |value| value.optional_features else 0,
+                .load_reason = if (diagnostics) |value| value.load_reason else abi.load_ok,
+                .load_detail = if (diagnostics) |value| value.load_detail[0..value.load_detail_len] else "",
                 .events_dispatched = slot.events_dispatched,
                 .tasks_run = slot.tasks_run,
                 .handles_owned = @intCast(self.handles.countOwner(&slot.owns_handles)),
@@ -619,13 +628,20 @@ pub const PluginRuntime = struct {
             self.recordFailure(path, abi.load_out_of_memory, "slot allocation");
             return;
         };
-        slot.* = .{ .runtime = self, .plugin_id = self.next_id, .state = .loading, .host = self.host };
-        slot.host.userdata = @ptrCast(slot);
-        slot.host.plugin_id = slot.plugin_id;
-        slot.host.allocator.userdata = @ptrCast(slot);
+        const diagnostics = self.allocator.create(HostDiagnostics) catch {
+            self.allocator.destroy(slot);
+            self.recordFailure(path, abi.load_out_of_memory, "slot diagnostics allocation");
+            return;
+        };
+        diagnostics.* = .{ .host = self.host };
+        slot.* = .{ .runtime = self, .plugin_id = self.next_id, .state = .loading, .host = &diagnostics.host, .diagnostics = diagnostics };
+        diagnostics.host.userdata = @ptrCast(slot);
+        diagnostics.host.plugin_id = slot.plugin_id;
+        diagnostics.host.allocator.userdata = @ptrCast(slot);
 
         self.registerLoadingSlot(slot) catch {
             self.recordFailure(path, abi.load_out_of_memory, "slot table allocation");
+            self.allocator.destroy(diagnostics);
             self.allocator.destroy(slot);
             return;
         };
@@ -635,20 +651,20 @@ pub const PluginRuntime = struct {
             return;
         };
         var result: native_loader.LoadResult = .{};
-        native.* = NativePlugin.openDetailed(self.allocator, path, &slot.host, slot.plugin_id, &result) catch |err| {
-            slot.abi_major = result.abi_major;
-            slot.abi_minor = result.abi_minor;
-            slot.fingerprint = result.fingerprint;
+        native.* = NativePlugin.openDetailed(self.allocator, path, slot.host, slot.plugin_id, &result) catch |err| {
+            diagnostics.abi_major = result.abi_major;
+            diagnostics.abi_minor = result.abi_minor;
+            diagnostics.fingerprint = result.fingerprint;
             self.allocator.destroy(native);
             self.failSlot(slot, path, failureReason(&result, err), failureDetail(&result, err));
             return;
         };
-        slot.native = native;
-        slot.abi_major = native.abi_major;
-        slot.abi_minor = native.abi_minor;
-        slot.fingerprint = native.fingerprint;
-        slot.required_features = native.required_features;
-        slot.optional_features = native.optional_features;
+        diagnostics.native = native;
+        diagnostics.abi_major = native.abi_major;
+        diagnostics.abi_minor = native.abi_minor;
+        diagnostics.fingerprint = native.fingerprint;
+        diagnostics.required_features = native.required_features;
+        diagnostics.optional_features = native.optional_features;
 
         const label = self.allocator.dupe(u8, abi.metadataName(native.descriptor)) catch {
             self.failSlot(slot, path, abi.load_out_of_memory, "name allocation");
@@ -684,10 +700,10 @@ pub const PluginRuntime = struct {
         self.counters.loaded +%= 1;
         logger.info("[plugin:{s}] load: ok abi={d}.{d} fingerprint=0x{x} features=0x{x} path={s}", .{
             slot.name,
-            slot.abi_major,
-            slot.abi_minor,
-            slot.fingerprint,
-            slot.required_features | slot.optional_features,
+            diagnostics.abi_major,
+            diagnostics.abi_minor,
+            diagnostics.fingerprint,
+            diagnostics.required_features | diagnostics.optional_features,
             path,
         });
     }
@@ -695,7 +711,9 @@ pub const PluginRuntime = struct {
     fn readyAll(self: *PluginRuntime) void {
         for (self.plugins.items) |slot| {
             if (slot.state != .running) continue;
-            if (slot.native) |native| native.ready();
+            if (slot.diagnostics) |diagnostics| {
+                if (diagnostics.native) |native| native.ready();
+            }
         }
         self.flushCommands();
     }
@@ -707,9 +725,10 @@ pub const PluginRuntime = struct {
     }
 
     fn setLoadDetail(slot: *HostSlot, detail: []const u8) void {
-        const length = @min(detail.len, slot.load_detail.len);
-        if (length > 0) @memcpy(slot.load_detail[0..length], detail[0..length]);
-        slot.load_detail_len = @intCast(length);
+        const diagnostics = slot.diagnostics orelse return;
+        const length = @min(detail.len, diagnostics.load_detail.len);
+        if (length > 0) @memcpy(diagnostics.load_detail[0..length], detail[0..length]);
+        diagnostics.load_detail_len = @intCast(length);
     }
 
     fn failureReason(result: *const native_loader.LoadResult, err: native_loader.Error) u32 {
@@ -743,13 +762,14 @@ pub const PluginRuntime = struct {
         slot.previous_state = slot.state;
         self.teardownSlot(slot, .fault);
         slot.state = .failed;
-        slot.load_reason = reason;
+        if (slot.diagnostics) |diagnostics| diagnostics.load_reason = reason;
         setLoadDetail(slot, detail);
         self.counters.failed +%= 1;
         if (reason < self.counters.by_reason.len) self.counters.by_reason[reason] +%= 1;
         if (slot.name.len == 0) slot.name = self.allocator.dupe(u8, std.fs.path.basename(path)) catch "";
         const name = if (slot.name.len > 0) slot.name else std.fs.path.basename(path);
-        self.logLoadFailure(name, path, reason, slot.load_detail[0..slot.load_detail_len]);
+        const detail_text = if (slot.diagnostics) |diagnostics| diagnostics.load_detail[0..diagnostics.load_detail_len] else "";
+        self.logLoadFailure(name, path, reason, detail_text);
     }
 
     fn removeFromPlugins(self: *PluginRuntime, slot: *HostSlot) void {
@@ -762,7 +782,9 @@ pub const PluginRuntime = struct {
     }
 
     fn teardownSlot(self: *PluginRuntime, slot: *HostSlot, reason: abi.ShutdownReason) void {
-        if (slot.native) |native| native.shutdown(reason);
+        if (slot.diagnostics) |diagnostics| {
+            if (diagnostics.native) |native| native.shutdown(reason);
+        }
         self.unregisterCommandsFor(slot.plugin_id);
         self.cancelTasksFor(slot.plugin_id);
         self.cancelTimersFor(slot.plugin_id);
@@ -770,10 +792,12 @@ pub const PluginRuntime = struct {
         self.removeSubscriptions(slot.plugin_id);
         _ = self.handles.removeOwner(slot.plugin_id, &slot.owns_handles);
         slot.handles_owned = 0;
-        if (slot.native) |native| {
-            native.deinit();
-            self.allocator.destroy(native);
-            slot.native = null;
+        if (slot.diagnostics) |diagnostics| {
+            if (diagnostics.native) |native| {
+                native.deinit();
+                self.allocator.destroy(native);
+                diagnostics.native = null;
+            }
         }
     }
 
@@ -797,6 +821,7 @@ pub const PluginRuntime = struct {
             commands,
         });
         if (slot.name.len > 0) self.allocator.free(slot.name);
+        if (slot.diagnostics) |diagnostics| self.allocator.destroy(diagnostics);
         slot.state = .unloaded;
         self.counters.unloaded +%= 1;
         self.allocator.destroy(slot);
@@ -1515,31 +1540,61 @@ pub const PluginRuntime = struct {
     }
 
     fn schedulerEvery(context: ?*anyopaque, interval: u32, callback: ?abi.TimerCallbackFn, callback_userdata: ?*anyopaque, timer: ?*u64) callconv(.c) i32 {
-        if (interval == 0) return abi.result_invalid_argument;
+        if (interval == 0) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
         return scheduleTimer(context, interval, interval, callback, callback_userdata, timer);
     }
 
     fn scheduleTimer(context: ?*anyopaque, delay: u32, interval: u32, callback: ?abi.TimerCallbackFn, callback_userdata: ?*anyopaque, timer: ?*u64) i32 {
-        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
-        const callback_value = callback orelse return abi.result_invalid_argument;
-        const output = timer orelse return abi.result_invalid_argument;
+        const slot = slotFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const callback_value = callback orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const output = timer orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
         const self = slot.runtime;
-        const wheel = self.timer_wheel orelse self.ensureTimerWheel() catch return abi.result_out_of_memory;
+        const wheel = if (self.timer_wheel) |wheel| wheel else self.ensureTimerWheel() catch {
+            @branchHint(.unlikely);
+            return abi.result_out_of_memory;
+        };
         const next_tick = self.timer_tick + @as(u64, delay);
-        const handle = self.insertTimer(wheel, next_tick, interval, callback_value, callback_userdata, slot.plugin_id) catch return abi.result_busy;
+        const handle = self.insertTimer(wheel, next_tick, interval, callback_value, callback_userdata, slot.plugin_id) catch {
+            @branchHint(.unlikely);
+            return abi.result_busy;
+        };
         output.* = handle;
         return abi.result_ok;
     }
 
     fn schedulerCancel(context: ?*anyopaque, handle: u64) callconv(.c) i32 {
-        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const slot = slotFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
         const self = slot.runtime;
-        const wheel = self.timer_wheel orelse return abi.result_not_found;
+        const wheel = self.timer_wheel orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         const index: u32 = @intCast(handle & 0xffff_ffff);
         const generation: u32 = @intCast(handle >> 32);
-        if (index >= wheel.slots.items.len) return abi.result_not_found;
+        if (index >= wheel.slots.items.len) {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        }
         const timer = &wheel.slots.items[index];
-        if (!timer.active or timer.generation != generation or timer.plugin_id != slot.plugin_id) return abi.result_not_found;
+        if (!timer.active or timer.generation != generation or timer.plugin_id != slot.plugin_id) {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        }
         timer.active = false;
         if (!timer.firing) {
             self.unlinkTimer(wheel, index);
@@ -1741,7 +1796,9 @@ pub const PluginRuntime = struct {
         const slot = slotFrom(context) orelse return;
         if (!slot.logEnabled(level)) return;
         const text = message.slice();
-        if (slot.scope_len == 0) {
+        const diagnostics = slot.diagnostics;
+        const scope_len: u8 = if (diagnostics) |value| value.scope_len else 0;
+        if (scope_len == 0) {
             switch (level) {
                 abi.log_trace, abi.log_debug => logger.debug("[plugin:{s}] {s}", .{ slot.name, text }),
                 abi.log_info => logger.info("[plugin:{s}] {s}", .{ slot.name, text }),
@@ -1750,7 +1807,7 @@ pub const PluginRuntime = struct {
             }
             return;
         }
-        const scope = slot.scope[0..slot.scope_len];
+        const scope = diagnostics.?.scope[0..scope_len];
         switch (level) {
             abi.log_trace, abi.log_debug => logger.debug("[plugin:{s}/{s}] {s}", .{ slot.name, scope, text }),
             abi.log_info => logger.info("[plugin:{s}/{s}] {s}", .{ slot.name, scope, text }),
@@ -1771,10 +1828,11 @@ pub const PluginRuntime = struct {
 
     fn logSetScope(context: ?*anyopaque, value: abi.StringView) callconv(.c) void {
         const slot = slotFrom(context) orelse return;
+        const diagnostics = slot.diagnostics orelse return;
         const scope = value.slice();
-        const length = @min(scope.len, slot.scope.len);
-        if (length > 0) @memcpy(slot.scope[0..length], scope[0..length]);
-        slot.scope_len = @intCast(length);
+        const length = @min(scope.len, diagnostics.scope.len);
+        if (length > 0) @memcpy(diagnostics.scope[0..length], scope[0..length]);
+        diagnostics.scope_len = @intCast(length);
     }
 
     // The low byte of flags is the version; the upper bits are reserved and rejected instead of truncated.
@@ -1867,13 +1925,31 @@ pub const PluginRuntime = struct {
     }
 
     fn emitCustom(context: ?*anyopaque, schema: u32, payload: ?*const anyopaque, payload_size: usize, flags: u32) callconv(.c) i32 {
-        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const slot = slotFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
         const self = slot.runtime;
-        if (!self.schemaLive(schema)) return abi.result_not_found;
-        if (payload_size > abi.custom_payload_max) return abi.result_invalid_argument;
-        if (payload_size > 0 and payload == null) return abi.result_invalid_argument;
-        const ring = self.ensureDeferredRing() catch return abi.result_out_of_memory;
-        if (self.deferred_len >= deferred_capacity) return abi.result_busy;
+        if (!self.schemaLive(schema)) {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        }
+        if (payload_size > abi.custom_payload_max) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        if (payload_size > 0 and payload == null) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const ring = self.ensureDeferredRing() catch {
+            @branchHint(.unlikely);
+            return abi.result_out_of_memory;
+        };
+        if (self.deferred_len >= deferred_capacity) {
+            @branchHint(.unlikely);
+            return abi.result_busy;
+        }
         const entry = &ring[self.deferred_tail];
         entry.schema = schema;
         entry.size = @intCast(payload_size);
@@ -1885,11 +1961,23 @@ pub const PluginRuntime = struct {
     }
 
     fn emitImmediate(context: ?*anyopaque, schema: u32, payload: ?*const anyopaque, payload_size: usize, flags: u32) callconv(.c) i32 {
-        const slot = slotFrom(context) orelse return abi.result_invalid_argument;
+        const slot = slotFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
         const self = slot.runtime;
-        if (!self.schemaLive(schema)) return abi.result_not_found;
-        if (payload_size > 0 and payload == null) return abi.result_invalid_argument;
-        if (self.depth >= max_emit_depth) return abi.result_busy;
+        if (!self.schemaLive(schema)) {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        }
+        if (payload_size > 0 and payload == null) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        if (self.depth >= max_emit_depth) {
+            @branchHint(.unlikely);
+            return abi.result_busy;
+        }
         self.dispatchCustom(schema, payload, payload_size, @truncate(flags));
         return abi.result_ok;
     }
@@ -2295,19 +2383,43 @@ pub const PluginRuntime = struct {
     }
 
     fn itemsGetByIndex(context: ?*anyopaque, index: usize, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const output = snapshot orelse return abi.result_invalid_argument;
-        if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
-        const item = ItemType.at(index) orelse return abi.result_not_found;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const output = snapshot orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        if (snapshot_size < @sizeOf(abi.ItemSnapshot)) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const item = ItemType.at(index) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         fillItemSnapshot(item, self.handles.handleFor(.item, @intFromPtr(item)) orelse 0, output);
         return abi.result_ok;
     }
 
     fn itemsGetByNetworkId(context: ?*anyopaque, network_id: i32, snapshot: ?*abi.ItemSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const output = snapshot orelse return abi.result_invalid_argument;
-        if (snapshot_size < @sizeOf(abi.ItemSnapshot)) return abi.result_invalid_argument;
-        const item = ItemType.getByNetworkId(network_id) orelse return abi.result_not_found;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const output = snapshot orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        if (snapshot_size < @sizeOf(abi.ItemSnapshot)) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const item = ItemType.getByNetworkId(network_id) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         fillItemSnapshot(item, self.handles.handleFor(.item, @intFromPtr(item)) orelse 0, output);
         return abi.result_ok;
     }
@@ -2381,8 +2493,14 @@ pub const PluginRuntime = struct {
     }
 
     fn playersCount(context: ?*anyopaque, count_output: *usize) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const tecton = self.tecton orelse return abi.result_not_found;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const tecton = self.tecton orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         count_output.* = tecton.getPlayerCount();
         return abi.result_ok;
     }
@@ -2408,22 +2526,49 @@ pub const PluginRuntime = struct {
     }
 
     fn playersGetSnapshot(context: ?*anyopaque, handle: u64, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const output = snapshot orelse return abi.result_invalid_argument;
-        if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) return abi.result_invalid_argument;
-        const pointer = self.handles.get(.player, handle) orelse return abi.result_invalid_handle;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const output = snapshot orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const pointer = self.handles.get(.player, handle) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_handle;
+        };
         const player: *Player = @ptrFromInt(pointer);
         self.fillPlayerSnapshot(player, handle, output);
         return abi.result_ok;
     }
 
     fn playersGetByIndex(context: ?*anyopaque, index: usize, snapshot: ?*abi.PlayerSnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const output = snapshot orelse return abi.result_invalid_argument;
-        if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) return abi.result_invalid_argument;
-        const tecton = self.tecton orelse return abi.result_not_found;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const output = snapshot orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        if (snapshot_size < @sizeOf(abi.PlayerSnapshot)) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const tecton = self.tecton orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         const players = tecton.getPlayerSnapshots();
-        if (index >= players.len) return abi.result_not_found;
+        if (index >= players.len) {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        }
         const player = players[index];
         self.fillPlayerSnapshot(player, self.handles.handleFor(.player, @intFromPtr(player)) orelse 0, output);
         return abi.result_ok;
@@ -2440,9 +2585,18 @@ pub const PluginRuntime = struct {
     }
 
     fn playersForEach(context: ?*anyopaque, callback: ?abi.PlayerCallbackFn, callback_userdata: ?*anyopaque) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const cb = callback orelse return abi.result_invalid_argument;
-        const tecton = self.tecton orelse return abi.result_not_found;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const cb = callback orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const tecton = self.tecton orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         for (tecton.getPlayerSnapshots()) |player| {
             var snapshot: abi.PlayerSnapshot = undefined;
             self.fillPlayerSnapshot(player, self.handles.handleFor(.player, @intFromPtr(player)) orelse 0, &snapshot);
@@ -2497,12 +2651,30 @@ pub const PluginRuntime = struct {
     }
 
     fn entitiesGetByIndex(context: ?*anyopaque, world_handle: u64, dimension_name: abi.StringView, index: usize, snapshot: ?*abi.EntitySnapshot, snapshot_size: usize) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const output = snapshot orelse return abi.result_invalid_argument;
-        if (snapshot_size < @sizeOf(abi.EntitySnapshot)) return abi.result_invalid_argument;
-        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
-        const dimension = world.getDimension(dimension_name.slice()) orelse return abi.result_not_found;
-        const entity = self.entityAt(dimension, index) orelse return abi.result_not_found;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const output = snapshot orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        if (snapshot_size < @sizeOf(abi.EntitySnapshot)) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const world = self.worldFromHandle(world_handle) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_handle;
+        };
+        const dimension = world.getDimension(dimension_name.slice()) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
+        const entity = self.entityAt(dimension, index) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         self.fillEntitySnapshot(entity, self.handles.handleFor(.entity, @intFromPtr(entity)) orelse 0, output);
         return abi.result_ok;
     }
@@ -2550,28 +2722,58 @@ pub const PluginRuntime = struct {
     }
 
     fn worldGetBlockState(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, x: i32, y: i32, z: i32, state: ?*u32) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const output = state orelse return abi.result_invalid_argument;
-        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
-        const dimension_value = world.getDimension(dimension.slice()) orelse return abi.result_not_found;
-        const permutation = readBlockPermutation(dimension_value, x, y, z) orelse return abi.result_not_found;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const output = state orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const world = self.worldFromHandle(world_handle) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_handle;
+        };
+        const dimension_value = world.getDimension(dimension.slice()) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
+        const permutation = readBlockPermutation(dimension_value, x, y, z) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         output.* = @bitCast(permutation.network_id);
         return abi.result_ok;
     }
 
     fn setBlockState(self: *PluginRuntime, world: *World, dimension: abi.StringView, x: i32, y: i32, z: i32, state: u32, flags: u32) i32 {
         const known = abi.block_flag_apply_traits | abi.block_flag_update_clients | abi.block_flag_silent;
-        if (flags & ~known != 0) return abi.result_invalid_argument;
-        const dimension_value = world.getDimension(dimension.slice()) orelse return abi.result_not_found;
+        if (flags & ~known != 0) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const dimension_value = world.getDimension(dimension.slice()) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         const network_id: i32 = @bitCast(state);
-        const permutation = BlockPermutation.getByNetworkId(network_id) orelse return abi.result_not_found;
+        const permutation = BlockPermutation.getByNetworkId(network_id) orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         const position = Protocol.BlockPosition{ .x = x, .y = y, .z = z };
         // Write path: unlike the read lookups, set_block_state is allowed to
         // materialize the target chunk before storing the new permutation on
         // the first write.
-        dimension_value.setPermutation(position, permutation, 0) catch return abi.result_not_found;
+        dimension_value.setPermutation(position, permutation, 0) catch {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
         if (flags & abi.block_flag_apply_traits != 0) {
-            applyTraitsForBlock(self.allocator, dimension_value, position) catch return abi.result_not_found;
+            applyTraitsForBlock(self.allocator, dimension_value, position) catch {
+                @branchHint(.unlikely);
+                return abi.result_not_found;
+            };
         }
         if (flags & abi.block_flag_update_clients != 0 and flags & abi.block_flag_silent == 0) {
             var buffer: [64]u8 = undefined;
@@ -2583,7 +2785,10 @@ pub const PluginRuntime = struct {
                 .owns_buffer = false,
             };
             defer stream.deinit();
-            const serialized = serializeBlockUpdate(position, state, &stream) catch return abi.result_out_of_memory;
+            const serialized = serializeBlockUpdate(position, state, &stream) catch {
+                @branchHint(.unlikely);
+                return abi.result_out_of_memory;
+            };
             // Tests run without a network; production always has a Tecton here.
             if (self.tecton != null) block_broadcast.broadcastBlockUpdateToViewers(dimension_value, position, serialized);
         }
@@ -2591,8 +2796,14 @@ pub const PluginRuntime = struct {
     }
 
     fn worldSetBlockState(context: ?*anyopaque, world_handle: u64, dimension: abi.StringView, x: i32, y: i32, z: i32, state: u32, flags: u32) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const world = self.worldFromHandle(world_handle) orelse return abi.result_invalid_handle;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const world = self.worldFromHandle(world_handle) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_handle;
+        };
         return self.setBlockState(world, dimension, x, y, z, state, flags);
     }
 
@@ -2634,24 +2845,60 @@ pub const PluginRuntime = struct {
     }
 
     fn networkSend(context: ?*anyopaque, player_handle: u64, bytes: abi.StringView, priority: u32) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const send_priority = sendPriority(priority) orelse return abi.result_invalid_argument;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const send_priority = sendPriority(priority) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
         const payload = bytes.slice();
-        if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) return abi.result_invalid_argument;
-        const tecton = self.tecton orelse return abi.result_not_found;
-        if (!isTickThread(tecton)) return abi.result_wrong_thread;
-        const player = self.playerFromHandle(player_handle) orelse return abi.result_invalid_handle;
-        tecton.network.sendPacketWith(player.connection, payload, send_priority) catch return abi.result_out_of_memory;
+        if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const tecton = self.tecton orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
+        if (!isTickThread(tecton)) {
+            @branchHint(.unlikely);
+            return abi.result_wrong_thread;
+        }
+        const player = self.playerFromHandle(player_handle) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_handle;
+        };
+        tecton.network.sendPacketWith(player.connection, payload, send_priority) catch {
+            @branchHint(.unlikely);
+            return abi.result_out_of_memory;
+        };
         return abi.result_ok;
     }
 
     fn networkBroadcast(context: ?*anyopaque, bytes: abi.StringView, priority: u32) callconv(.c) i32 {
-        const self = runtimeFrom(context) orelse return abi.result_invalid_argument;
-        const send_priority = sendPriority(priority) orelse return abi.result_invalid_argument;
+        const self = runtimeFrom(context) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
+        const send_priority = sendPriority(priority) orelse {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        };
         const payload = bytes.slice();
-        if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) return abi.result_invalid_argument;
-        const tecton = self.tecton orelse return abi.result_not_found;
-        if (!isTickThread(tecton)) return abi.result_wrong_thread;
+        if (payload.len == 0 or payload.len > MAX_PLUGIN_PACKET_BYTES) {
+            @branchHint(.unlikely);
+            return abi.result_invalid_argument;
+        }
+        const tecton = self.tecton orelse {
+            @branchHint(.unlikely);
+            return abi.result_not_found;
+        };
+        if (!isTickThread(tecton)) {
+            @branchHint(.unlikely);
+            return abi.result_wrong_thread;
+        }
         for (tecton.getPlayerSnapshots()) |player| {
             if (!player.spawned) continue;
             tecton.network.sendPacketWith(player.connection, payload, send_priority) catch {};
@@ -2873,6 +3120,49 @@ test "dispatch with zero subscribers installs no bridge" {
     try std.testing.expect(!events.hasListeners(.ServerTick));
     try std.testing.expectEqual(@as(u32, 0), runtime.active[@intFromEnum(abi.EventId.server_tick)][abi.event_phase_pre]);
     try std.testing.expectEqual(@as(u32, 0), runtime.bridge_total);
+}
+
+test "thirty two subscribers on one event never enter dispatch for another" {
+    var events = Events.Events.init(std.testing.allocator);
+    defer events.deinit();
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+    runtime.attachEvents(&events);
+
+    var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 1, .state = .running };
+    const Probe = struct {
+        calls: u32 = 0,
+
+        fn callback(userdata: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {
+            const probe: *@This() = @ptrCast(@alignCast(userdata.?));
+            probe.calls += 1;
+        }
+    };
+    var probe = Probe{};
+    var subscriptions: [32]u64 = undefined;
+    for (&subscriptions) |*subscription| {
+        try std.testing.expectEqual(
+            abi.result_ok,
+            PluginRuntime.eventSubscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.callback, &probe, subscription),
+        );
+    }
+
+    var tick = Events.types.ServerTickEvent{ .tick = 1 };
+    _ = events.emit(.ServerTick, &tick);
+    try std.testing.expectEqual(@as(u32, 0), probe.calls);
+    try std.testing.expectEqual(@as(u64, 0), slot.events_dispatched);
+    try std.testing.expect(!events.hasListeners(.ServerTick));
+    try std.testing.expectEqual(@as(u32, 1), runtime.bridge_total);
+
+    var start = Events.types.ServerStartEvent{};
+    _ = events.emit(.ServerStart, &start);
+    try std.testing.expectEqual(@as(u32, 32), probe.calls);
+    try std.testing.expectEqual(@as(u64, 32), slot.events_dispatched);
+
+    const dispatched = slot.events_dispatched;
+    _ = events.emit(.ServerTick, &tick);
+    try std.testing.expectEqual(@as(u32, 32), probe.calls);
+    try std.testing.expectEqual(dispatched, slot.events_dispatched);
 }
 
 test "unsubscribe is owner scoped and compacts the bucket" {

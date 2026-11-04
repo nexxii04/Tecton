@@ -88,10 +88,19 @@ pub const Table = struct {
     }
 
     pub fn get(self: *const Table, kind: Kind, handle: u64) ?usize {
-        const decoded = decode(handle) orelse return null;
-        if (decoded.kind != kind or decoded.index >= self.slots.items.len) return null;
+        const decoded = decode(handle) orelse {
+            @branchHint(.unlikely);
+            return null;
+        };
+        if (decoded.kind != kind or decoded.index >= self.slots.items.len) {
+            @branchHint(.unlikely);
+            return null;
+        }
         const slot = self.slots.items[decoded.index];
-        if (!slot.active or slot.generation != decoded.generation) return null;
+        if (!slot.active or slot.generation != decoded.generation) {
+            @branchHint(.unlikely);
+            return null;
+        }
         return slot.pointer;
     }
 
@@ -103,27 +112,51 @@ pub const Table = struct {
     }
 
     pub fn handleFor(self: *const Table, kind: Kind, pointer: usize) ?u64 {
-        const index = self.index.get(pointer) orelse return null;
-        if (index >= self.slots.items.len) return null;
+        const index = self.index.get(pointer) orelse {
+            @branchHint(.unlikely);
+            return null;
+        };
+        if (index >= self.slots.items.len) {
+            @branchHint(.unlikely);
+            return null;
+        }
         const slot = self.slots.items[index];
-        if (!slot.active or slot.kind != kind) return null;
+        if (!slot.active or slot.kind != kind) {
+            @branchHint(.unlikely);
+            return null;
+        }
         return encode(kind, index, slot.generation);
     }
 
     pub fn remove(self: *Table, kind: Kind, handle: u64) bool {
-        const decoded = decode(handle) orelse return false;
-        if (decoded.kind != kind or decoded.index >= self.slots.items.len) return false;
+        const decoded = decode(handle) orelse {
+            @branchHint(.unlikely);
+            return false;
+        };
+        if (decoded.kind != kind or decoded.index >= self.slots.items.len) {
+            @branchHint(.unlikely);
+            return false;
+        }
         const slot = self.slots.items[decoded.index];
-        if (!slot.active or slot.generation != decoded.generation) return false;
+        if (!slot.active or slot.generation != decoded.generation) {
+            @branchHint(.unlikely);
+            return false;
+        }
         self.unlink(decoded.index);
         self.invalidate(decoded.index);
         return true;
     }
 
     pub fn removePointer(self: *Table, kind: Kind, pointer: usize) bool {
-        const index = self.index.get(pointer) orelse return false;
+        const index = self.index.get(pointer) orelse {
+            @branchHint(.unlikely);
+            return false;
+        };
         const slot = self.slots.items[index];
-        if (!slot.active or slot.kind != kind) return false;
+        if (!slot.active or slot.kind != kind) {
+            @branchHint(.unlikely);
+            return false;
+        }
         self.unlink(index);
         self.invalidate(index);
         return true;
@@ -232,7 +265,10 @@ pub const Table = struct {
             6 => .inventory,
             7 => .registration,
             8 => .command,
-            else => return null,
+            else => {
+                @branchHint(.unlikely);
+                return null;
+            },
         };
         return .{
             .kind = kind,

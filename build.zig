@@ -71,6 +71,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
     // Translate with the library's config; mbedTLS sizes its contexts from those macros.
     mirrorModule(mbedtls_translate, mbedtls.root_module);
     const mbedtls_mod = mbedtls_translate.createModule();
@@ -173,6 +174,28 @@ pub fn build(b: *std.Build) void {
     native_example_step.dependOn(b.getInstallStep());
     native_example_step.dependOn(&native_example.step);
 
+    const native_bench = addTestPlugin(b, target, optimize, "tecton-bench-plugin", "tests/plugins/bench_plugin.c");
+    const bench_options = b.addOptions();
+    bench_options.addOptionPath("plugin_path", native_bench.getEmittedBin());
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("tests/plugins/bench_runtime.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
+        .imports = &.{ .{ .name = "tecton", .module = tecton_mod }, .{ .name = "nbt", .module = nbt_mod } },
+    });
+
+    bench_mod.addOptions("bench-options", bench_options);
+    const bench_exe = b.addExecutable(.{ .name = "tecton-bench-plugins", .root_module = bench_mod });
+    bench_exe.root_module.linkLibrary(leveldb_lib);
+    bench_exe.root_module.linkLibrary(zlib_dep.artifact("z"));
+    bench_exe.root_module.linkLibrary(mbedtls);
+    const run_bench = b.addRunArtifact(bench_exe);
+    run_bench.step.dependOn(&native_bench.step);
+    const bench_step = b.step("bench-plugins", "Run the plugin hot-path benchmark (measure with -Doptimize=ReleaseFast)");
+    bench_step.dependOn(&run_bench.step);
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
@@ -184,7 +207,6 @@ pub fn build(b: *std.Build) void {
     const chest_sources = b.addWriteFiles();
     _ = chest_sources.addCopyDirectory(b.path("src/tecton"), "tecton", .{ .include_extensions = &.{ ".zig", ".json" } });
     const chest_root = chest_sources.addCopyFile(b.path("tests/chest/root.zig"), "root.zig");
-    _ = chest_sources.addCopyFile(b.path("tests/architecture/root.zig"), "architecture_root.zig");
     const chest_test_mod = b.createModule(.{
         .root_source_file = chest_root,
         .target = target,
@@ -199,18 +221,6 @@ pub fn build(b: *std.Build) void {
     chest_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
     chest_tests.root_module.linkLibrary(mbedtls);
     const run_chest_tests = b.addRunArtifact(chest_tests);
-
-    const library_test_mod = b.createModule(.{
-        .root_source_file = b.path("tests/library/embedded_api_test.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "tecton", .module = tecton_mod }},
-    });
-    const library_tests = b.addTest(.{ .root_module = library_test_mod });
-    library_tests.root_module.linkLibrary(leveldb_lib);
-    library_tests.root_module.linkLibrary(zlib_dep.artifact("z"));
-    library_tests.root_module.linkLibrary(mbedtls);
-    const run_library_tests = b.addRunArtifact(library_tests);
 
     const plugin_options = b.addOptions();
     plugin_options.addOptionPath("path", native_example.getEmittedBin());
@@ -264,14 +274,37 @@ pub fn build(b: *std.Build) void {
     run_runtime_plugin_tests.step.dependOn(&native_trace_b.step);
     run_runtime_plugin_tests.step.dependOn(&native_trace_duplicate.step);
 
+    const plugin_unit_mod = b.createModule(.{
+        .root_source_file = b.path("src/tecton/plugins_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
+        .imports = &.{
+            .{ .name = "BinaryStream", .module = binarystream_mod },
+            .{ .name = "nethernet", .module = nethernet_mod },
+            .{ .name = "mbedtls", .module = mbedtls_mod },
+            .{ .name = "protocol", .module = protocol_mod },
+            .{ .name = "nbt", .module = nbt_mod },
+            .{ .name = "leveldb", .module = leveldb_mod },
+        },
+    });
+    plugin_unit_mod.linkLibrary(leveldb_lib);
+    plugin_unit_mod.linkLibrary(zlib_dep.artifact("z"));
+    plugin_unit_mod.linkLibrary(mbedtls);
+    const plugin_unit_tests = b.addTest(.{ .root_module = plugin_unit_mod });
+    const run_plugin_unit_tests = b.addRunArtifact(plugin_unit_tests);
+    const plugin_unit_step = b.step("test-plugins", "Run plugin runtime unit tests");
+    plugin_unit_step.dependOn(&run_plugin_unit_tests.step);
+
     const conformance = addPluginConformance(b, target, optimize);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_chest_tests.step);
-    test_step.dependOn(&run_library_tests.step);
     test_step.dependOn(&run_plugin_tests.step);
     test_step.dependOn(&run_runtime_plugin_tests.step);
+    test_step.dependOn(&run_plugin_unit_tests.step);
     test_step.dependOn(conformance);
     const chest_test_step = b.step("test-chest", "Run chest regression tests");
     chest_test_step.dependOn(&run_chest_tests.step);
