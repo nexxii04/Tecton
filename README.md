@@ -11,9 +11,9 @@
 [![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-4C566A?style=for-the-badge)](#-quick-start)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](./LICENSE)
 
-[![GitHub stars](https://img.shields.io/github/stars/nexxii04/Tecton?style=flat-square&logo=github)](https://github.com/nexxii04/Tecton/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/nexxii04/Tecton?style=flat-square)](https://github.com/nexxii04/Tecton/issues)
-[![Last commit](https://img.shields.io/github/last-commit/nexxii04/Tecton?style=flat-square)](https://github.com/nexxii04/Tecton/commits)
+[![GitHub stars](https://img.shields.io/github/stars/tecton-mc/Tecton?style=flat-square&logo=github)](https://github.com/tecton-mc/Tecton/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/tecton-mc/Tecton?style=flat-square)](https://github.com/tecton-mc/Tecton/issues)
+[![Last commit](https://img.shields.io/github/last-commit/tecton-mc/Tecton?style=flat-square)](https://github.com/tecton-mc/Tecton/commits)
 
 <br />
 
@@ -114,7 +114,7 @@ Tecton is built in **Zig** because the problems of Bedrock server software are p
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/nexxii04/Tecton.git
+git clone https://github.com/tecon-mc/Tecton.git
 cd Tecton
 
 # 2. Build and run the server
