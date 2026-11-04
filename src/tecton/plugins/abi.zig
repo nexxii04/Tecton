@@ -1,5 +1,9 @@
 const std = @import("std");
 
+comptime {
+    if (@sizeOf(usize) != 8) @compileError("Tecton plugin ABI requires LP64");
+}
+
 pub const abi_major: u32 = 2;
 pub const abi_minor: u32 = 0;
 pub const descriptor_version: u32 = 2;

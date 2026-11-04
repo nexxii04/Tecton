@@ -728,8 +728,8 @@ typedef struct tecton_command_desc {
   const tecton_string_view *aliases; /* borrowed for the call; copied by host */
   uint32_t alias_count;
   uint32_t reserved;
-  tecton_command_handler_fn handler;
-  void *userdata;
+  tecton_command_handler_fn handler; /* plugin-owned; runs on the tick thread */
+  void *userdata;                    /* plugin-owned; passed back to the handler */
 } tecton_command_desc;
 
 struct tecton_command_call {
@@ -739,7 +739,7 @@ struct tecton_command_call {
   tecton_string_view raw_line;    /* borrowed; no leading '/' */
   uint64_t player;                /* 0 for the console */
   uint64_t world;                 /* 0 when the executor has no world */
-  void *userdata;
+  void *userdata;                 /* plugin-owned; as registered in the descriptor */
 };
 
 typedef struct tecton_commands_api {

@@ -37,6 +37,13 @@ const timer_wheel_slots: usize = 4096;
 const timer_capacity: usize = 4096;
 const timer_none: u32 = std.math.maxInt(u32);
 const max_emit_depth: u32 = 16;
+const allocation_checks = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
+
+const LiveBlock = struct {
+    size: usize,
+    alignment: usize,
+    plugin_id: u32,
+};
 
 pub const PluginState = enum(u8) {
     unloaded,
@@ -78,6 +85,7 @@ pub const PluginRuntime = struct {
     events: ?*Events.Events = null,
     host: abi.HostApi,
     handles: Handles.Table,
+    live_blocks: if (allocation_checks) std.AutoHashMapUnmanaged(usize, LiveBlock) else void = if (allocation_checks) .empty else {},
     plugins: std.ArrayList(*HostSlot),
     slots: std.ArrayList(?*HostSlot),
     buckets: [bucket_count][3]std.ArrayList(Subscription),
@@ -508,6 +516,7 @@ pub const PluginRuntime = struct {
         self.plugins.deinit(self.allocator);
         self.slots.deinit(self.allocator);
         self.handles.deinit();
+        if (comptime allocation_checks) self.live_blocks.deinit(self.allocator);
         self.tasks = null;
         self.command_registry = null;
         self.events = null;
@@ -799,6 +808,7 @@ pub const PluginRuntime = struct {
                 diagnostics.native = null;
             }
         }
+        self.reclaimBlocks(slot);
     }
 
     fn unloadSlot(self: *PluginRuntime, slot: *HostSlot, reason: abi.ShutdownReason) void {
@@ -1758,30 +1768,112 @@ pub const PluginRuntime = struct {
         return std.mem.endsWith(u8, name, ".so");
     }
 
+    const BlockSpan = struct {
+        size: usize,
+        alignment: usize,
+    };
+
+    fn trackBlock(self: *PluginRuntime, plugin_id: u32, memory: *anyopaque, size: usize, alignment: usize) bool {
+        if (comptime allocation_checks) {
+            self.live_blocks.put(self.allocator, @intFromPtr(memory), .{ .size = size, .alignment = alignment, .plugin_id = plugin_id }) catch return false;
+        }
+        return true;
+    }
+
+    fn blockSpan(self: *PluginRuntime, slot: *HostSlot, memory: *anyopaque, size: usize, alignment: usize) BlockSpan {
+        if (comptime allocation_checks) {
+            if (self.live_blocks.get(@intFromPtr(memory))) |entry| {
+                if (entry.size != size or entry.alignment != alignment) {
+                    logger.warn("[plugin:{s}] allocator: size={d} alignment={d} expected={d}/{d}", .{ slot.name, size, alignment, entry.size, entry.alignment });
+                    return .{ .size = entry.size, .alignment = entry.alignment };
+                }
+                return .{ .size = size, .alignment = alignment };
+            }
+            logger.warn("[plugin:{s}] allocator: untracked block size={d} alignment={d}", .{ slot.name, size, alignment });
+        }
+        return .{ .size = size, .alignment = alignment };
+    }
+
+    fn reclaimBlocks(self: *PluginRuntime, slot: *HostSlot) void {
+        if (comptime allocation_checks) {
+            var live_count: usize = 0;
+            var bytes: usize = 0;
+            var scan = self.live_blocks.iterator();
+            while (scan.next()) |entry| {
+                if (entry.value_ptr.plugin_id != slot.plugin_id) continue;
+                live_count += 1;
+                bytes += entry.value_ptr.size;
+            }
+            if (live_count == 0) return;
+            logger.warn("[plugin:{s}] allocator: reclaiming {d} live blocks ({d} bytes)", .{ slot.name, live_count, bytes });
+            while (true) {
+                var key: ?usize = null;
+                var iterator = self.live_blocks.iterator();
+                while (iterator.next()) |entry| {
+                    if (entry.value_ptr.plugin_id != slot.plugin_id) continue;
+                    key = entry.key_ptr.*;
+                    break;
+                }
+                const found = key orelse return;
+                const released = self.live_blocks.fetchRemove(found) orelse return;
+                self.allocator.rawFree(@as([*]u8, @ptrFromInt(found))[0..released.value.size], .fromByteUnits(released.value.alignment), @returnAddress());
+            }
+        }
+    }
+
     fn allocate(context: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque {
-        const self = runtimeFrom(context) orelse return null;
+        const slot = slotFrom(context) orelse return null;
+        const self = slot.runtime;
         if (size == 0) return null;
-        return self.allocator.rawAlloc(size, .fromByteUnits(@max(alignment, 1)), @returnAddress());
+        
+        const aligned = @max(alignment, 1);
+        const memory = self.allocator.rawAlloc(size, .fromByteUnits(aligned), @returnAddress()) orelse return null;
+        if (comptime allocation_checks) {
+            if (!self.trackBlock(slot.plugin_id, memory, size, aligned)) {
+                self.allocator.rawFree(@as([*]u8, @ptrCast(memory))[0..size], .fromByteUnits(aligned), @returnAddress());
+                return null;
+            }
+        }
+        return memory;
     }
 
     fn free(context: ?*anyopaque, memory: ?*anyopaque, size: usize, alignment: usize) callconv(.c) void {
-        const self = runtimeFrom(context) orelse return;
+        const slot = slotFrom(context) orelse return;
+        const self = slot.runtime;
         if (size == 0) return;
+
         const ptr = memory orelse return;
-        self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..size], .fromByteUnits(@max(alignment, 1)), @returnAddress());
+        const span = self.blockSpan(slot, ptr, size, @max(alignment, 1));
+        if (comptime allocation_checks) _ = self.live_blocks.remove(@intFromPtr(ptr));
+        self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..span.size], .fromByteUnits(span.alignment), @returnAddress());
     }
 
     fn reallocate(context: ?*anyopaque, memory: ?*anyopaque, old_size: usize, new_size: usize, alignment: usize) callconv(.c) ?*anyopaque {
-        const self = runtimeFrom(context) orelse return null;
+        const slot = slotFrom(context) orelse return null;
+        const self = slot.runtime;
+        const aligned = @max(alignment, 1);
         if (new_size == 0) {
-            if (memory) |ptr| self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..old_size], .fromByteUnits(@max(alignment, 1)), @returnAddress());
+            if (memory) |ptr| {
+                const span = self.blockSpan(slot, ptr, old_size, aligned);
+                if (comptime allocation_checks) _ = self.live_blocks.remove(@intFromPtr(ptr));
+                self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..span.size], .fromByteUnits(span.alignment), @returnAddress());
+            }
             return null;
         }
-        const replacement = self.allocator.rawAlloc(new_size, .fromByteUnits(@max(alignment, 1)), @returnAddress()) orelse return null;
+        var source = BlockSpan{ .size = old_size, .alignment = aligned };
+        if (memory) |ptr| source = self.blockSpan(slot, ptr, old_size, aligned);
+        const replacement = self.allocator.rawAlloc(new_size, .fromByteUnits(aligned), @returnAddress()) orelse return null;
+        if (comptime allocation_checks) {
+            if (!self.trackBlock(slot.plugin_id, replacement, new_size, aligned)) {
+                self.allocator.rawFree(@as([*]u8, @ptrCast(replacement))[0..new_size], .fromByteUnits(aligned), @returnAddress());
+                return null;
+            }
+        }
         if (memory) |ptr| {
-            const copy_size = @min(old_size, new_size);
+            const copy_size = @min(source.size, new_size);
             @memcpy(@as([*]u8, @ptrCast(replacement))[0..copy_size], @as([*]const u8, @ptrCast(ptr))[0..copy_size]);
-            self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..old_size], .fromByteUnits(@max(alignment, 1)), @returnAddress());
+            if (comptime allocation_checks) _ = self.live_blocks.remove(@intFromPtr(ptr));
+            self.allocator.rawFree(@as([*]u8, @ptrCast(ptr))[0..source.size], .fromByteUnits(source.alignment), @returnAddress());
         }
         return replacement;
     }
@@ -3722,6 +3814,61 @@ test "set block applies traits only when requested" {
 
 test "plugin commands execute with borrowed argv and disappear on owner unload" {
     try @import("runtime_test.zig").Suite(test_scope).case_038();
+}
+
+test "host allocator tracks live blocks and survives a mismatched free" {
+    var runtime = PluginRuntime.init(std.testing.allocator);
+    defer runtime.deinit();
+    var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 1 };
+
+    const memory = PluginRuntime.allocate(@ptrCast(&slot), 96, 16) orelse return error.OutOfMemory;
+    if (comptime allocation_checks) try std.testing.expectEqual(@as(usize, 1), runtime.live_blocks.count());
+    PluginRuntime.free(@ptrCast(&slot), memory, 96, 16);
+    if (comptime allocation_checks) try std.testing.expectEqual(@as(usize, 0), runtime.live_blocks.count());
+
+    const zeroed = PluginRuntime.allocateZeroed(@ptrCast(&slot), 32, 8) orelse return error.OutOfMemory;
+    const grown = PluginRuntime.reallocate(@ptrCast(&slot), zeroed, 32, 64, 8) orelse return error.OutOfMemory;
+    PluginRuntime.free(@ptrCast(&slot), grown, 64, 8);
+    if (comptime allocation_checks) try std.testing.expectEqual(@as(usize, 0), runtime.live_blocks.count());
+
+    if (comptime allocation_checks) {
+        const mismatch = PluginRuntime.allocate(@ptrCast(&slot), 24, 8) orelse return error.OutOfMemory;
+        PluginRuntime.free(@ptrCast(&slot), mismatch, 64, 8);
+        try std.testing.expectEqual(@as(usize, 0), runtime.live_blocks.count());
+
+        _ = PluginRuntime.allocate(@ptrCast(&slot), 48, 8) orelse return error.OutOfMemory;
+        runtime.reclaimBlocks(&slot);
+        try std.testing.expectEqual(@as(usize, 0), runtime.live_blocks.count());
+    }
+}
+
+test "reallocate keeps the original block when tracking fails" {
+    if (comptime allocation_checks) {
+        var runtime = PluginRuntime.init(std.testing.allocator);
+        defer runtime.deinit();
+        var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 1 };
+        const memory = PluginRuntime.allocate(@ptrCast(&slot), 32, 8) orelse return error.OutOfMemory;
+        const bytes = @as([*]u8, @ptrCast(memory))[0..32];
+        @memset(bytes, 0x5a);
+
+        var filler: usize = 1;
+        while (runtime.live_blocks.available > 0) : (filler += 1) {
+            try runtime.live_blocks.put(std.testing.allocator, filler, .{ .size = 0, .alignment = 1, .plugin_id = 2 });
+        }
+
+        var buffer: [128]u8 align(16) = undefined;
+        var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+        const probe = fixed.allocator().rawAlloc(96, .fromByteUnits(8), @returnAddress()) orelse return error.OutOfMemory;
+        fixed.allocator().rawFree(probe[0..96], .fromByteUnits(8), @returnAddress());
+        runtime.allocator = fixed.allocator();
+        try std.testing.expect(PluginRuntime.reallocate(@ptrCast(&slot), memory, 32, 96, 8) == null);
+        try std.testing.expect(runtime.live_blocks.contains(@intFromPtr(memory)));
+        try std.testing.expectEqual(@as(u8, 0x5a), bytes[0]);
+
+        runtime.allocator = std.testing.allocator;
+        PluginRuntime.free(@ptrCast(&slot), memory, 32, 8);
+        try std.testing.expect(!runtime.live_blocks.contains(@intFromPtr(memory)));
+    }
 }
 
 test "unknown interface id returns unsupported" {
