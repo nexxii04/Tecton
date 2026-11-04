@@ -149,6 +149,7 @@ pub fn onTick(context: ?*anyopaque) void {
     if (tecton.tick_callback) |callback| callback(tecton.tick_userdata);
 
     tecton.flushMovementBroadcasts();
+    tecton.plugin_runtime.endTick();
 
     if (tick_drains_input) {
         phase_start = Timestamp.now(tecton.io, .awake);

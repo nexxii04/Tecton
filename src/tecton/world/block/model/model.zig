@@ -115,6 +115,11 @@ pub const BlockPermutation = struct {
         return permutations.valueIterator();
     }
 
+    pub fn count() usize {
+        if (!permutations_initialized) return 0;
+        return permutations.count();
+    }
+
     pub fn matches(self: *const BlockPermutation, state: BlockState) bool {
         var iter = state.iterator();
         while (iter.next()) |entry| {

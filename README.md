@@ -361,9 +361,9 @@ Tecton exposes a **versioned C ABI** through `include/tecton_plugin.h`. Any lang
 **How it works**
 
 1. At startup, the server discovers plugins in the flat `plugins/` directory.
-2. Each plugin exports `tecton_plugin_get_descriptor`, providing metadata and lifecycle callbacks.
-3. The loader validates the ABI, descriptor size, API version, protocol version, and callback presence before invoking anything.
-4. Plugins receive a bounded **host service table** for logging, memory, world lookup, and block updates.
+2. Each plugin exports `tecton_plugin_query`, which returns its ABI status, version, layout fingerprint, and descriptor.
+3. The loader validates the ABI version, descriptor version, layout fingerprint, metadata, required features, and callbacks before invoking anything.
+4. Plugins receive a 120-byte **host API** for logging, memory, events, timers, and interface lookup; world, player, entity, item, block, inventory, and network operations are obtained through `get_interface` and cached.
 5. Plugins can subscribe to and unsubscribe from server events, read the marshaled tick payload, and cancel dispatch during cancellable phases.
 6. Libraries are unloaded cleanly on server shutdown.
 

@@ -17,12 +17,16 @@ pub const ItemType = struct {
 
     var types: std.StringHashMap(*ItemType) = undefined;
     var network_map: std.AutoHashMap(i32, *ItemType) = undefined;
+    var dense: std.ArrayList(*ItemType) = .empty;
+    var registry_allocator: std.mem.Allocator = undefined;
     var types_initialized = false;
 
     pub fn initRegistry(allocator: std.mem.Allocator) !void {
         if (!types_initialized) {
             types = std.StringHashMap(*ItemType).init(allocator);
             network_map = std.AutoHashMap(i32, *ItemType).init(allocator);
+            dense = .empty;
+            registry_allocator = allocator;
             types_initialized = true;
         }
     }
@@ -35,6 +39,7 @@ pub const ItemType = struct {
             }
             types.deinit();
             network_map.deinit();
+            dense.deinit(registry_allocator);
             types_initialized = false;
         }
     }
@@ -79,7 +84,20 @@ pub const ItemType = struct {
 
     pub fn register(self: *ItemType) !void {
         try types.put(self.identifier, self);
+        errdefer _ = types.remove(self.identifier);
         try network_map.put(self.network_id, self);
+        errdefer _ = network_map.remove(self.network_id);
+        try dense.append(registry_allocator, self);
+    }
+
+    pub fn at(index: usize) ?*ItemType {
+        if (!types_initialized or index >= dense.items.len) return null;
+        return dense.items[index];
+    }
+
+    pub fn denseItems() []const *ItemType {
+        if (!types_initialized) return &.{};
+        return dense.items;
     }
 
     pub fn get(identifier: []const u8) ?*ItemType {
@@ -92,6 +110,11 @@ pub const ItemType = struct {
 
     pub fn getAll() std.StringHashMap(*ItemType) {
         return types;
+    }
+
+    pub fn count() usize {
+        if (!types_initialized) return 0;
+        return types.count();
     }
 
     pub fn hasTag(self: *const ItemType, tag: []const u8) bool {

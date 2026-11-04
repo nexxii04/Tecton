@@ -52,6 +52,7 @@ pub fn hostChecked(tecton: *Tecton) HostError!Host {
         .find_player_by_runtime_id = players.findPlayerByRuntimeId,
         .register_ecs_entity = lifecycle.registerEcsEntity,
         .unregister_ecs_entity = lifecycle.unregisterEcsEntity,
+        .note_entity_removed = lifecycle.noteEntityRemoved,
         .set_player_location = players.setPlayerLocation,
         .enqueue_player_removal = players.enqueuePlayerRemoval,
         .remove_player = players.removePlayer,

@@ -25,6 +25,7 @@ pub const CommandRegistry = struct {
     alias_map: std.StringHashMap(*Command),
     enums: std.ArrayList(CommandEnum),
     soft_enums: std.ArrayList(SoftEnum),
+    dirty: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) CommandRegistry {
         return .{
@@ -55,6 +56,57 @@ pub const CommandRegistry = struct {
         for (cmd.aliases) |alias| {
             try self.alias_map.put(alias, cmd);
         }
+    }
+
+    pub fn registerOwnedCommand(self: *CommandRegistry, cmd: *Command) !void {
+        if (self.commands.contains(cmd.name) or self.alias_map.contains(cmd.name)) return error.Conflict;
+        for (cmd.aliases) |alias| {
+            if (self.commands.contains(alias) or self.alias_map.contains(alias)) return error.Conflict;
+        }
+        try self.commands.ensureUnusedCapacity(1);
+        try self.alias_map.ensureUnusedCapacity(@intCast(cmd.aliases.len));
+        self.commands.putAssumeCapacity(cmd.name, cmd);
+        for (cmd.aliases) |alias| self.alias_map.putAssumeCapacity(alias, cmd);
+    }
+
+    pub fn unregisterCommand(self: *CommandRegistry, cmd: *Command) void {
+        if (self.commands.get(cmd.name)) |existing| {
+            if (existing == cmd) _ = self.commands.remove(cmd.name);
+        }
+        for (cmd.aliases) |alias| {
+            if (self.alias_map.get(alias)) |existing| {
+                if (existing == cmd) _ = self.alias_map.remove(alias);
+            }
+        }
+        cmd.deinit();
+    }
+
+    pub fn removeOwned(self: *CommandRegistry, plugin_id: u32) usize {
+        var removed: usize = 0;
+        while (true) {
+            var found: ?*Command = null;
+            var iterator = self.commands.valueIterator();
+            while (iterator.next()) |cmd| {
+                if (cmd.*.owner_plugin_id != plugin_id) continue;
+                found = cmd.*;
+                break;
+            }
+            const cmd = found orelse break;
+            self.unregisterCommand(cmd);
+            removed += 1;
+        }
+        if (removed > 0) self.dirty = true;
+        return removed;
+    }
+
+    pub fn markDirty(self: *CommandRegistry) void {
+        self.dirty = true;
+    }
+
+    pub fn consumeDirty(self: *CommandRegistry) bool {
+        const dirty = self.dirty;
+        self.dirty = false;
+        return dirty;
     }
 
     pub fn registerEnum(self: *CommandRegistry, enum_def: CommandEnum) !u32 {
@@ -127,9 +179,12 @@ pub const CommandRegistry = struct {
             }
         }
 
+        const raw_line = if (command_line.len > 0 and command_line[0] == '/') command_line[1..] else command_line;
         var ctx = CommandContext{
             .player = player,
             .args = parsed.args,
+            .command = cmd,
+            .raw_line = raw_line,
             .network = network,
             .views = views,
             .allocator = self.allocator,

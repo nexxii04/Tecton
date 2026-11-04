@@ -647,6 +647,7 @@ pub const Tecton = struct {
         self.plugin_runtime.setServerState(2);
         var event = Events.types.ServerShutdownEvent{};
         _ = self.events.emit(.ServerShutdown, &event);
+        self.plugin_runtime.unloadAll(.server_exit);
 
         // Include a player that logged in after this tick's snapshot, then copy: closing a
         // player republishes the snapshot this loop would otherwise walk.
@@ -745,6 +746,7 @@ pub const Tecton = struct {
         for (pending.items) |player| {
             var event = Events.types.PlayerDisconnectEvent{ .player = player };
             _ = self.events.emit(.PlayerDisconnect, &event);
+            self.plugin_runtime.notePlayerRemoved(player);
             self.instances.leave(player.entity.runtime_id);
             player.finalizeRemoval();
         }
@@ -984,6 +986,8 @@ pub const Tecton = struct {
         self.save.deinit(self.allocator);
         self.threaded_tasks.deinit();
         self.shutting_down = true;
+        // on_shutdown runs while the transport, players and worlds it may borrow are alive.
+        self.plugin_runtime.unloadAll(.server_exit);
 
         log.info("Allocator: {d} KiB mapped in {d} pool chunks, {d} contention spins", .{
             pool_allocator.mappedBytes() / 1024,
@@ -1019,9 +1023,10 @@ pub const Tecton = struct {
         self.players.destroyPlayers();
         self.players.deinit();
         self.visibility_batch.deinit(self.allocator);
-        self.plugin_runtime.deinit();
 
+        // Entity handles die with their world, so the runtime that owns them is torn down last.
         self.worlds.deinit();
+        self.plugin_runtime.deinit();
 
         deinitRegistries();
         EntityTraits.deinitEntityTraitRegistry();

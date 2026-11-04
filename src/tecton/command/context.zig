@@ -5,6 +5,7 @@ const Protocol = @import("protocol");
 
 const NetworkHandler = @import("../transport/network_handler.zig").NetworkHandler;
 const Player = @import("../player/player.zig").Player;
+const Command = @import("command.zig").Command;
 const contracts = @import("../core/contracts.zig");
 const World = @import("../world/world.zig").World;
 const Events = @import("../events/root.zig").Events;
@@ -19,6 +20,8 @@ pub const CommandContext = struct {
     views: CommandViews,
     allocator: std.mem.Allocator,
     command_userdata: ?*anyopaque = null,
+    command: ?*Command = null,
+    raw_line: []const u8 = "",
 
     origin_type: []const u8 = "player",
     uuid: [16]u8 = .{0} ** 16,

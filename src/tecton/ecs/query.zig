@@ -192,7 +192,7 @@ test "eachKind filters by entity kind" {
     }
 
     var mob_tags: usize = 0;
-    eachKind(&world, .mob, .{ Tag }, &mob_tags, struct {
+    eachKind(&world, .mob, .{Tag}, &mob_tags, struct {
         fn call(count: *usize, _: EntityId, _: *Tag) void {
             count.* += 1;
         }
@@ -234,5 +234,5 @@ test "queries drive from the smallest store" {
     try world.add(tagged, Marker{});
 
     try std.testing.expectEqual(@as(usize, 1), countMatching(&world, .{ Tag, Marker }));
-    try std.testing.expectEqual(tagged, first(&world, .{ Marker }).?);
+    try std.testing.expectEqual(tagged, first(&world, .{Marker}).?);
 }

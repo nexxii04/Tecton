@@ -43,6 +43,7 @@ fn spawnEntityAt(dim: *Dimension, entity_type: *const EntityType, position: Prot
     dim.world.tecton.registerEcsEntity(entity);
     try applyGlobalTraits(dim.allocator, entity);
     try dim.entities.put(entity.runtime_id, entity);
+    dim.noteEntityMutation();
     dim.entity_index.add(entity);
     try broadcastAddEntity(dim, entity);
     return entity;
@@ -52,7 +53,9 @@ pub fn removeEntity(dim: *Dimension, entity: *Entity) !void {
     try broadcastRemoveEntity(dim, entity);
     dim.entity_index.remove(entity.runtime_id);
     _ = dim.entities.remove(entity.runtime_id);
+    dim.noteEntityMutation();
     dim.world.tecton.unregisterEcsEntity(entity);
+    dim.world.tecton.noteEntityRemoved(entity);
     entity.deinit();
     dim.allocator.destroy(entity);
 }
@@ -61,9 +64,11 @@ pub fn flushPendingRemovals(dim: *Dimension) void {
     for (dim.pending_removals.items) |rid| {
         if (dim.entities.fetchRemove(rid)) |entry| {
             var entity = entry.value;
+            dim.noteEntityMutation();
             dim.entity_index.remove(rid);
             broadcastRemoveEntity(dim, entity) catch {};
             dim.world.tecton.unregisterEcsEntity(entity);
+            dim.world.tecton.noteEntityRemoved(entity);
             entity.deinit();
             dim.allocator.destroy(entity);
         }

@@ -16,6 +16,10 @@ pub fn Suite(comptime Tecton: type, comptime Entity: type, comptime Dimension: t
             cast(ctx).unregisterEcsEntity(entity);
         }
 
+        pub fn noteEntityRemoved(ctx: *anyopaque, entity: *Entity) void {
+            cast(ctx).plugin_runtime.noteEntityRemoved(entity);
+        }
+
         pub fn refreshWorldCommandEnums(ctx: *anyopaque) void {
             cast(ctx).refreshWorldCommandEnums();
         }

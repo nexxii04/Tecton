@@ -24,6 +24,10 @@ pub const Command = struct {
     subcommands: std.StringHashMap(*SubCommand),
     handler: CommandHandlerFn,
     userdata: ?*anyopaque = null,
+    owner_plugin_id: u32 = 0,
+    plugin_handler: ?*const anyopaque = null,
+    plugin_runtime: ?*anyopaque = null,
+    owned_strings: bool = false,
     subcommand_enum: ?CommandEnum = null,
     subcommand_overload_params: std.ArrayList([]const CommandParameter),
     subcommand_param_copies: std.ArrayList([]const CommandParameter),
@@ -55,6 +59,13 @@ pub const Command = struct {
     }
 
     pub fn deinit(self: *Command) void {
+        if (self.owned_strings) {
+            self.allocator.free(self.name);
+            self.allocator.free(self.description);
+            self.allocator.free(self.permission);
+            for (self.aliases) |alias| self.allocator.free(alias);
+            self.allocator.free(self.aliases);
+        }
         for (self.overloads.items) |overload| {
             if (!self.isSubcommandOverload(overload)) {
                 self.allocator.free(overload.params);

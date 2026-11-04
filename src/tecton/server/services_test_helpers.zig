@@ -62,6 +62,7 @@ pub fn Fixture(comptime scope: type) type {
             tecton.network_initialized = true;
             tecton.mob_broadcast_interval = 2;
             tecton.events = Events.init(allocator);
+            tecton.plugin_runtime = @import("../plugins/runtime.zig").PluginRuntime.init(allocator);
             tecton.fixAddress();
         }
 

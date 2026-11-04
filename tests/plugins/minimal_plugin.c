@@ -1,85 +1,113 @@
 #include <tecton_plugin.h>
 
 static tecton_plugin_context *context;
+static const tecton_host_api *host;
+static void *host_userdata;
 static uint64_t subscription;
-static const char name[] = "tecton-c-example";
-static const char version[] = "1.0.0";
-static const char description[] = "Minimal C ABI integration plugin";
-static const char started_message[] = "C plugin started";
-static const char stopped_message[] = "C plugin stopped";
+static uint32_t lifecycle_mask;
 
-static int32_t TECTON_PLUGIN_CALL on_load(tecton_plugin_context *value) {
-  context = value;
-  return context != 0 && context->host != 0 ? 0 : 1;
-}
-
-static void TECTON_PLUGIN_CALL on_event(void *userdata,
-                                         const tecton_event_view *event) {
+static void TECTON_PLUGIN_CALL on_tick_event(void *userdata,
+                                              const tecton_event_view *event) {
   (void)userdata;
-  tecton_plugin_context *value = context;
-  if (event->event_id != TECTON_EVENT_SERVER_TICK ||
-      event->data_size != sizeof(tecton_server_tick_event))
+  if (event->schema != TECTON_SCHEMA_SERVER_TICK)
     return;
   const tecton_server_tick_event *tick = event->data;
-  if (tick->tick == 0 || value == 0 || value->host == 0 ||
-      value->host->log == 0)
+  if (tick->tick == 0)
     return;
-  static const char message_text[] = "C plugin observed server tick";
-  tecton_string_view message = {message_text, sizeof(message_text) - 1};
-  value->host->log(value->host->userdata, 1, message);
+  host->log(host_userdata, TECTON_LOG_INFO,
+            TECTON_STR("C plugin observed server tick"));
+}
+
+static int32_t TECTON_PLUGIN_CALL on_load(tecton_plugin_context *value) {
+  if (value == 0 || value->host == 0)
+    return 1;
+  context = value;
+  host = value->host;
+  host_userdata = host->userdata;
+  lifecycle_mask |= 1u;
+  return 0;
 }
 
 static int32_t TECTON_PLUGIN_CALL on_start(tecton_plugin_context *value) {
-  if (value == 0 || value->host == 0 || value->host->log == 0)
+  (void)value;
+  if (host->event_subscribe(host_userdata, TECTON_EVENT_SERVER_TICK,
+                            TECTON_EVENT_PHASE_PRE, 0, on_tick_event, 0,
+                            &subscription) != 0)
     return 1;
-  tecton_string_view message = {started_message, sizeof(started_message) - 1};
-  value->host->log(value->host->userdata, 1, message);
-  if (value->host->event_subscribe(
-          value->host->userdata, TECTON_EVENT_SERVER_TICK,
-          TECTON_EVENT_PHASE_PRE, 0, on_event, value, &subscription) != 0)
-    return 1;
+  lifecycle_mask |= 2u;
+  host->log(host_userdata, TECTON_LOG_INFO, TECTON_STR("C plugin started"));
   return 0;
+}
+
+static void TECTON_PLUGIN_CALL on_ready(tecton_plugin_context *value) {
+  (void)value;
+  lifecycle_mask |= 4u;
 }
 
 static void TECTON_PLUGIN_CALL on_shutdown(tecton_plugin_context *value,
                                             uint32_t reason) {
+  (void)value;
   (void)reason;
-  if (value != 0 && value->host != 0 && value->host->event_unsubscribe != 0 &&
-      subscription != 0) {
-    value->host->event_unsubscribe(value->host->userdata, subscription);
+  if (subscription != 0) {
+    host->event_unsubscribe(host_userdata, subscription);
     subscription = 0;
   }
-  if (value != 0 && value->host != 0 && value->host->log != 0) {
-    tecton_string_view message = {stopped_message,
-                                   sizeof(stopped_message) - 1};
-    value->host->log(value->host->userdata, 1, message);
-  }
+  lifecycle_mask |= 8u;
+  host->log(host_userdata, TECTON_LOG_INFO, TECTON_STR("C plugin stopped"));
 }
 
 static void TECTON_PLUGIN_CALL on_unload(tecton_plugin_context *value) {
   (void)value;
   context = 0;
+  host = 0;
+  host_userdata = 0;
+  lifecycle_mask |= 16u;
 }
 
 static const tecton_plugin_descriptor descriptor = {
-    sizeof(tecton_plugin_descriptor),
-    TECTON_PLUGIN_DESCRIPTOR_VERSION,
-    {sizeof(tecton_plugin_metadata),
-     {name, sizeof(name) - 1},
-     {version, sizeof(version) - 1},
-     {description, sizeof(description) - 1},
-     {TECTON_PLUGIN_ABI_MAJOR, TECTON_PLUGIN_DESCRIPTOR_QUERY_MINOR, 2169},
-     0},
-    on_load,
-    on_start,
-    on_shutdown,
-    on_unload};
+    .struct_size = sizeof(tecton_plugin_descriptor),
+    .descriptor_version = TECTON_PLUGIN_DESCRIPTOR_VERSION,
+    .abi_fingerprint = TECTON_ABI_FINGERPRINT,
+    .metadata =
+        {
+            .struct_size = sizeof(tecton_plugin_metadata),
+            .plugin_flags = 0,
+            .name = TECTON_STR("tecton-c-example"),
+            .version = TECTON_STR("2.0.0"),
+            .description = TECTON_STR("Minimal ABI 2.0 integration plugin"),
+            .api = {TECTON_PLUGIN_ABI_MAJOR, TECTON_PLUGIN_ABI_MINOR, 0, 0},
+            .required_features = TECTON_FEATURE_EVENTS | TECTON_FEATURE_LOGGING,
+            .optional_features = 0,
+        },
+    .on_load = on_load,
+    .on_start = on_start,
+    .on_shutdown = on_shutdown,
+    .on_unload = on_unload,
+    .on_ready = on_ready,
+};
 
-TECTON_PLUGIN_EXPORT const tecton_plugin_descriptor *TECTON_PLUGIN_CALL
-tecton_plugin_get_descriptor(uint32_t host_abi_major,
-                              uint32_t host_abi_minor) {
-  if (host_abi_major != TECTON_PLUGIN_ABI_MAJOR ||
-      host_abi_minor > TECTON_PLUGIN_ABI_MINOR)
-    return 0;
-  return &descriptor;
+TECTON_PLUGIN_EXPORT uint32_t TECTON_PLUGIN_CALL
+tecton_minimal_lifecycle_mask(void) { return lifecycle_mask; }
+
+TECTON_PLUGIN_EXPORT int32_t TECTON_PLUGIN_CALL
+tecton_plugin_query(const tecton_host_query *query, tecton_plugin_info *info) {
+  if (query == 0 || info == 0 || info->struct_size < sizeof(*info))
+    return TECTON_RESULT_INVALID_ARGUMENT;
+  info->descriptor = 0;
+  info->diagnostic = TECTON_STR("");
+  if (query->abi_major != TECTON_PLUGIN_ABI_MAJOR) {
+    info->status = TECTON_PLUGIN_STATUS_ABI_MAJOR;
+    return TECTON_RESULT_VERSION;
+  }
+  if (query->abi_fingerprint != TECTON_ABI_FINGERPRINT) {
+    info->status = TECTON_PLUGIN_STATUS_ABI_MINOR;
+    return TECTON_RESULT_VERSION;
+  }
+  info->status = TECTON_PLUGIN_STATUS_OK;
+  info->abi_major = TECTON_PLUGIN_ABI_MAJOR;
+  info->abi_minor = TECTON_PLUGIN_ABI_MINOR;
+  info->abi_fingerprint = TECTON_ABI_FINGERPRINT;
+  info->descriptor = &descriptor;
+  (void)context;
+  return TECTON_RESULT_OK;
 }
