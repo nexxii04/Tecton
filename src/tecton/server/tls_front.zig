@@ -527,8 +527,7 @@ const Connection = struct {
                 waited_ms += @intCast(slice_ms);
                 continue;
             }
-            var slices = [1][]u8{buf[0..len]};
-            const read = io.vtable.netRead(io.userdata, self.client.socket.handle, &slices) catch
+            const read = readStream(io, self.client.socket.handle, buf[0..len]) catch
                 return mbedtls.MBEDTLS_ERR_NET_RECV_FAILED;
             return @intCast(read);
         }
@@ -569,7 +568,12 @@ fn writeStreamAll(io: std.Io, handle: std.Io.net.Socket.Handle, bytes: []const u
     var remaining = bytes;
     while (remaining.len > 0) {
         const data = [1][]const u8{remaining};
-        const written = try io.vtable.netWrite(io.userdata, handle, "", &data, 1);
+        const written = try (try io.operate(.{ .net_write = .{
+            .socket_handle = handle,
+            .header = "",
+            .data = &data,
+            .splat = 1,
+        } })).net_write;
         if (written == 0) return error.ConnectionClosed;
         remaining = remaining[written..];
     }
@@ -577,7 +581,9 @@ fn writeStreamAll(io: std.Io, handle: std.Io.net.Socket.Handle, bytes: []const u
 
 fn readStream(io: std.Io, handle: std.Io.net.Socket.Handle, buffer: []u8) !usize {
     var slices = [1][]u8{buffer};
-    return io.vtable.netRead(io.userdata, handle, &slices);
+    const result = try io.operate(.{ .net_read = .{ .socket_handle = handle, .data = &slices } });
+    const rc = try result.net_read;
+    return rc.data_len;
 }
 
 const PeekError = error{ Interrupted, WouldBlock, ConnectionClosed };
@@ -763,8 +769,7 @@ const TestClient = struct {
 
     fn clientRecv(raw: ?*anyopaque, buf: [*c]u8, len: usize) callconv(.c) c_int {
         const self: *TestClient = @ptrCast(@alignCast(raw.?));
-        var slices = [1][]u8{buf[0..len]};
-        const count = self.io.vtable.netRead(self.io.userdata, self.stream.socket.handle, &slices) catch
+        const count = readStream(self.io, self.stream.socket.handle, buf[0..len]) catch
             return mbedtls.MBEDTLS_ERR_NET_RECV_FAILED;
         return @intCast(count);
     }
@@ -796,7 +801,7 @@ const FloodBackend = struct {
         _ = readStream(self.io, stream.socket.handle, &buffer) catch return;
 
         self.flooding.store(true, .release);
-        const chunk = [_]u8{'x'} ** (16 * 1024);
+        const chunk: [16 * 1024]u8 = @splat('x');
         var sent: usize = 0;
         while (sent < 8 * 1024 * 1024) : (sent += chunk.len) {
             writeStreamAll(self.io, stream.socket.handle, &chunk) catch return;

@@ -17,7 +17,7 @@ pub const PayloadBuffers = struct {
     };
 
     parent: std.mem.Allocator,
-    classes: [class_sizes.len]Class = [_]Class{.{}} ** class_sizes.len,
+    classes: [class_sizes.len]Class = @splat(Class{}),
     locked: std.atomic.Value(bool) = .init(false),
 
     pub fn init(parent: std.mem.Allocator) PayloadBuffers {
@@ -31,7 +31,7 @@ pub const PayloadBuffers = struct {
             if (class.free_slots.len > 0) parent.free(class.free_slots);
             if (class.in_use.len > 0) parent.free(class.in_use);
         }
-        self.classes = [_]Class{.{}} ** class_sizes.len;
+        self.classes = @splat(Class{});
     }
 
     pub fn allocator(self: *PayloadBuffers) std.mem.Allocator {

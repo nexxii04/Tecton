@@ -399,11 +399,11 @@ test "a canceled block place leaves the target empty and the stack intact on the
 
     const Cancel = struct {
         fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
-            view.result.* = @intFromEnum(abi.EventResult.cancel);
+            view.result.* = @backingInt(abi.EventResult.cancel);
         }
     };
     var subscription: u64 = 0;
-    try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.block_place), abi.event_phase_pre, 0, Cancel.callback, null, &subscription));
+    try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.block_place), abi.event_phase_pre, 0, Cancel.callback, null, &subscription));
 
     var tecton: Tecton = undefined;
     tecton.events = events;
@@ -525,11 +525,11 @@ test "a canceled item use leaves the stack and world untouched on the auth input
 
     const Cancel = struct {
         fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
-            view.result.* = @intFromEnum(abi.EventResult.cancel);
+            view.result.* = @backingInt(abi.EventResult.cancel);
         }
     };
     var subscription: u64 = 0;
-    try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.item_use), abi.event_phase_pre, 0, Cancel.callback, null, &subscription));
+    try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.item_use), abi.event_phase_pre, 0, Cancel.callback, null, &subscription));
 
     var tecton: Tecton = undefined;
     tecton.events = events;

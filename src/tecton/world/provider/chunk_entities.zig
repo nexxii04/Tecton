@@ -22,7 +22,7 @@ pub fn writeChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: 
     var record = persistence.Record{};
     errdefer record.deinit(provider.allocator);
 
-    var entities_in_chunk = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    var entities_in_chunk = @as(std.ArrayList(i64), .empty);
     defer entities_in_chunk.deinit(provider.allocator);
 
     for (dimension.entitiesInChunk(chunk.x, chunk.z)) |entity| {
@@ -69,7 +69,7 @@ pub fn writeChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: 
 pub fn readChunkEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !std.ArrayList(CompoundTag) {
     provider.awaitChunkRecords(chunk.x, chunk.z, dimension.dimension_type, &.{.entities});
     const dim_index = key_mod.dimensionIndex(dimension);
-    var result = std.ArrayList(CompoundTag){ .items = &.{}, .capacity = 0 };
+    var result = @as(std.ArrayList(CompoundTag), .empty);
     const digp = key_mod.digpKey(chunk.x, chunk.z, dim_index);
     const digest_data = provider.db.get(digp.slice()) orelse return result;
     defer LevelDB.DB.freeValue(digest_data);

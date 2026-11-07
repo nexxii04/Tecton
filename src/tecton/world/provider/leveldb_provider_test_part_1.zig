@@ -33,7 +33,7 @@ pub fn Suite(comptime scope: type) type {
                 const ver_key = key_mod.versionKey(x, z, dim_index);
                 batch.put(ver_key.slice(), &[_]u8{40});
 
-                var expected_data: [chunk_mod.MAX_SUBCHUNKS]?[]u8 = .{null} ** chunk_mod.MAX_SUBCHUNKS;
+                var expected_data: [chunk_mod.MAX_SUBCHUNKS]?[]u8 = @splat(null);
                 defer {
                     for (&expected_data) |*d| {
                         if (d.*) |data| std.testing.allocator.free(data);

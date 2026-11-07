@@ -73,11 +73,11 @@ test "a canceled chat is not broadcast by the text packet handler" {
 
     const Cancel = struct {
         fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
-            view.result.* = @intFromEnum(abi.EventResult.cancel);
+            view.result.* = @backingInt(abi.EventResult.cancel);
         }
     };
     var subscription: u64 = 0;
-    try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Cancel.callback, null, &subscription));
+    try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_chat), abi.event_phase_pre, 0, Cancel.callback, null, &subscription));
 
     var fake = TransportFake.init(allocator);
     defer fake.deinit();

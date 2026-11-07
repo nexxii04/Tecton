@@ -276,10 +276,10 @@ pub fn Suite(comptime scope: type) type {
         }
 
         pub fn case_015() !void {
-            try std.testing.expect(shouldEmitVerboseStartupLogs(.Debug));
-            try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseFast));
-            try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseSafe));
-            try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseSmall));
+            try std.testing.expect(shouldEmitVerboseStartupLogs(.debug));
+            try std.testing.expect(!shouldEmitVerboseStartupLogs(.fast));
+            try std.testing.expect(!shouldEmitVerboseStartupLogs(.safe));
+            try std.testing.expect(!shouldEmitVerboseStartupLogs(.small));
         }
 
         pub fn case_016() !void {

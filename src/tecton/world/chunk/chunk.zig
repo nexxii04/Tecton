@@ -42,8 +42,8 @@ pub const Chunk = struct {
             .x = x,
             .z = z,
             .dimension = dimension,
-            .subchunks = [_]?*SubChunk{null} ** MAX_SUBCHUNKS,
-            .heightmap = [_]i32{HEIGHTMAP_UNCOMPUTED} ** COLUMN_COUNT,
+            .subchunks = @splat(null),
+            .heightmap = @splat(HEIGHTMAP_UNCOMPUTED),
             .dirty = false,
             .cache = null,
         };
@@ -269,7 +269,7 @@ test "block storage grows across seven-bit threshold and rejects corrupt wire da
     var reader = BinaryStream.init(testing.failing_allocator, &invalid_bits, null);
     try testing.expectError(error.InvalidBitsPerBlock, BlockStorage.deserialize(&reader, allocator));
 
-    var corrupt = [_]u8{0} ** 516;
+    var corrupt: [516]u8 = @splat(0);
     corrupt[0] = (1 << 1) | 1;
     corrupt[1] = 1;
     corrupt[513] = 2;

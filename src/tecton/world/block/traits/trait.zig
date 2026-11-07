@@ -159,10 +159,10 @@ fn wrapFn(comptime _: type, comptime event: Event, comptime f: anytype) Event.VT
 
 fn buildVTable(comptime State: type, comptime config: BlockTraitConfig(State)) BlockTraitVTable {
     var vt = BlockTraitVTable{};
-    const fields = @typeInfo(BlockTraitConfig(State)).@"struct".fields;
-    inline for (fields) |field| {
-        if (comptime eventFromFieldName(field.name)) |event| {
-            if (@field(config, field.name)) |f| {
+    const fields = @typeInfo(BlockTraitConfig(State)).@"struct".field_names;
+    inline for (fields) |name| {
+        if (comptime eventFromFieldName(name)) |event| {
+            if (@field(config, name)) |f| {
                 @field(vt, event.fieldName()) = wrapFn(State, event, f);
             }
         }
@@ -208,7 +208,7 @@ const FactoryList = std.ArrayList(TraitFactory);
 
 var trait_registry: std.StringHashMapUnmanaged(FactoryList) = .empty;
 var trait_id_registry: std.StringHashMapUnmanaged(TraitFactory) = .empty;
-var dynamic_traits: std.ArrayListUnmanaged(DynamicTraitEntry) = .empty;
+var dynamic_traits: std.ArrayList(DynamicTraitEntry) = .empty;
 var registry_allocator: std.mem.Allocator = undefined;
 var registry_initialized: bool = false;
 

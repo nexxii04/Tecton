@@ -38,7 +38,7 @@ pub fn Suite(comptime scope: type) type {
                 try visible.put(@intCast(i), 1);
             }
 
-            var candidates: std.ArrayListUnmanaged(u32) = .empty;
+            var candidates: std.ArrayList(u32) = .empty;
             defer candidates.deinit(allocator);
             try index.finish(allocator);
             try index.collect(allocator, &candidates, 1, 0, 0, 200);
@@ -87,11 +87,11 @@ pub fn Suite(comptime scope: type) type {
             defer visible.deinit();
             try visible.put(10, 1);
 
-            const payload = [_]u8{0xAA} ** (MAX_BATCH_BYTES * 2);
+            const payload: [MAX_BATCH_BYTES * 2]u8 = @splat(0xAA);
             try index.add(allocator, regionOf(1, 0, 0), refAt(10, 0, payload.len));
             try index.finish(allocator);
 
-            var candidates: std.ArrayListUnmanaged(u32) = .empty;
+            var candidates: std.ArrayList(u32) = .empty;
             defer candidates.deinit(allocator);
             try index.collect(allocator, &candidates, 1, 0, 0, 1);
 
@@ -133,7 +133,7 @@ pub fn Suite(comptime scope: type) type {
             }
             try index.finish(allocator);
 
-            var candidates: std.ArrayListUnmanaged(u32) = .empty;
+            var candidates: std.ArrayList(u32) = .empty;
             defer candidates.deinit(allocator);
             try index.collect(allocator, &candidates, 1, 0, 0, 50);
 

@@ -16,7 +16,7 @@ const Group = struct {
 
 pub const SaveScheduler = struct {
     in_flight: bool = false,
-    plan: std.ArrayListUnmanaged(Group) = .empty,
+    plan: std.ArrayList(Group) = .empty,
     cursor: struct { group: usize = 0, chunk: usize = 0 } = .{},
     players_pending: bool = false,
     player_cursor: usize = 0,
@@ -36,7 +36,7 @@ pub const SaveScheduler = struct {
         while (worlds_it.next()) |world| {
             var dims_it = world.*.dimensions.valueIterator();
             while (dims_it.next()) |dim| {
-                var hashes = std.ArrayListUnmanaged(ChunkHash).empty;
+                var hashes = std.ArrayList(ChunkHash).empty;
                 var chunk_it = dim.*.chunks.keyIterator();
                 while (chunk_it.next()) |hash| hashes.append(allocator, hash.*) catch break;
                 if (hashes.items.len == 0) {

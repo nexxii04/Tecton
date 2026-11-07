@@ -27,7 +27,7 @@ pub const Phase = enum {
     ecs_sync,
 };
 
-const PHASE_COUNT = @typeInfo(Phase).@"enum".fields.len;
+const PHASE_COUNT = @typeInfo(Phase).@"enum".field_names.len;
 
 pub const Counter = enum {
     movement_emitters,
@@ -39,7 +39,7 @@ pub const Counter = enum {
     ecs_damage_overflow,
 };
 
-const COUNTER_COUNT = @typeInfo(Counter).@"enum".fields.len;
+const COUNTER_COUNT = @typeInfo(Counter).@"enum".field_names.len;
 
 const Stats = struct {
     total_ns: u64 = 0,
@@ -49,14 +49,14 @@ const Stats = struct {
 };
 
 pub const TickProfiler = struct {
-    phases: [PHASE_COUNT]Stats = [_]Stats{.{}} ** PHASE_COUNT,
-    counters: [COUNTER_COUNT]u64 = [_]u64{0} ** COUNTER_COUNT,
+    phases: [PHASE_COUNT]Stats = @splat(Stats{}),
+    counters: [COUNTER_COUNT]u64 = @splat(0),
     slow_ticks: u64 = 0,
     total_ticks: u64 = 0,
     tick_budget_ns: u64 = 50_000_000,
 
     pub fn record(self: *TickProfiler, phase: Phase, ns: u64) void {
-        const stats = &self.phases[@intFromEnum(phase)];
+        const stats = &self.phases[@backingInt(phase)];
         _ = @atomicRmw(u64, &stats.total_ns, .Add, ns, .monotonic);
         _ = @atomicRmw(u64, &stats.count, .Add, 1, .monotonic);
         _ = @atomicRmw(u64, &stats.min_ns, .Min, ns, .monotonic);
@@ -64,7 +64,7 @@ pub const TickProfiler = struct {
     }
 
     pub fn count(self: *TickProfiler, counter: Counter, total: usize) void {
-        _ = @atomicRmw(u64, &self.counters[@intFromEnum(counter)], .Add, @intCast(total), .monotonic);
+        _ = @atomicRmw(u64, &self.counters[@backingInt(counter)], .Add, @intCast(total), .monotonic);
     }
 
     pub fn recordTick(self: *TickProfiler, total_ns: u64) void {
@@ -76,7 +76,7 @@ pub const TickProfiler = struct {
     }
 
     pub fn avgTickMs(self: *const TickProfiler) f64 {
-        const stats = &self.phases[@intFromEnum(Phase.total)];
+        const stats = &self.phases[@backingInt(Phase.total)];
         const sample_count = @atomicLoad(u64, &stats.count, .monotonic);
         if (sample_count == 0) return 0.0;
         const total_ns = @atomicLoad(u64, &stats.total_ns, .monotonic);
@@ -150,7 +150,7 @@ pub const TickProfiler = struct {
             const min_ms = @as(f64, @floatFromInt(min_ns)) / 1_000_000.0;
             const max_ms = @as(f64, @floatFromInt(max_ns)) / 1_000_000.0;
             line = std.fmt.bufPrint(&buf, "{s:<25} {d:>10.3} {d:>10.3} {d:>10.3} {d:>10}\n", .{
-                @tagName(@as(Phase, @enumFromInt(i))), avg_ms, min_ms, max_ms, sample_count,
+                @tagName(@as(Phase, @fromBackingInt(@intCast(i)))), avg_ms, min_ms, max_ms, sample_count,
             }) catch continue;
             writer.interface.writeAll(line) catch continue;
         }
@@ -163,7 +163,7 @@ pub const TickProfiler = struct {
                 const total = @atomicLoad(u64, &self.counters[i], .monotonic);
                 const per_tick = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(total_ticks));
                 line = std.fmt.bufPrint(&buf, "{s:<25} {d:>12} {d:>11.2}\n", .{
-                    @tagName(@as(Counter, @enumFromInt(i))), total, per_tick,
+                    @tagName(@as(Counter, @fromBackingInt(@intCast(i)))), total, per_tick,
                 }) catch continue;
                 writer.interface.writeAll(line) catch continue;
             }
@@ -181,7 +181,7 @@ test "phases and counters accumulate atomically" {
 
     profiler.record(.net_io, 1_000_000);
     profiler.record(.net_io, 3_000_000);
-    const stats = &profiler.phases[@intFromEnum(Phase.net_io)];
+    const stats = &profiler.phases[@backingInt(Phase.net_io)];
     try std.testing.expectEqual(@as(u64, 2), @atomicLoad(u64, &stats.count, .monotonic));
     try std.testing.expectEqual(@as(u64, 4_000_000), @atomicLoad(u64, &stats.total_ns, .monotonic));
     try std.testing.expectEqual(@as(u64, 1_000_000), @atomicLoad(u64, &stats.min_ns, .monotonic));
@@ -189,6 +189,6 @@ test "phases and counters accumulate atomically" {
 
     profiler.count(.movement_updates, 3);
     profiler.count(.movement_updates, 2);
-    const updates = @atomicLoad(u64, &profiler.counters[@intFromEnum(Counter.movement_updates)], .monotonic);
+    const updates = @atomicLoad(u64, &profiler.counters[@backingInt(Counter.movement_updates)], .monotonic);
     try std.testing.expectEqual(@as(u64, 5), updates);
 }

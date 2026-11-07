@@ -174,7 +174,7 @@ pub fn Suite(comptime scope: type) type {
             try index.add(allocator, regionOf(2, 0, 0), refAt(40, 6, 2));
             try index.finish(allocator);
 
-            var candidates: std.ArrayListUnmanaged(u32) = .empty;
+            var candidates: std.ArrayList(u32) = .empty;
             defer candidates.deinit(allocator);
             try index.collect(allocator, &candidates, 1, 0, 0, 2);
             try testing.expectEqual(@as(usize, 1), candidates.items.len);
@@ -216,7 +216,7 @@ pub fn Suite(comptime scope: type) type {
             try index.add(allocator, regionOf(1, 0, 0), refAt(10, 2, 2));
             try index.finish(allocator);
 
-            var candidates: std.ArrayListUnmanaged(u32) = .empty;
+            var candidates: std.ArrayList(u32) = .empty;
             defer candidates.deinit(allocator);
             try index.collect(allocator, &candidates, 1, 0, 0, 1);
 

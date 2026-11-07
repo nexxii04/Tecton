@@ -71,10 +71,7 @@ pub const Attributes = struct {
     }
 
     pub fn collectDirty(self: *Attributes, allocator: std.mem.Allocator) !std.ArrayList(Attribute) {
-        var list = std.ArrayList(Attribute){
-            .items = &[_]Attribute{},
-            .capacity = 0,
-        };
+        var list: std.ArrayList(Attribute) = .empty;
         errdefer list.deinit(allocator);
 
         var it = self.dirty.keyIterator();
@@ -88,10 +85,7 @@ pub const Attributes = struct {
     }
 
     pub fn collectAll(self: *const Attributes, allocator: std.mem.Allocator) !std.ArrayList(Attribute) {
-        var list = std.ArrayList(Attribute){
-            .items = &[_]Attribute{},
-            .capacity = 0,
-        };
+        var list: std.ArrayList(Attribute) = .empty;
         errdefer list.deinit(allocator);
 
         var it = self.map.valueIterator();

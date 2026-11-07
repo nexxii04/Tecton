@@ -115,7 +115,7 @@ const Checks = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
     const base = gpa.allocator();
 
     const io = init.io;
@@ -145,7 +145,7 @@ pub fn main(init: std.process.Init) !void {
     try runScenarios(io, allocator, options, &checks);
 
     const leaked = gpa.deinit();
-    if (leaked == .leak) {
+    if (leaked != 0) {
         std.debug.print("FAIL: the debug allocator found leaked memory\n", .{});
         std.process.exit(1);
     }
@@ -304,7 +304,7 @@ fn channelScenario(io: std.Io, allocator: std.mem.Allocator, checks: *Checks) !v
     }
 
     harness.fake.clear();
-    const oversize = [_]u8{0x11} ** 1400;
+    const oversize: [1400]u8 = @splat(0x11);
     const one = [_][]const u8{&oversize};
     if (harness.handler.sendPacketsUncompressedOn(conn, &one, .unreliable, .immediate)) |_| {
         checks.expect(false, "an oversize unreliable frame was sent instead of refused", .{});

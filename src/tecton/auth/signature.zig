@@ -81,14 +81,14 @@ fn verifyPkcs1Sha256(
     if (signature.len != length) return false;
     var sig: [length]u8 = undefined;
     @memcpy(&sig, signature[0..length]);
-    rsa.PKCS1v1_5Signature.verify(length, sig, signed_data, public_key, std.crypto.hash.sha2.Sha256) catch return false;
+    rsa.PKCS1v1_5Signature.verify(length, &sig, signed_data, public_key, std.crypto.hash.sha2.Sha256) catch return false;
     return true;
 }
 
 const testing = std.testing;
 
 test "a sec1 point round-trips through the spki encoding" {
-    const secret = EcdsaP384Sha384.SecretKey.fromBytes([_]u8{7} ** 48) catch unreachable;
+    const secret = EcdsaP384Sha384.SecretKey.fromBytes(@splat(7)) catch unreachable;
     const key_pair = EcdsaP384Sha384.KeyPair.fromSecretKey(secret) catch unreachable;
     const sec1 = key_pair.public_key.toUncompressedSec1();
 
@@ -105,14 +105,14 @@ test "a sec1 point round-trips through the spki encoding" {
 }
 
 test "a point that is not on the curve is refused" {
-    var sec1 = [_]u8{0} ** 97;
+    var sec1: [97]u8 = @splat(0);
     sec1[0] = 0x04;
     try testing.expectError(error.InvalidPublicKey, Secp384PublicKey.fromSec1(&sec1));
-    try testing.expectError(error.UnsupportedKeyFormat, Secp384PublicKey.fromSec1(&[_]u8{0x02} ++ [_]u8{0} ** 96));
+    try testing.expectError(error.UnsupportedKeyFormat, Secp384PublicKey.fromSec1(&([_]u8{0x02} ++ @as([96]u8, @splat(0)))));
 }
 
 test "an es384 signature verifies only over the bytes that were signed" {
-    const secret = EcdsaP384Sha384.SecretKey.fromBytes([_]u8{9} ** 48) catch unreachable;
+    const secret = EcdsaP384Sha384.SecretKey.fromBytes(@splat(9)) catch unreachable;
     const key_pair = EcdsaP384Sha384.KeyPair.fromSecretKey(secret) catch unreachable;
     const public_key = try Secp384PublicKey.fromSec1(&key_pair.public_key.toUncompressedSec1());
 
@@ -121,11 +121,11 @@ test "an es384 signature verifies only over the bytes that were signed" {
 
     try testing.expect(public_key.verifyEs384(&signature.toBytes(), signed_data));
     try testing.expect(!public_key.verifyEs384(&signature.toBytes(), "eyJhbGciOiJFUzM4NCJ9.eyJ4aWQiOiI0NTYifQ"));
-    try testing.expect(!public_key.verifyEs384(&[_]u8{0} ** 96, signed_data));
-    try testing.expect(!public_key.verifyEs384(&[_]u8{0} ** 95, signed_data));
+    try testing.expect(!public_key.verifyEs384(&@as([96]u8, @splat(0)), signed_data));
+    try testing.expect(!public_key.verifyEs384(&@as([95]u8, @splat(0)), signed_data));
 }
 
 test "rs256 rejects a signature of the wrong length and a foreign modulus size" {
-    try testing.expect(!verifyRs256(&[_]u8{1} ** 100, &[_]u8{ 1, 0, 1 }, &[_]u8{0} ** 256, "signed"));
-    try testing.expect(!verifyRs256(&[_]u8{1} ** 256, &[_]u8{ 1, 0, 1 }, &[_]u8{0} ** 255, "signed"));
+    try testing.expect(!verifyRs256(&@as([100]u8, @splat(1)), &[_]u8{ 1, 0, 1 }, &@as([256]u8, @splat(0)), "signed"));
+    try testing.expect(!verifyRs256(&@as([256]u8, @splat(1)), &[_]u8{ 1, 0, 1 }, &@as([255]u8, @splat(0)), "signed"));
 }

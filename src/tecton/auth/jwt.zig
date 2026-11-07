@@ -157,7 +157,7 @@ const testing = std.testing;
 
 fn tokenWith(allocator: std.mem.Allocator, header: []const u8, payload: []const u8) ![]u8 {
     const encoder = std.base64.url_safe_no_pad.Encoder;
-    var signature: [96]u8 = [_]u8{0xab} ** 96;
+    var signature: [96]u8 = @splat(0xab);
     const total = encoder.calcSize(header.len) + 1 +
         encoder.calcSize(payload.len) + 1 +
         encoder.calcSize(signature.len);

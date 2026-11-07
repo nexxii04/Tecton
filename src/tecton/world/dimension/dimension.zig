@@ -74,7 +74,7 @@ pub const Dimension = struct {
             .chunk_packet_cache = ChunkPacketCache.init(allocator),
             .inflight_packets = std.AutoHashMap(ChunkHash, void).init(allocator),
             .chunk_generations = std.AutoHashMap(ChunkHash, u64).init(allocator),
-            .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
+            .pending_removals = @as(std.ArrayList(i64), .empty),
             .spawn_position = spawn,
             .simulation_distance = 4,
             .generator = generator,
@@ -301,7 +301,7 @@ pub const Dimension = struct {
         const ch = chunkHash(block.position.x >> 4, block.position.z >> 4);
         const gop = try self.blocks_by_chunk.getOrPut(ch);
         if (!gop.found_existing) {
-            gop.value_ptr.* = std.ArrayList(*Block){ .items = &.{}, .capacity = 0 };
+            gop.value_ptr.* = @as(std.ArrayList(*Block), .empty);
         }
         try gop.value_ptr.append(self.allocator, block);
     }

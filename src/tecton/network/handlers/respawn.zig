@@ -64,7 +64,7 @@ fn sendRespawnStates(network: *NetworkHandler, player: *Player, position: Protoc
 
         stream.writeVarInt(Protocol.Packet.Respawn) catch return;
         Protocol.Vector3f.write(&stream, position) catch return;
-        stream.writeUint8(@intFromEnum(state)) catch return;
+        stream.writeUint8(@backingInt(state)) catch return;
         stream.writeVarLong(@intCast(player.entity.runtime_id)) catch return;
 
         network.sendPacket(player.connection, stream.getBuffer()) catch {};

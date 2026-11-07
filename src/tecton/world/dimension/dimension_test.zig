@@ -56,7 +56,7 @@ pub fn Suite(comptime scope: type) type {
                     blocks.put(hash, pos) catch continue;
                     const gop = blocks_by_chunk.getOrPut(ch) catch continue;
                     if (!gop.found_existing) {
-                        gop.value_ptr.* = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+                        gop.value_ptr.* = @as(std.ArrayList(i64), .empty);
                     }
                     var already = false;
                     for (gop.value_ptr.items) |h| {
@@ -128,7 +128,7 @@ pub fn Suite(comptime scope: type) type {
                     blocks.put(hash, pos) catch continue;
                     const gop = blocks_by_chunk.getOrPut(ch) catch continue;
                     if (!gop.found_existing) {
-                        gop.value_ptr.* = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+                        gop.value_ptr.* = @as(std.ArrayList(i64), .empty);
                     }
                     var already = false;
                     for (gop.value_ptr.items) |h| {

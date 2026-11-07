@@ -23,7 +23,7 @@ pub const LoadResult = struct {
     abi_major: u16 = 0,
     abi_minor: u16 = 0,
     fingerprint: u64 = 0,
-    detail: [128]u8 = [_]u8{0} ** 128,
+    detail: [128]u8 = @splat(0),
     detail_len: u8 = 0,
 
     pub fn set(self: *LoadResult, reason: u32, detail: []const u8) void {
@@ -90,10 +90,11 @@ pub const SharedLibrary = struct {
     }
 
     pub fn openDetailed(allocator: std.mem.Allocator, path: []const u8, result: *LoadResult) error{ OpenFailed, OutOfMemory }!SharedLibrary {
-        const zero_terminated = allocator.dupeZ(u8, path) catch {
+        const zero_terminated = allocator.allocSentinel(u8, path.len, 0) catch {
             result.set(abi.load_out_of_memory, "path allocation");
             return error.OutOfMemory;
         };
+        @memcpy(zero_terminated, path);
         defer allocator.free(zero_terminated);
         if (builtin.os.tag == .windows) {
             const handle = native.LoadLibraryA(zero_terminated.ptr) orelse {
@@ -269,7 +270,7 @@ pub const NativePlugin = struct {
 
     pub fn shutdown(self: *NativePlugin, reason: abi.ShutdownReason) void {
         if (!self.start_attempted or self.shutdown_called) return;
-        if (self.descriptor.on_shutdown) |on_shutdown| on_shutdown(self.context, @intFromEnum(reason));
+        if (self.descriptor.on_shutdown) |on_shutdown| on_shutdown(self.context, @backingInt(reason));
         self.shutdown_called = true;
         self.started = false;
     }

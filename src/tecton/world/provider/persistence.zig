@@ -29,7 +29,7 @@ const KeyContext = struct {
         var state = std.hash.Wyhash.init(SEED);
         state.update(std.mem.asBytes(&key.x));
         state.update(std.mem.asBytes(&key.z));
-        state.update(&[_]u8{ @intFromEnum(key.kind), key.dim });
+        state.update(&[_]u8{ @backingInt(key.kind), key.dim });
         return state.final();
     }
 
@@ -49,9 +49,9 @@ pub const Writer = struct {
     mutex: std.Io.Mutex = .init,
     cond: std.Io.Condition = .init,
     pending: std.HashMapUnmanaged(Key, Slot, KeyContext, std.hash_map.default_max_load_percentage) = .empty,
-    order: std.ArrayListUnmanaged(Key) = .empty,
+    order: std.ArrayList(Key) = .empty,
     order_head: usize = 0,
-    spill: std.ArrayListUnmanaged(Record) = .empty,
+    spill: std.ArrayList(Record) = .empty,
     spill_head: usize = 0,
     pending_bytes: usize = 0,
 

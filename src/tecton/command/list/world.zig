@@ -83,7 +83,7 @@ pub fn register(registry: *CommandRegistry, world_admin: WorldAdmin) !void {
 }
 
 fn registerWorldEnum(registry: *CommandRegistry, world_admin: WorldAdmin) !u32 {
-    var names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var names = @as(std.ArrayList([]const u8), .empty);
     defer if (names.capacity > 0) names.deinit(registry.allocator);
 
     try world_admin.collectWorldNames(registry.allocator, &names);

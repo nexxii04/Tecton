@@ -103,8 +103,7 @@ pub fn Suite(comptime scope: type) type {
                     "\"displayName\":\"Steve\",\"identity\":\"00000000-0000-4000-8000-000000000001\",\"titleId\":\"89692877\"}}",
             );
             defer allocator.free(last);
-            const chain_json = try std.fmt.allocPrint(
-                allocator,
+            const chain_json = try allocator.print(
                 "{{\"AuthenticationType\":2,\"Certificate\":\"{{\\\"chain\\\":[\\\"first\\\",\\\"{s}\\\"]}}\"}}",
                 .{last},
             );

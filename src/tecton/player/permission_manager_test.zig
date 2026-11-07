@@ -112,7 +112,7 @@ pub fn test_read_only(comptime PermissionManager: type) !void {
         const Deny = struct {
             fn stat(userdata: ?*anyopaque, dir: std.Io.Dir, sub_path: []const u8, options: std.Io.Dir.StatFileOptions) std.Io.Dir.StatFileError!std.Io.File.Stat {
                 var st = try std.testing.io.vtable.dirStatFile(userdata, dir, sub_path, options);
-                st.permissions = @enumFromInt(@intFromEnum(st.permissions) | 0x1);
+                st.permissions = @fromBackingInt(@backingInt(st.permissions) | 0x1);
                 return st;
             }
         };

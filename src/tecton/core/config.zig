@@ -9,8 +9,8 @@ pub const default_jwks_uri = "https://authorization.franchise.minecraft-services
 /// How signaling TLS is provided: `proxy` uses an external terminator, `native` terminates here.
 pub const TlsMode = enum { off, proxy, native };
 
-pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
-    return mode == .Debug;
+pub fn shouldEmitVerboseStartupLogs(mode: std.lang.Optimize) bool {
+    return mode == .debug;
 }
 
 pub fn shouldEmitStartupLogs() bool {
@@ -258,33 +258,33 @@ pub const ServerProperties = struct {
 
     fn setField(self: *ServerProperties, key: []const u8, value: []const u8) !void {
         if (std.mem.eql(u8, key, "gamemode") and parseGamemode(value) == null) return error.InvalidValue;
-        inline for (@typeInfo(ServerProperties).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "allocator") or
-                std.mem.eql(u8, field.name, "_allocated_strings")) continue;
+        inline for (@typeInfo(ServerProperties).@"struct".field_names, @typeInfo(ServerProperties).@"struct".field_types) |name, FieldType| {
+            if (comptime std.mem.eql(u8, name, "allocator") or
+                std.mem.eql(u8, name, "_allocated_strings")) continue;
 
             const file_key = comptime blk: {
-                var name_buf: [field.name.len]u8 = undefined;
-                @memcpy(&name_buf, field.name);
+                var name_buf: [name.len]u8 = undefined;
+                @memcpy(&name_buf, name);
                 std.mem.replaceScalar(u8, &name_buf, '_', '-');
                 break :blk name_buf;
             };
 
             if (std.mem.eql(u8, key, &file_key)) {
-                if (field.type == []const u8) {
+                if (FieldType == []const u8) {
                     const duped = try self.allocator.dupe(u8, value);
                     try self._allocated_strings.append(self.allocator, duped);
-                    @field(self, field.name) = duped;
-                } else if (field.type == bool) {
-                    @field(self, field.name) = if (std.mem.eql(u8, value, "true"))
+                    @field(self, name) = duped;
+                } else if (FieldType == bool) {
+                    @field(self, name) = if (std.mem.eql(u8, value, "true"))
                         true
                     else if (std.mem.eql(u8, value, "false"))
                         false
                     else
                         return error.InvalidValue;
-                } else if (@typeInfo(field.type) == .@"enum") {
-                    @field(self, field.name) = std.meta.stringToEnum(field.type, value) orelse return error.InvalidValue;
-                } else if (@typeInfo(field.type) == .int) {
-                    @field(self, field.name) = std.fmt.parseInt(field.type, value, 10) catch return error.InvalidValue;
+                } else if (@typeInfo(FieldType) == .@"enum") {
+                    @field(self, name) = std.meta.stringToEnum(FieldType, value) orelse return error.InvalidValue;
+                } else if (@typeInfo(FieldType) == .int) {
+                    @field(self, name) = std.fmt.parseInt(FieldType, value, 10) catch return error.InvalidValue;
                 }
                 return;
             }

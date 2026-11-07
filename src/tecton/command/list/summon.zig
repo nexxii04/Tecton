@@ -47,7 +47,7 @@ pub fn register(registry: *CommandRegistry) !void {
 
 fn registerEntityEnum(registry: *CommandRegistry) !u32 {
     const reg = EntityTypeRegistry.EntityTypeRegistry.getRegistry() orelse return error.NoEntityRegistry;
-    var names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var names = @as(std.ArrayList([]const u8), .empty);
     defer if (names.capacity > 0) names.deinit(registry.allocator);
 
     var it = reg.types.keyIterator();

@@ -91,7 +91,7 @@ pub fn deserializeItemStack(allocator: std.mem.Allocator, comptime Item: type, t
 }
 
 pub fn serializeContainer(allocator: std.mem.Allocator, container: anytype) !ListTag {
-    var items = std.ArrayList(Tag){ .items = &.{}, .capacity = 0 };
+    var items = @as(std.ArrayList(Tag), .empty);
     for (container.storage, 0..) |*slot, i| {
         const item = if (slot.*) |*held| held else continue;
         var item_tag = try serializeItemStack(allocator, item);

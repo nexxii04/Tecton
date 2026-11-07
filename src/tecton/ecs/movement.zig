@@ -24,7 +24,7 @@ pub const profiles = [_]Profile{
 };
 
 pub fn profileOf(profile: PhysicsProfile) Profile {
-    return profiles[@intFromEnum(profile)];
+    return profiles[@backingInt(profile)];
 }
 
 pub fn applyAirPhysics(motion: *Protocol.Vector3f, drag: f32, gravity: f32, apply_drag_before_gravity: bool) void {
@@ -226,9 +226,9 @@ test "resting entities stop marking dirty" {
 }
 
 test "profile table matches vanilla constants per entity family" {
-    try std.testing.expectEqual(@as(f32, -0.04), profiles[@intFromEnum(PhysicsProfile.item)].gravity);
-    try std.testing.expectEqual(@as(f32, 0.02), profiles[@intFromEnum(PhysicsProfile.item)].drag);
-    try std.testing.expect(profiles[@intFromEnum(PhysicsProfile.item)].drag_before_gravity);
-    try std.testing.expectEqual(@as(f32, -0.08), profiles[@intFromEnum(PhysicsProfile.mob)].gravity);
-    try std.testing.expectEqual(@as(f32, 0.0), profiles[@intFromEnum(PhysicsProfile.mob)].drag);
+    try std.testing.expectEqual(@as(f32, -0.04), profiles[@backingInt(PhysicsProfile.item)].gravity);
+    try std.testing.expectEqual(@as(f32, 0.02), profiles[@backingInt(PhysicsProfile.item)].drag);
+    try std.testing.expect(profiles[@backingInt(PhysicsProfile.item)].drag_before_gravity);
+    try std.testing.expectEqual(@as(f32, -0.08), profiles[@backingInt(PhysicsProfile.mob)].gravity);
+    try std.testing.expectEqual(@as(f32, 0.0), profiles[@backingInt(PhysicsProfile.mob)].drag);
 }

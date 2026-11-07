@@ -13,19 +13,19 @@ pub const DespawnCmd = struct {
 };
 
 fn AddList(comptime C: type) type {
-    return std.ArrayListUnmanaged(struct { id: EntityId, value: C });
+    return std.ArrayList(struct { id: EntityId, value: C });
 }
 
 fn AddTuple(comptime components: anytype) type {
     var types: [components.len]type = undefined;
     for (components, 0..) |C, i| types[i] = AddList(C);
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn RemoveTuple(comptime components: anytype) type {
     var types: [components.len]type = undefined;
-    for (0..components.len) |i| types[i] = std.ArrayListUnmanaged(EntityId);
-    return std.meta.Tuple(&types);
+    for (0..components.len) |i| types[i] = std.ArrayList(EntityId);
+    return @Tuple(&types);
 }
 
 pub const DropRequest = struct {
@@ -38,7 +38,7 @@ pub const DropRequest = struct {
 };
 
 pub const DropQueue = struct {
-    requests: std.ArrayListUnmanaged(DropRequest) = .empty,
+    requests: std.ArrayList(DropRequest) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !DropQueue {
         var queue = DropQueue{};
@@ -97,7 +97,7 @@ pub fn Commands(comptime components: anytype) type {
     return struct {
         const Self = @This();
 
-        despawns: std.ArrayListUnmanaged(DespawnCmd) = .empty,
+        despawns: std.ArrayList(DespawnCmd) = .empty,
         adds: AddTuple(components) = emptyAddTuple(components),
         removes: RemoveTuple(components) = emptyRemoveTuple(components),
         stats: FlushStats = .{},

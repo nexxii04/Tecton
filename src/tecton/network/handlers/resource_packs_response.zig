@@ -223,9 +223,9 @@ fn resolveJoinDimension(world: *World, location: ?*const PlayerLocation) ?*Dimen
 fn sendPreSpawnDataBatch(state: *JoinStartupTask) !void {
     const psd = state.tecton.pre_spawn_data orelse return;
 
-    var batched_packets = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var batched_packets = @as(std.ArrayList([]const u8), .empty);
     defer batched_packets.deinit(state.network.allocator);
-    var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
+    var owned_packets = @as(std.ArrayList([]u8), .empty);
     defer freeOwnedPackets(state.network.allocator, &owned_packets);
 
     {
@@ -252,9 +252,9 @@ fn sendPreSpawnDataBatch(state: *JoinStartupTask) !void {
 }
 
 fn sendStartGameBatch(state: *JoinStartupTask) !void {
-    var batched_packets = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var batched_packets = @as(std.ArrayList([]const u8), .empty);
     defer batched_packets.deinit(state.network.allocator);
-    var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
+    var owned_packets = @as(std.ArrayList([]u8), .empty);
     defer freeOwnedPackets(state.network.allocator, &owned_packets);
 
     var str = BinaryStream.init(state.network.allocator, null, null);
@@ -366,7 +366,7 @@ fn sendStartGameBatch(state: *JoinStartupTask) !void {
 fn sendRegistryBatch(state: *JoinStartupTask) !void {
     var batched_packets = std.ArrayList([]const u8).empty;
     defer batched_packets.deinit(state.network.allocator);
-    var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
+    var owned_packets = @as(std.ArrayList([]u8), .empty);
     defer freeOwnedPackets(state.network.allocator, &owned_packets);
 
     if (EntityTypeRegistry.EntityTypeRegistry.getSerializedPacket()) |serialized| {
@@ -396,9 +396,9 @@ fn sendCommandsPacket(state: *JoinStartupTask) !void {
 }
 
 fn sendEntityDataBatch(state: *JoinStartupTask) !void {
-    var batched_packets = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var batched_packets = @as(std.ArrayList([]const u8), .empty);
     defer batched_packets.deinit(state.network.allocator);
-    var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
+    var owned_packets = @as(std.ArrayList([]u8), .empty);
     defer freeOwnedPackets(state.network.allocator, &owned_packets);
 
     {
@@ -432,9 +432,9 @@ fn sendEntityDataBatch(state: *JoinStartupTask) !void {
 }
 
 fn sendAbilitiesAndSpawnBatch(state: *JoinStartupTask) !void {
-    var batched_packets = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var batched_packets = @as(std.ArrayList([]const u8), .empty);
     defer batched_packets.deinit(state.network.allocator);
-    var owned_packets = std.ArrayList([]u8){ .items = &.{}, .capacity = 0 };
+    var owned_packets = @as(std.ArrayList([]u8), .empty);
     defer freeOwnedPackets(state.network.allocator, &owned_packets);
 
     const send_update_abilities = false;
@@ -466,7 +466,7 @@ fn sendAbilitiesAndSpawnBatch(state: *JoinStartupTask) !void {
 
         const layers = try state.network.allocator.alloc(Protocol.AbilityLayer, 1);
         layers[0] = .{
-            .layer_type = @intFromEnum(Protocol.AbilityLayerType.Base),
+            .layer_type = @backingInt(Protocol.AbilityLayerType.Base),
             .abilities = abilities,
             .fly_speed = 0.05,
             .vertical_fly_speed = 1.0,
@@ -476,7 +476,7 @@ fn sendAbilitiesAndSpawnBatch(state: *JoinStartupTask) !void {
         var packet = Protocol.UpdateAbilitiesPacket.init(
             state.network.allocator,
             state.player.entity.runtime_id,
-            @intFromEnum(Protocol.PermissionLevel.Operator),
+            @backingInt(Protocol.PermissionLevel.Operator),
             1,
             layers,
         );

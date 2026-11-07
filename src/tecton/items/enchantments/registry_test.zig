@@ -61,7 +61,7 @@ pub fn Suite(comptime scope: type) type {
 
         pub fn case_002() !void {
             const Pointer = std.meta.Child(@typeInfo(@TypeOf(global)).@"fn".return_type.?);
-            try std.testing.expect(@typeInfo(Pointer).pointer.is_const);
+            try std.testing.expect(@typeInfo(Pointer).pointer.attrs.@"const");
 
             const loaded = try load();
             const view = global() orelse return error.ExpectedRegistry;

@@ -118,14 +118,14 @@ pub fn Suite(comptime scope: type) type {
             player.username = "Limited";
             player.xuid = "xuid-limited";
             const views = commandViews(&tecton);
-            const denied = registry.dispatch(&player, views, &stub, "restricted", "player", .{0} ** 16, "req");
+            const denied = registry.dispatch(&player, views, &stub, "restricted", "player", @splat(0), "req");
             try testing.expect(!denied.success);
             try testing.expectEqualStrings("You do not have permission to run this command", denied.message);
             try testing.expectEqual(@as(usize, 0), calls);
             var probe: PermissionProbe = .{ .allow = true };
             tecton.command_permission_checker = PermissionProbe.check;
             tecton.command_permission_userdata = &probe;
-            const allowed = registry.dispatch(&player, views, &stub, "restricted", "player", .{0} ** 16, "req");
+            const allowed = registry.dispatch(&player, views, &stub, "restricted", "player", @splat(0), "req");
             try testing.expect(allowed.success);
             try testing.expectEqual(@as(usize, 1), calls);
             try testing.expectEqual(@as(usize, 1), probe.calls);

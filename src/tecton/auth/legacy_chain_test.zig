@@ -113,10 +113,9 @@ pub fn Suite(comptime scope: type) type {
             const client_spki = try spkiOf(allocator, client_key);
             defer allocator.free(client_spki);
 
-            const header = try std.fmt.allocPrint(allocator, "{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
+            const header = try allocator.print("{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
             defer allocator.free(header);
-            const payload = try std.fmt.allocPrint(
-                allocator,
+            const payload = try allocator.print(
                 "{{\"identityPublicKey\":\"{s}\",\"iss\":\"self\",\"exp\":{d}," ++
                     "\"extraData\":{{\"XUID\":\"2533274799999999\",\"displayName\":\"Offliner\",\"identity\":\"{s}\",\"titleId\":\"\"}}}}",
                 .{ client_spki, now + 3600, "00000000-0000-4000-8000-000000000001" },

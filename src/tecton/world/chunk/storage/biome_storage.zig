@@ -232,7 +232,7 @@ test "biome decoding rejects invalid widths palettes and indices" {
     var bytes = [_]u8{14};
     var reader = BinaryStream.init(std.testing.failing_allocator, &bytes, null);
     try std.testing.expectError(error.InvalidBitsPerBiome, BiomeStorage.deserialize(&reader, std.testing.allocator));
-    var encoded = [_]u8{0} ** 515;
+    var encoded: [515]u8 = @splat(0);
     encoded[0] = 2;
     encoded[1] = 1;
     encoded[513] = 2;

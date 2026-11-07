@@ -11,7 +11,7 @@ pub fn Methods(comptime scope: type) type {
             stream.next_in = @constCast(input.ptr);
             stream.avail_in = @as(c_uint, @intCast(input.len));
 
-            var out: std.ArrayListUnmanaged(u8) = .empty;
+            var out: std.ArrayList(u8) = .empty;
             errdefer out.deinit(allocator);
 
             const initial_capacity = @min(@max(input.len *| 4, 256), max_output_bytes);

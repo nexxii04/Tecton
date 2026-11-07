@@ -20,8 +20,8 @@ pub fn chunkKey(kind: Kind, dim_index: i32, x: i32, z: i32) Key {
 pub const Put = struct { key: []u8, value: []u8 };
 
 pub const Record = struct {
-    puts: std.ArrayListUnmanaged(Put) = .empty,
-    deletes: std.ArrayListUnmanaged([]u8) = .empty,
+    puts: std.ArrayList(Put) = .empty,
+    deletes: std.ArrayList([]u8) = .empty,
     bytes: usize = 0,
 
     pub fn addPut(self: *Record, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {

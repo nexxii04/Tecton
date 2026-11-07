@@ -209,10 +209,10 @@ fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator
 
         var abilities: [20]Protocol.AbilitySet = undefined;
         for (&abilities, 0..) |*set, i| {
-            set.* = .{ .ability = @enumFromInt(i), .value = false };
+            set.* = .{ .ability = @fromBackingInt(@intCast(i)), .value = false };
         }
         const layers = [1]Protocol.AbilityLayer{.{
-            .layer_type = @intFromEnum(Protocol.AbilityLayerType.Base),
+            .layer_type = @backingInt(Protocol.AbilityLayerType.Base),
             .abilities = &abilities,
             .fly_speed = 0.0,
             .vertical_fly_speed = 0.0,

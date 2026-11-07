@@ -34,7 +34,7 @@ pub const TradeOffer = struct {
 };
 
 pub const State = struct {
-    offers: std.ArrayListUnmanaged(TradeOffer) = .empty,
+    offers: std.ArrayList(TradeOffer) = .empty,
     tier: i32 = 0,
     trade_exp: i32 = 0,
     initialized: bool = false,

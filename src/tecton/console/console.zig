@@ -338,8 +338,8 @@ fn enableRawMode(orig: *TermState) bool {
             raw.lflag.ICANON = false;
             raw.lflag.ECHO = false;
             raw.lflag.ISIG = false;
-            raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
-            raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+            raw.cc[@backingInt(std.posix.V.MIN)] = 1;
+            raw.cc[@backingInt(std.posix.V.TIME)] = 0;
             std.posix.tcsetattr(stdin_fd, .FLUSH, raw) catch return false;
             return true;
         },

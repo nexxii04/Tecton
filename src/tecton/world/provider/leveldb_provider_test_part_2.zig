@@ -35,7 +35,7 @@ pub fn Suite(comptime scope: type) type {
 
                 const slot_offset: usize = chunk_mod.yOffset(.Overworld);
                 const num_sc = random.intRangeAtMost(usize, 1, 4);
-                var expected_sc: [chunk_mod.MAX_SUBCHUNKS]?[]u8 = .{null} ** chunk_mod.MAX_SUBCHUNKS;
+                var expected_sc: [chunk_mod.MAX_SUBCHUNKS]?[]u8 = @splat(null);
                 defer {
                     for (&expected_sc) |*d| {
                         if (d.*) |data| std.testing.allocator.free(data);

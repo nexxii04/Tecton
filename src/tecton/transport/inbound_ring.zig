@@ -7,7 +7,7 @@ pub const InboundRing = struct {
     const SlotState = enum(u8) { free, filled, taken };
 
     pub const Entry = struct {
-        state: std.atomic.Value(u8) = .init(@intFromEnum(SlotState.free)),
+        state: std.atomic.Value(u8) = .init(@backingInt(SlotState.free)),
         conn: *Connection = undefined,
         len: u32 = 0,
 
@@ -86,7 +86,7 @@ pub const InboundRing = struct {
         const slot: usize = head & self.mask;
         const entry = &self.entries[slot];
 
-        if (entry.state.load(.acquire) != @intFromEnum(SlotState.free)) {
+        if (entry.state.load(.acquire) != @backingInt(SlotState.free)) {
             _ = self.dropped_full.fetchAdd(1, .monotonic);
             return null;
         }
@@ -106,7 +106,7 @@ pub const InboundRing = struct {
         entry.conn = conn;
         entry.len = @intCast(payload.len);
         entry.heap = heap;
-        entry.state.store(@intFromEnum(SlotState.filled), .release);
+        entry.state.store(@backingInt(SlotState.filled), .release);
         self.head.store(head +% 1, .release);
         return heap != null;
     }
@@ -118,11 +118,11 @@ pub const InboundRing = struct {
 
         const slot: usize = tail & self.mask;
         const entry = &self.entries[slot];
-        std.debug.assert(entry.state.load(.acquire) == @intFromEnum(SlotState.filled));
+        std.debug.assert(entry.state.load(.acquire) == @backingInt(SlotState.filled));
 
         const heap = entry.heap;
         entry.heap = null;
-        entry.state.store(@intFromEnum(SlotState.taken), .release);
+        entry.state.store(@backingInt(SlotState.taken), .release);
         self.tail.store(tail +% 1, .release);
 
         return .{ .slot = @intCast(slot), .entry = entry, .heap = heap };
@@ -134,7 +134,7 @@ pub const InboundRing = struct {
             self.releaseOverflow(heap);
             entry.heap = null;
         }
-        entry.state.store(@intFromEnum(SlotState.free), .release);
+        entry.state.store(@backingInt(SlotState.free), .release);
     }
 
     fn acquireOverflow(self: *InboundRing, len: usize) ?[]u8 {
@@ -189,8 +189,8 @@ test "ring round-trips payloads in publish order" {
     const first = testConnection(&conn_storage[0]);
     const second = testConnection(&conn_storage[1]);
 
-    var payload_a = [_]u8{1} ** 32;
-    var payload_b = [_]u8{2} ** 8;
+    var payload_a: [32]u8 = @splat(1);
+    var payload_b: [8]u8 = @splat(2);
     try testing.expectEqual(false, ring.publish(first, &payload_a).?);
     try testing.expectEqual(false, ring.publish(second, &payload_b).?);
     try testing.expectEqual(@as(usize, 2), ring.depth());
@@ -218,7 +218,7 @@ test "a full ring drops instead of allocating and recovers after release" {
 
     var conn_storage: u128 align(16) = 0;
     const conn = testConnection(&conn_storage);
-    const payload = [_]u8{0xAB} ** 16;
+    const payload: [16]u8 = @splat(0xAB);
 
     for (0..4) |_| {
         try testing.expectEqual(false, ring.publish(conn, &payload).?);
@@ -240,7 +240,7 @@ test "oversize payloads use reserved overflow slots and are recycled on discard"
 
     var conn_storage: u128 align(16) = 0;
     const conn = testConnection(&conn_storage);
-    const payload = [_]u8{0x5A} ** 48;
+    const payload: [48]u8 = @splat(0x5A);
 
     try testing.expectEqual(true, ring.publish(conn, &payload).?);
     try testing.expectEqual(@as(usize, 1), ring.oversize_count.load(.monotonic));
@@ -258,7 +258,7 @@ test "release recycles an overflow payload still owned by the descriptor" {
 
     var conn_storage: u128 align(16) = 0;
     const conn = testConnection(&conn_storage);
-    const payload = [_]u8{0x11} ** 64;
+    const payload: [64]u8 = @splat(0x11);
 
     _ = ring.publish(conn, &payload);
     const popped = ring.pop().?;
@@ -284,7 +284,7 @@ test "overflow exhaustion is bounded and does not allocate" {
     failing.fail_index = allocations;
     var conn_storage: u128 align(16) = 0;
     const conn = testConnection(&conn_storage);
-    const payload = [_]u8{0x77} ** 128;
+    const payload: [128]u8 = @splat(0x77);
     for (0..InboundRing.overflow_slots) |_| try testing.expectEqual(true, ring.publish(conn, &payload).?);
     try testing.expect(ring.publish(conn, &payload) == null);
     ring.discard(ring.pop().?);

@@ -35,11 +35,11 @@ pub const ViewerPacket = struct {
 
 pub const EntitySync = struct {
     stream: BinaryStream,
-    adds: std.ArrayListUnmanaged(Ref) = .empty,
-    removes: std.ArrayListUnmanaged(Ref) = .empty,
-    moves: std.ArrayListUnmanaged(Ref) = .empty,
-    metadata: std.ArrayListUnmanaged(Ref) = .empty,
-    viewer_packets: std.ArrayListUnmanaged(ViewerPacket) = .empty,
+    adds: std.ArrayList(Ref) = .empty,
+    removes: std.ArrayList(Ref) = .empty,
+    moves: std.ArrayList(Ref) = .empty,
+    metadata: std.ArrayList(Ref) = .empty,
+    viewer_packets: std.ArrayList(ViewerPacket) = .empty,
     overflow: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) EntitySync {
@@ -79,7 +79,7 @@ pub const EntitySync = struct {
         };
     }
 
-    fn appendRef(self: *EntitySync, allocator: std.mem.Allocator, list: *std.ArrayListUnmanaged(Ref), ref: ?Ref) void {
+    fn appendRef(self: *EntitySync, allocator: std.mem.Allocator, list: *std.ArrayList(Ref), ref: ?Ref) void {
         const resolved = ref orelse return;
         list.append(allocator, resolved) catch {
             self.stream.written = resolved.offset;

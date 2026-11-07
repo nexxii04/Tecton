@@ -206,7 +206,7 @@ fn serializeAddEntity(dim: *Dimension, entity: *Entity, stream: *BinaryStream) !
     const flags_data = try entity.flags.buildDataItems(dim.allocator, null);
     defer dim.allocator.free(flags_data);
 
-    var metadata = std.ArrayList(Protocol.DataItem){ .items = &.{}, .capacity = 0 };
+    var metadata = @as(std.ArrayList(Protocol.DataItem), .empty);
     defer if (metadata.capacity > 0) metadata.deinit(dim.allocator);
 
     for (flags_data) |item| {

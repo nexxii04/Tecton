@@ -32,8 +32,8 @@ pub const CommandRegistry = struct {
             .allocator = allocator,
             .commands = std.StringHashMap(*Command).init(allocator),
             .alias_map = std.StringHashMap(*Command).init(allocator),
-            .enums = std.ArrayList(CommandEnum){ .items = &.{}, .capacity = 0 },
-            .soft_enums = std.ArrayList(SoftEnum){ .items = &.{}, .capacity = 0 },
+            .enums = @as(std.ArrayList(CommandEnum), .empty),
+            .soft_enums = @as(std.ArrayList(SoftEnum), .empty),
         };
     }
 
@@ -210,13 +210,13 @@ pub const CommandRegistry = struct {
     }
 
     pub fn dispatchConsole(self: *CommandRegistry, views: CommandViews, network: *NetworkHandler, command_line: []const u8) void {
-        _ = self.dispatch(null, views, network, command_line, "console", .{0} ** 16, "");
+        _ = self.dispatch(null, views, network, command_line, "console", @splat(0), "");
     }
 
     pub fn buildAvailableCommandsPacket(self: *CommandRegistry, stream: *BinaryStream) ![]const u8 {
         try stream.writeVarInt(Protocol.Packet.AvailableCommands);
 
-        var enum_value_list = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+        var enum_value_list = @as(std.ArrayList([]const u8), .empty);
         defer enum_value_list.deinit(self.allocator);
         var enum_value_map = std.StringHashMap(u32).init(self.allocator);
         defer enum_value_map.deinit();
@@ -226,7 +226,7 @@ pub const CommandRegistry = struct {
             indices: std.ArrayList(u32),
         };
 
-        var packet_enums = std.ArrayList(PacketEnum){ .items = &.{}, .capacity = 0 };
+        var packet_enums = @as(std.ArrayList(PacketEnum), .empty);
         defer {
             for (packet_enums.items) |*pe| pe.indices.deinit(self.allocator);
             packet_enums.deinit(self.allocator);
@@ -235,7 +235,7 @@ pub const CommandRegistry = struct {
         for (self.enums.items) |cmd_enum| {
             var pe = PacketEnum{
                 .name = cmd_enum.name,
-                .indices = std.ArrayList(u32){ .items = &.{}, .capacity = 0 },
+                .indices = @as(std.ArrayList(u32), .empty),
             };
             for (cmd_enum.values) |val| {
                 if (!enum_value_map.contains(val)) {
@@ -256,7 +256,7 @@ pub const CommandRegistry = struct {
             if (cmd.*.subcommand_enum) |sc_enum| {
                 var pe = PacketEnum{
                     .name = sc_enum.name,
-                    .indices = std.ArrayList(u32){ .items = &.{}, .capacity = 0 },
+                    .indices = @as(std.ArrayList(u32), .empty),
                 };
                 for (sc_enum.values) |val| {
                     if (!enum_value_map.contains(val)) {
@@ -273,10 +273,10 @@ pub const CommandRegistry = struct {
         }
 
         const AliasEntry = struct { cmd_name: []const u8, enum_idx: u32 };
-        var alias_enums = std.ArrayList(AliasEntry){ .items = &.{}, .capacity = 0 };
+        var alias_enums = @as(std.ArrayList(AliasEntry), .empty);
         defer alias_enums.deinit(self.allocator);
 
-        var alias_names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+        var alias_names = @as(std.ArrayList([]const u8), .empty);
         defer {
             for (alias_names.items) |n| self.allocator.free(n);
             alias_names.deinit(self.allocator);
@@ -285,10 +285,10 @@ pub const CommandRegistry = struct {
         var cmd_it = self.commands.valueIterator();
         while (cmd_it.next()) |cmd| {
             if (cmd.*.aliases.len > 0) {
-                const alloc_name = std.fmt.allocPrint(self.allocator, "{s}Aliases", .{cmd.*.name}) catch cmd.*.name;
+                const alloc_name = self.allocator.print("{s}Aliases", .{cmd.*.name}) catch cmd.*.name;
                 var pe = PacketEnum{
                     .name = alloc_name,
-                    .indices = std.ArrayList(u32){ .items = &.{}, .capacity = 0 },
+                    .indices = @as(std.ArrayList(u32), .empty),
                 };
                 if (alloc_name.ptr != cmd.*.name.ptr) {
                     try alias_names.append(self.allocator, alloc_name);

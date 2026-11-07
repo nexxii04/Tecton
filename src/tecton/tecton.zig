@@ -922,7 +922,7 @@ pub const Tecton = struct {
     }
 
     pub fn refreshFloatingTextCommandEnums(self: *Tecton) void {
-        var names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+        var names = @as(std.ArrayList([]const u8), .empty);
         defer names.deinit(self.allocator);
         var seen = std.StringHashMap(void).init(self.allocator);
         defer seen.deinit();

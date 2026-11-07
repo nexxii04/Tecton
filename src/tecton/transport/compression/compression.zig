@@ -6,9 +6,7 @@ pub const Framing = enum { initial, negotiated };
 
 pub const max_uncompressed_bytes: usize = 8 * 1024 * 1024;
 
-const c = @cImport({
-    @cInclude("zlib.h");
-});
+const c = @import("zlib");
 
 threadlocal var tl_stream: ?*c.z_stream = null;
 threadlocal var tl_inflate_stream: ?*c.z_stream = null;
@@ -117,7 +115,7 @@ pub const Compression = struct {
             const framed = try framedScratch(framed_size);
             framePackets(packets, framed);
 
-            dest[0] = @intFromEnum(options.compression_method);
+            dest[0] = @backingInt(options.compression_method);
 
             const stream = try acquireThreadLocal();
             stream.next_in = framed.ptr;
@@ -155,9 +153,9 @@ pub const Compression = struct {
 
     fn wireMethod(byte: u8) ?WireMethod {
         return switch (byte) {
-            @as(u8, @intFromEnum(CompressionMethod.Zlib)) => .zlib,
-            @as(u8, @intFromEnum(CompressionMethod.Snappy)) => .snappy,
-            @as(u8, @intFromEnum(CompressionMethod.None)) => .none,
+            @as(u8, @backingInt(CompressionMethod.Zlib)) => .zlib,
+            @as(u8, @backingInt(CompressionMethod.Snappy)) => .snappy,
+            @as(u8, @backingInt(CompressionMethod.None)) => .none,
             else => null,
         };
     }

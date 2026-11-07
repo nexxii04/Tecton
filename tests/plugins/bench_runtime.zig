@@ -267,7 +267,7 @@ fn benchItems(io: std.Io, allocator: std.mem.Allocator, runtime: *PluginRuntime,
     defer ItemType.deinitRegistry();
 
     for (0..2000) |index| {
-        const name = try std.fmt.allocPrint(allocator, "bench:item{d}", .{index});
+        const name = try allocator.print("bench:item{d}", .{index});
         const item = try ItemType.init(allocator, name, @intCast(10_000 + index), 64, true, &.{}, false, 0, .{ .Compound = NBT.CompoundTag.init(allocator, null) });
         try item.register();
     }

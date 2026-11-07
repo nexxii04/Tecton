@@ -75,7 +75,15 @@ pub fn build(b: *std.Build) void {
     // Translate with the library's config; mbedTLS sizes its contexts from those macros.
     mirrorModule(mbedtls_translate, mbedtls.root_module);
     const mbedtls_mod = mbedtls_translate.createModule();
+    const zlib_translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/tecton/transport/compression/zlib_bindings.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mirrorModule(zlib_translate, zlib_dep.artifact("z").root_module);
+    const zlib_mod = zlib_translate.createModule();
     const tecton_mod = b.addModule("tecton", .{ .root_source_file = b.path("src/tecton/root.zig"), .target = target });
+
     tecton_mod.addImport("BinaryStream", binarystream_mod);
     tecton_mod.addImport("nethernet", nethernet_mod);
     tecton_mod.addImport("mbedtls", mbedtls_mod);
@@ -83,6 +91,7 @@ pub fn build(b: *std.Build) void {
     tecton_mod.addImport("protocol", protocol_mod);
     tecton_mod.addImport("nbt", nbt_mod);
     tecton_mod.addImport("leveldb", leveldb_mod);
+    tecton_mod.addImport("zlib", zlib_mod);
     tecton_mod.linkLibrary(zlib_dep.artifact("z"));
     if (is_windows) {
         tecton_mod.linkSystemLibrary("psapi", .{});
@@ -153,7 +162,7 @@ pub fn build(b: *std.Build) void {
     if (is_windows) soak_exe.root_module.linkSystemLibrary("winmm", .{});
     const soak_step = b.step("soak", "Run the transport load, lifecycle and soak scenarios");
     const run_soak = b.addRunArtifact(soak_exe);
-    if (b.args) |args| run_soak.addArgs(args);
+    run_soak.addPassthruArgs();
     soak_step.dependOn(&run_soak.step);
 
     const native_example = addPluginExample(b, target, optimize);
@@ -200,7 +209,7 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
@@ -212,7 +221,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libcpp = true,
-        .imports = &.{ .{ .name = "BinaryStream", .module = binarystream_mod }, .{ .name = "nethernet", .module = nethernet_mod }, .{ .name = "mbedtls", .module = mbedtls_mod }, .{ .name = "protocol", .module = protocol_mod }, .{ .name = "nbt", .module = nbt_mod }, .{ .name = "leveldb", .module = leveldb_mod } },
+        .imports = &.{ .{ .name = "BinaryStream", .module = binarystream_mod }, .{ .name = "nethernet", .module = nethernet_mod }, .{ .name = "mbedtls", .module = mbedtls_mod }, .{ .name = "protocol", .module = protocol_mod }, .{ .name = "nbt", .module = nbt_mod }, .{ .name = "leveldb", .module = leveldb_mod }, .{ .name = "zlib", .module = zlib_mod } },
     });
     chest_test_mod.linkLibrary(zlib_dep.artifact("z"));
     if (is_windows) chest_test_mod.linkSystemLibrary("psapi", .{});
@@ -287,6 +296,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "protocol", .module = protocol_mod },
             .{ .name = "nbt", .module = nbt_mod },
             .{ .name = "leveldb", .module = leveldb_mod },
+            .{ .name = "zlib", .module = zlib_mod },
         },
     });
     plugin_unit_mod.linkLibrary(leveldb_lib);
@@ -361,7 +371,7 @@ fn addLevelDb(
 fn addPluginExample(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
 ) *std.Build.Step.Compile {
     const native_example = addTestPlugin(b, target, optimize, "tecton-c-example", "tests/plugins/minimal_plugin.c");
     b.installArtifact(native_example);
@@ -371,7 +381,7 @@ fn addPluginExample(
 fn addTestPlugin(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     name: []const u8,
     source: []const u8,
 ) *std.Build.Step.Compile {
@@ -388,7 +398,7 @@ fn addTestPlugin(
 fn addTracePlugin(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     name: []const u8,
     trace_name: []const u8,
     label: []const u8,
@@ -410,7 +420,7 @@ fn addTracePlugin(
 fn addReasonPlugin(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     name: []const u8,
     reason_case: u32,
 ) *std.Build.Step.Compile {
@@ -430,7 +440,7 @@ fn addReasonPlugin(
 fn addPluginConformance(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
 ) *std.Build.Step {
     const generated = b.addWriteFiles();
     _ = generated.add("abi_layout_expected.h", expectedLayoutHeader(b) catch @panic("OOM"));
@@ -522,23 +532,24 @@ fn expectedLayoutHeader(b: *std.Build) ![]const u8 {
     const allocator = b.allocator;
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(allocator, "#ifndef TECTON_ABI_LAYOUT_EXPECTED_H\n#define TECTON_ABI_LAYOUT_EXPECTED_H\n#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n");
-    const fingerprint = try std.fmt.allocPrint(allocator, "#define TECTON_ABI_EXPECTED_FINGERPRINT UINT64_C(0x{x})\n", .{plugin_abi.abi_fingerprint});
+    const fingerprint = try allocator.print("#define TECTON_ABI_EXPECTED_FINGERPRINT UINT64_C(0x{x})\n", .{plugin_abi.abi_fingerprint});
     try out.appendSlice(allocator, fingerprint);
     try out.appendSlice(allocator, "#define TECTON_ABI_EXPECT_SIZE(type, expected) TECTON_STATIC_ASSERT(sizeof(type) == (expected), #type \" sizeof drift\")\n#define TECTON_ABI_EXPECT_OFFSET(type, field, expected) TECTON_STATIC_ASSERT(offsetof(type, field) == (expected), #type \".\" #field \" offset drift\")\n");
     inline for (layout_types) |entry| {
-        const line = try std.fmt.allocPrint(allocator, "TECTON_ABI_EXPECT_SIZE({s}, {d});\n", .{ entry[0], @sizeOf(entry[1]) });
+        const line = try allocator.print("TECTON_ABI_EXPECT_SIZE({s}, {d});\n", .{ entry[0], @sizeOf(entry[1]) });
         try out.appendSlice(allocator, line);
-        inline for (@typeInfo(entry[1]).@"struct".fields) |field| {
-            const offset = try std.fmt.allocPrint(allocator, "TECTON_ABI_EXPECT_OFFSET({s}, {s}, {d});\n", .{ entry[0], field.name, @offsetOf(entry[1], field.name) });
+        inline for (@typeInfo(entry[1]).@"struct".field_names) |field_name| {
+            const offset = try allocator.print("TECTON_ABI_EXPECT_OFFSET({s}, {s}, {d});\n", .{ entry[0], field_name, @offsetOf(entry[1], field_name) });
             try out.appendSlice(allocator, offset);
         }
     }
+
     try out.appendSlice(allocator, "TECTON_STATIC_ASSERT(TECTON_ABI_FINGERPRINT == TECTON_ABI_EXPECTED_FINGERPRINT, \"TECTON_ABI_FINGERPRINT drift between header and abi.zig\");\nstatic void tecton_probe_print_layout(void) {\n");
     inline for (layout_types) |entry| {
-        const size = try std.fmt.allocPrint(allocator, "  printf(\"{s}.size %zu\\n\", sizeof({s}));\n", .{ entry[0], entry[0] });
+        const size = try allocator.print("  printf(\"{s}.size %zu\\n\", sizeof({s}));\n", .{ entry[0], entry[0] });
         try out.appendSlice(allocator, size);
-        inline for (@typeInfo(entry[1]).@"struct".fields) |field| {
-            const offset = try std.fmt.allocPrint(allocator, "  printf(\"{s}.{s} %zu\\n\", offsetof({s}, {s}));\n", .{ entry[0], field.name, entry[0], field.name });
+        inline for (@typeInfo(entry[1]).@"struct".field_names) |field_name| {
+            const offset = try allocator.print("  printf(\"{s}.{s} %zu\\n\", offsetof({s}, {s}));\n", .{ entry[0], field_name, entry[0], field_name });
             try out.appendSlice(allocator, offset);
         }
     }

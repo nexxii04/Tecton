@@ -52,7 +52,7 @@ test "failed plugin start leaves no resources alive" {
     try std.testing.expectEqual(@as(usize, 0), runtime.handles.activeCount());
     try std.testing.expectEqual(tecton.plugins.Handles.none, runtime.slots.items[0].?.owns_handles);
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     try std.testing.expectEqual(@as(u32, 0), runtime.active[event_index][0]);
     try std.testing.expectEqual(@as(usize, 0), runtime.buckets[event_index][0].items.len);
 }
@@ -167,8 +167,9 @@ test "on_ready runs after every on_start in load order" {
     defer tmp.cleanup();
 
     var trace_buf: [512]u8 = undefined;
-    const trace_path = try std.fmt.bufPrintZ(&trace_buf, ".zig-cache/tmp/{s}/trace.log", .{tmp.sub_path});
-    try setTracePath(trace_path);
+    const trace_path = try std.fmt.bufPrint(trace_buf[0 .. trace_buf.len - 1], ".zig-cache/tmp/{s}/trace.log", .{tmp.sub_path});
+    trace_buf[trace_path.len] = 0;
+    try setTracePath(trace_path.ptr[0..trace_path.len :0]);
 
     try tmp.dir.createDir(io, "plugins", .default_dir);
     const sources = [_][]const u8{ options.trace_a_path, options.trace_b_path };
@@ -197,8 +198,9 @@ test "deinit unloads plugins while players are still registered" {
     defer tmp.cleanup();
 
     var trace_buf: [512]u8 = undefined;
-    const trace_path = try std.fmt.bufPrintZ(&trace_buf, ".zig-cache/tmp/{s}/trace.log", .{tmp.sub_path});
-    try setTracePath(trace_path);
+    const trace_path = try std.fmt.bufPrint(trace_buf[0 .. trace_buf.len - 1], ".zig-cache/tmp/{s}/trace.log", .{tmp.sub_path});
+    trace_buf[trace_path.len] = 0;
+    try setTracePath(trace_path.ptr[0..trace_path.len :0]);
 
     var worlds_buf: [512]u8 = undefined;
     const worlds_path = try std.fmt.bufPrint(&worlds_buf, ".zig-cache/tmp/{s}/worlds", .{tmp.sub_path});

@@ -173,10 +173,10 @@ fn wrapFn(comptime _: type, comptime event: Event, comptime f: anytype) Event.VT
 
 fn buildVTable(comptime State: type, comptime config: EntityTraitConfig(State)) EntityTraitVTable {
     var vt = EntityTraitVTable{};
-    const fields = @typeInfo(EntityTraitConfig(State)).@"struct".fields;
-    inline for (fields) |field| {
-        if (comptime eventFromFieldName(field.name)) |event| {
-            if (@field(config, field.name)) |f| {
+    const fields = @typeInfo(EntityTraitConfig(State)).@"struct".field_names;
+    inline for (fields) |name| {
+        if (comptime eventFromFieldName(name)) |event| {
+            if (@field(config, name)) |f| {
                 @field(vt, event.fieldName()) = wrapFn(State, event, f);
             }
         }
@@ -219,7 +219,7 @@ pub fn EntityTraitConfig(comptime State: type) type {
 
 pub const EntityTraitFactory = *const fn (std.mem.Allocator) error{OutOfMemory}!EntityTraitInstance;
 
-const FactoryList = std.ArrayListUnmanaged(EntityTraitFactory);
+const FactoryList = std.ArrayList(EntityTraitFactory);
 
 var entity_trait_registry: std.StringHashMapUnmanaged(FactoryList) = .empty;
 var registry_allocator: std.mem.Allocator = undefined;

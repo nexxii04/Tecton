@@ -157,10 +157,10 @@ fn wrapFn(comptime _: type, comptime event: Event, comptime f: anytype) Event.VT
 
 fn buildVTable(comptime State: type, comptime config: ItemStackTraitConfig(State)) ItemStackTraitVTable {
     var vt = ItemStackTraitVTable{};
-    const fields = @typeInfo(ItemStackTraitConfig(State)).@"struct".fields;
-    inline for (fields) |field| {
-        if (comptime eventFromFieldName(field.name)) |event| {
-            if (@field(config, field.name)) |f| {
+    const fields = @typeInfo(ItemStackTraitConfig(State)).@"struct".field_names;
+    inline for (fields) |name| {
+        if (comptime eventFromFieldName(name)) |event| {
+            if (@field(config, name)) |f| {
                 @field(vt, event.fieldName()) = wrapFn(State, event, f);
             }
         }

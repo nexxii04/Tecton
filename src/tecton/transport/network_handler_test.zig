@@ -113,7 +113,7 @@ pub fn Suite(comptime scope: type) type {
 
             var frame_buffer: [32]u8 = undefined;
             for (0..4) |i| {
-                const payload = [_]u8{@intCast(i + 1)} ** 16;
+                const payload: [16]u8 = @splat(@intCast(i + 1));
                 NetworkHandler.onPacket(handler, live, try initialFrame(&payload, &frame_buffer));
             }
             NetworkHandler.onPacket(handler, resigned, "stale");
@@ -169,8 +169,8 @@ pub fn Suite(comptime scope: type) type {
 
             const ring = handler.inbound_ring.?;
             const fill: u8 = 0x37;
-            const slab_payload = [_]u8{fill} ** 32;
-            const overflow_payload = [_]u8{fill} ** 100;
+            const slab_payload: [32]u8 = @splat(fill);
+            const overflow_payload: [100]u8 = @splat(fill);
             var frame_buffer: [128]u8 = undefined;
             NetworkHandler.onPacket(handler, conn, try initialFrame(&slab_payload, &frame_buffer));
             NetworkHandler.onPacket(handler, conn, try initialFrame(&overflow_payload, &frame_buffer));
@@ -213,7 +213,7 @@ pub fn Suite(comptime scope: type) type {
             var backend: u128 = 0;
             const conn = try handler.connections.create(&backend);
 
-            const warmup = [_]u8{0x5A} ** 900;
+            const warmup: [900]u8 = @splat(0x5A);
             for (0..4) |_| try handler.sendPacket(conn, &warmup);
             const slot_count = handler.send_buffers.available();
             fake.clear();
@@ -330,7 +330,7 @@ pub fn Suite(comptime scope: type) type {
             var backend: u128 = 0;
             const conn = try handler.connections.create(&backend);
 
-            const big = [_]u8{0xA5} ** 4096;
+            const big: [4096]u8 = @splat(0xA5);
             try handler.sendPacket(conn, &big);
             try std.testing.expectError(error.PayloadTooLarge, handler.sendFramed(conn, &big, .normal));
             try std.testing.expectEqual(@as(usize, 1), handler.oversizeSendCount());
@@ -374,7 +374,7 @@ pub fn Suite(comptime scope: type) type {
             try handler.sendPacket(conn, "inline");
             try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
 
-            const large = [_]u8{0x5A} ** 5000;
+            const large: [5000]u8 = @splat(0x5A);
             try std.testing.expectError(error.Backpressure, handler.sendPacket(conn, &large));
             try std.testing.expectEqual(@as(usize, 1), handler.backpressureSendCount());
             try std.testing.expectEqual(@as(usize, 1), fake.sent.items.len);
@@ -464,7 +464,7 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(usize, 1), handler.outboundDroppedCount());
 
             try handler.enableInboundRing(64, 64);
-            const frame = [_]u8{0} ** 32;
+            const frame: [32]u8 = @splat(0);
             for (0..65) |_| NetworkHandler.onPacket(handler, conn, &frame);
             try std.testing.expectEqual(@as(usize, 1), handler.inboundDroppedCount());
 

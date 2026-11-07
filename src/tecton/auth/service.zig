@@ -172,8 +172,7 @@ pub const AuthService = struct {
 fn resolveIssuer(http: *wire.HttpClient, allocator: std.mem.Allocator, options: Options) Error![]const u8 {
     if (options.issuer) |issuer| return withTrailingSlash(allocator, issuer);
 
-    const url = std.fmt.allocPrint(
-        allocator,
+    const url = allocator.print(
         "{s}/api/v1.0/discovery/{s}/builds/{s}",
         .{ options.discovery_url, options.application_type, options.game_version },
     ) catch return error.OutOfMemory;
@@ -197,7 +196,7 @@ fn resolveJwksUri(
 ) Error![]const u8 {
     if (options.jwks_uri) |uri| return allocator.dupe(u8, uri);
 
-    const url = try std.fmt.allocPrint(allocator, "{s}.well-known/openid-configuration", .{issuer});
+    const url = try allocator.print("{s}.well-known/openid-configuration", .{issuer});
     defer allocator.free(url);
 
     var document = http.getJson(url) catch return error.ConfigurationFailed;
@@ -249,7 +248,7 @@ fn fetchKeys(http: *wire.HttpClient, allocator: std.mem.Allocator, jwks_uri: []c
 
 fn withTrailingSlash(allocator: std.mem.Allocator, value: []const u8) Error![]const u8 {
     if (std.mem.endsWith(u8, value, "/")) return allocator.dupe(u8, value);
-    return std.fmt.allocPrint(allocator, "{s}/", .{value});
+    return allocator.print("{s}/", .{value});
 }
 
 const testing = std.testing;

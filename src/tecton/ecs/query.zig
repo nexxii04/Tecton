@@ -6,7 +6,7 @@ const Kind = entity_id.Kind;
 fn PtrTuple(comptime Cs: anytype) type {
     var types: [Cs.len]type = undefined;
     for (Cs, 0..) |C, i| types[i] = *C;
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 fn callExpanded(comptime callback: anytype, ctx: anytype, id: EntityId, ptrs: anytype) void {

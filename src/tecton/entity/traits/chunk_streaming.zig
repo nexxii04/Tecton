@@ -54,9 +54,9 @@ pub fn queueChunkStreaming(player: *Player) !void {
     const radius = player.view_distance;
     const sim_dist = dimension.simulation_distance;
 
-    var stale_hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    var stale_hashes = @as(std.ArrayList(i64), .empty);
     defer stale_hashes.deinit(allocator);
-    var upgrade_hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    var upgrade_hashes = @as(std.ArrayList(i64), .empty);
     defer upgrade_hashes.deinit(allocator);
 
     var it = player.sent_chunks.keyIterator();

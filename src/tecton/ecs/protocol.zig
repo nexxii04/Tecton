@@ -57,7 +57,7 @@ pub fn buildAddEntity(allocator: std.mem.Allocator, world: *GameWorld, id: Entit
     const transform = world.get(id, Transform) orelse return error.MissingTransform;
     const type_ref = world.get(id, TypeRef) orelse return error.MissingTypeRef;
 
-    var metadata = std.ArrayList(Protocol.DataItem){ .items = &.{}, .capacity = 0 };
+    var metadata = @as(std.ArrayList(Protocol.DataItem), .empty);
     defer metadata.deinit(allocator);
 
     if (world.get(id, ActorFlags)) |flags| {

@@ -39,7 +39,7 @@ pub const CommandParameter = struct {
         if (self.soft_enum_index) |idx| {
             return CommandArgValid | CommandArgSoftEnum | idx;
         }
-        return CommandArgValid | @intFromEnum(self.param_type);
+        return CommandArgValid | @backingInt(self.param_type);
     }
 };
 

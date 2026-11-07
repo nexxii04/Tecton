@@ -279,7 +279,7 @@ fn workerReadBlockData(
 }
 
 fn parseBlockEntitiesFromBytes(allocator: std.mem.Allocator, data: []const u8) []ParsedBlockEntity {
-    var entities = std.ArrayList(ParsedBlockEntity){ .items = &.{}, .capacity = 0 };
+    var entities = @as(std.ArrayList(ParsedBlockEntity), .empty);
     var stream = BinaryStream.init(allocator, data, null);
     while (stream.offset < data.len) {
         var tag = NBT.CompoundTag.read(&stream, allocator, NBT.ReadWriteOptions.default) catch break;
@@ -315,7 +315,7 @@ fn parseBlockEntitiesFromBytes(allocator: std.mem.Allocator, data: []const u8) [
             },
         };
 
-        var trait_ids = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+        var trait_ids = @as(std.ArrayList([]const u8), .empty);
         const traits_tag = tag.get("traits") orelse tag.get("Traits");
         if (traits_tag) |tt| {
             switch (tt) {

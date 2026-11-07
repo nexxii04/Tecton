@@ -25,7 +25,7 @@ var eventUserdata: ?*anyopaque = null;
 var eventSubscription: u64 = 0;
 
 fn eventSubscribe(_: ?*anyopaque, event_id: u32, phase: u16, _: i16, callback: ?abi.EventCallbackFn, userdata: ?*anyopaque, subscription: ?*u64) callconv(.c) i32 {
-    if (event_id != @intFromEnum(abi.EventId.server_tick) or phase != abi.event_phase_pre) return abi.result_invalid_argument;
+    if (event_id != @backingInt(abi.EventId.server_tick) or phase != abi.event_phase_pre) return abi.result_invalid_argument;
     eventCallback = callback;
     eventUserdata = userdata;
     eventSubscription = 42;
@@ -93,13 +93,13 @@ test "example native plugin completes lifecycle" {
     plugin.ready();
     try std.testing.expectEqual(@as(u32, 7), lifecycleMask(&plugin));
     var tick = abi.ServerTickEvent{ .tick = 1 };
-    var result: i32 = @intFromEnum(abi.EventResult.continue_);
+    var result: i32 = @backingInt(abi.EventResult.continue_);
     const event = abi.EventView{
         .data = @ptrCast(&tick),
         .data_size = @sizeOf(abi.ServerTickEvent),
         .result = &result,
         .schema = abi.schema_server_tick,
-        .event_id = @intFromEnum(abi.EventId.server_tick),
+        .event_id = @backingInt(abi.EventId.server_tick),
         .phase = abi.event_phase_pre,
         .flags = abi.event_flag_callback_only | abi.event_flag_borrowed,
     };

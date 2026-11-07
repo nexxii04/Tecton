@@ -108,8 +108,8 @@ pub const Bucket = struct { dim: usize, x: i32, z: i32, start: u32, end: u32 };
 pub const Cursor = struct { bucket: usize = 0, offset: u32 = 0 };
 
 pub const Index = struct {
-    slots: std.ArrayListUnmanaged(Slot) = .empty,
-    buckets: std.ArrayListUnmanaged(Bucket) = .empty,
+    slots: std.ArrayList(Slot) = .empty,
+    buckets: std.ArrayList(Bucket) = .empty,
 
     pub fn deinit(self: *Index, allocator: std.mem.Allocator) void {
         self.slots.deinit(allocator);
@@ -152,7 +152,7 @@ pub const Index = struct {
     pub fn collect(
         self: *const Index,
         allocator: std.mem.Allocator,
-        out: *std.ArrayListUnmanaged(u32),
+        out: *std.ArrayList(u32),
         dim: usize,
         block_x: f32,
         block_z: f32,

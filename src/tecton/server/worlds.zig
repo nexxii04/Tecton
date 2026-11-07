@@ -85,10 +85,11 @@ pub const WorldRegistry = struct {
 
 pub fn build(tecton: Host, worlds_dir: []const u8, name: []const u8) !*World {
     var path_buf: [512]u8 = undefined;
-    const db_path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}/db", .{ worlds_dir, name });
+    const db_path = try std.fmt.bufPrint(path_buf[0 .. path_buf.len - 1], "{s}/{s}/db", .{ worlds_dir, name });
+    path_buf[db_path.len] = 0;
     std.Io.Dir.cwd().createDirPath(tecton.io, db_path) catch {};
 
-    const provider = try LevelDBProvider.init(tecton.io, tecton.allocator, db_path);
+    const provider = try LevelDBProvider.init(tecton.io, tecton.allocator, @ptrCast(db_path.ptr));
     const world = tecton.allocator.create(World) catch |err| {
         provider.deinit();
         return err;

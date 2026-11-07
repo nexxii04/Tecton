@@ -5,7 +5,7 @@ const ItemStack = @import("../items/item_stack.zig").ItemStack;
 const Display = @import("../items/traits/display.zig");
 const Player = @import("../player/player.zig").Player;
 
-var nextContainerId: i8 = @intFromEnum(Protocol.ContainerId.First);
+var nextContainerId: i8 = @backingInt(Protocol.ContainerId.First);
 
 pub const Container = struct {
     allocator: std.mem.Allocator,
@@ -280,10 +280,10 @@ pub const Container = struct {
     }
 
     pub fn getNextContainerId() Protocol.ContainerId {
-        const id: Protocol.ContainerId = @enumFromInt(nextContainerId);
+        const id: Protocol.ContainerId = @fromBackingInt(nextContainerId);
         nextContainerId += 1;
-        if (nextContainerId > @intFromEnum(Protocol.ContainerId.Last)) {
-            nextContainerId = @intFromEnum(Protocol.ContainerId.First);
+        if (nextContainerId > @backingInt(Protocol.ContainerId.Last)) {
+            nextContainerId = @backingInt(Protocol.ContainerId.First);
         }
         return id;
     }

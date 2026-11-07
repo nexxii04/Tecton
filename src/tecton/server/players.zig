@@ -18,9 +18,9 @@ pub const PlayerRegistry = struct {
     pending_removals: std.ArrayList(*Player),
     pending_mutex: std.Io.Mutex = .init,
     movement_index: MovementBroadcast.Index = .{},
-    movement_candidates: std.ArrayListUnmanaged(u32) = .empty,
+    movement_candidates: std.ArrayList(u32) = .empty,
     movement_batch: std.ArrayList([]const u8) = .empty,
-    movement_viewers: std.ArrayListUnmanaged(MovementBroadcast.ViewerPoint) = .empty,
+    movement_viewers: std.ArrayList(MovementBroadcast.ViewerPoint) = .empty,
 
     publishing: bool = true,
 

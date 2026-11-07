@@ -249,7 +249,7 @@ pub fn Suite(comptime scope: type) type {
             try testing.expect(built.has("later"));
             try testing.expectEqual(@as(usize, 1), built.count());
 
-            var names: std.ArrayList([]const u8) = .{ .items = &.{}, .capacity = 0 };
+            var names: std.ArrayList([]const u8) = .empty;
             defer if (names.capacity > 0) names.deinit(allocator);
             try built.collectWorldNames(allocator, &names);
             try testing.expectEqual(@as(usize, 1), names.items.len);

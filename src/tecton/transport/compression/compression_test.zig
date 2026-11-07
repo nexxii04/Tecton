@@ -214,7 +214,7 @@ pub fn Suite(comptime scope: type) type {
             for (&medium, 0..) |*byte, index| byte.* = @intCast(index % 251);
             var large: [4096]u8 = undefined;
             @memset(&large, 0x7E);
-            const small = [_]u8{0x11} ** 40;
+            const small: [40]u8 = @splat(0x11);
 
             try expectSameBytes(&.{&small}, .{ .compression_method = .Zlib, .compression_threshold = 255 });
             try expectSameBytes(&.{&medium}, .{ .compression_method = .Zlib, .compression_threshold = 255 });

@@ -246,7 +246,7 @@ pub const Table = struct {
     }
 
     fn encode(kind: Kind, index: u32, generation: u32) u64 {
-        return (@as(u64, @intFromEnum(kind)) << 56) | (@as(u64, generation & 0x00ff_ffff) << 32) | @as(u64, index);
+        return (@as(u64, @backingInt(kind)) << 56) | (@as(u64, generation & 0x00ff_ffff) << 32) | @as(u64, index);
     }
 
     const Decoded = struct {

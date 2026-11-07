@@ -18,7 +18,7 @@ pub fn serializePlayer(allocator: std.mem.Allocator, player: anytype) !CompoundT
     }
 
     const dimension_id: i32 = if (player.entity.dimension) |dimension|
-        @intCast(@intFromEnum(dimension.dimension_type))
+        @intCast(@backingInt(dimension.dimension_type))
     else
         0;
     try tag.set("DimensionId", .{ .Int = IntTag.init(dimension_id, null) });

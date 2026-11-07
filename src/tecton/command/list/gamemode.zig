@@ -65,7 +65,7 @@ fn handle(raw: *anyopaque) void {
 
         var stream = BinaryStream.init(ctx.allocator, null, null);
         defer stream.deinit();
-        const packet = Protocol.SetPlayerGameTypePacket{ .gamemode = @intFromEnum(gamemode) };
+        const packet = Protocol.SetPlayerGameTypePacket{ .gamemode = @backingInt(gamemode) };
         const serialized = packet.serialize(&stream) catch continue;
         target.network.sendPacket(target.connection, serialized) catch {};
 

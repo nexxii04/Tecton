@@ -245,7 +245,7 @@ const testing = std.testing;
 fn testJwt(allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
     const encoder = std.base64.url_safe_no_pad.Encoder;
     const header = "{\"alg\":\"ES384\"}";
-    const signature = [_]u8{0} ** 96;
+    const signature: [96]u8 = @splat(0);
 
     const total = encoder.calcSize(header.len) + 1 +
         encoder.calcSize(payload.len) + 1 +
@@ -267,14 +267,12 @@ fn testJwt(allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
 
 fn testChain(allocator: std.mem.Allocator, xuid: []const u8, name: []const u8, claimed_uuid: ?[]const u8) !struct { chain: []u8, client: []u8 } {
     const payload = if (claimed_uuid) |uuid|
-        try std.fmt.allocPrint(
-            allocator,
+        try allocator.print(
             "{{\"xid\":\"{s}\",\"xname\":\"{s}\",\"tid\":\"89692877\",\"leguuid\":\"{s}\",\"cpk\":\"AQ==\"}}",
             .{ xuid, name, uuid },
         )
     else
-        try std.fmt.allocPrint(
-            allocator,
+        try allocator.print(
             "{{\"xid\":\"{s}\",\"xname\":\"{s}\",\"tid\":\"89692877\",\"cpk\":\"AQ==\"}}",
             .{ xuid, name },
         );
@@ -284,13 +282,13 @@ fn testChain(allocator: std.mem.Allocator, xuid: []const u8, name: []const u8, c
     defer allocator.free(token);
 
     return .{
-        .chain = try std.fmt.allocPrint(allocator, "{{\"AuthenticationType\":1,\"Token\":\"{s}\"}}", .{token}),
+        .chain = try allocator.print("{{\"AuthenticationType\":1,\"Token\":\"{s}\"}}", .{token}),
         .client = try testJwt(allocator, "{\"SkinId\":\"Standard_Custom\",\"DeviceOS\":7}"),
     };
 }
 
 fn testVerified(allocator: std.mem.Allocator) !auth.Verified {
-    const secret = std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes([_]u8{11} ** 48) catch unreachable;
+    const secret = std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes(@splat(11)) catch unreachable;
     const key_pair = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.fromSecretKey(secret) catch unreachable;
     return .{
         .identity = try auth.identity.build(allocator, .{

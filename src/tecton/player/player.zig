@@ -507,7 +507,7 @@ pub const Player = struct {
         const dimension = self.entity.dimension orelse return;
         const allocator = self.entity.allocator;
 
-        var hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+        var hashes = @as(std.ArrayList(i64), .empty);
         var it = self.sent_chunks.keyIterator();
         while (it.next()) |key| {
             hashes.append(allocator, key.*) catch {};

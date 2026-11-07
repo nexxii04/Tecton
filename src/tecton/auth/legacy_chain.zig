@@ -114,7 +114,7 @@ fn fromExtraData(
 const testing = std.testing;
 
 fn testKey(seed: u8) std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair {
-    const secret = std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes([_]u8{seed} ** 48) catch unreachable;
+    const secret = std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes(@splat(seed)) catch unreachable;
     return std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.fromSecretKey(secret) catch unreachable;
 }
 
@@ -190,28 +190,25 @@ fn buildChain(
     const middle_spki = try spkiOf(allocator, middle_key);
     defer allocator.free(middle_spki);
 
-    const first_header = try std.fmt.allocPrint(allocator, "{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
+    const first_header = try allocator.print("{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
     defer allocator.free(first_header);
-    const first_payload = try std.fmt.allocPrint(
-        allocator,
+    const first_payload = try allocator.print(
         "{{\"identityPublicKey\":\"{s}\",\"certificateAuthority\":true,\"exp\":{d},\"nbf\":{d}}}",
         .{ anchor_spki, now + 3600, now - 3600 },
     );
     defer allocator.free(first_payload);
 
-    const second_header = try std.fmt.allocPrint(allocator, "{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
+    const second_header = try allocator.print("{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
     defer allocator.free(second_header);
-    const second_payload = try std.fmt.allocPrint(
-        allocator,
+    const second_payload = try allocator.print(
         "{{\"identityPublicKey\":\"{s}\",\"iss\":\"Mojang\",\"exp\":{d},\"nbf\":{d}}}",
         .{ middle_spki, now + 3600, now - 3600 },
     );
     defer allocator.free(second_payload);
 
-    const third_header = try std.fmt.allocPrint(allocator, "{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
+    const third_header = try allocator.print("{{\"alg\":\"ES384\",\"x5u\":\"{s}\"}}", .{client_spki});
     defer allocator.free(third_header);
-    const third_payload = try std.fmt.allocPrint(
-        allocator,
+    const third_payload = try allocator.print(
         "{{\"identityPublicKey\":\"{s}\",\"iss\":\"Mojang\",\"exp\":{d},\"nbf\":{d}," ++
             "\"extraData\":{{\"XUID\":\"{s}\",\"displayName\":\"Verified\",\"identity\":\"{s}\",\"titleId\":\"896928775\"}}}}",
         .{ client_spki, now + 3600, now - 3600, xuid, "10c34284-6c51-3583-be20-0047fe91d0d0" },

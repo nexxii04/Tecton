@@ -163,7 +163,7 @@ test "client data is only trusted when it is signed by the key the token vouches
     try verifyClientData(allocator, fixture_client_data, cpk);
 
     const other_key = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.fromSecretKey(
-        std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes([_]u8{5} ** 48) catch unreachable,
+        std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes(@splat(5)) catch unreachable,
     ) catch unreachable;
     const other = try signature.Secp384PublicKey.fromSec1(&other_key.public_key.toUncompressedSec1());
     try testing.expectError(error.InvalidSignature, verifyClientData(allocator, fixture_client_data, other));
@@ -177,8 +177,7 @@ test "client data is only trusted when it is signed by the key the token vouches
 
 fn unsignedToken(allocator: std.mem.Allocator, alg: []const u8, kid: []const u8) []const u8 {
     const encoder = std.base64.url_safe_no_pad.Encoder;
-    const header = std.fmt.allocPrint(
-        allocator,
+    const header = allocator.print(
         "{{\"alg\":\"{s}\",\"kid\":\"{s}\"}}",
         .{ alg, kid },
     ) catch unreachable;
@@ -192,7 +191,7 @@ fn unsignedToken(allocator: std.mem.Allocator, alg: []const u8, kid: []const u8)
     offset += encoder.encode(token[offset..], "{}").len;
     token[offset] = '.';
     offset += 1;
-    offset += encoder.encode(token[offset..], &[_]u8{0} ** 96).len;
+    offset += encoder.encode(token[offset..], &@as([96]u8, @splat(0))).len;
     return token[0..offset];
 }
 

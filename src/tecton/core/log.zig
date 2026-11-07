@@ -3,21 +3,21 @@ const std = @import("std");
 const scope = .tecton;
 const scoped = std.log.scoped(scope);
 
-var level_filter = std.atomic.Value(u8).init(@intFromEnum(std.log.default_level));
+var level_filter = std.atomic.Value(u8).init(@backingInt(std.log.default_level));
 
 /// Raises or lowers the runtime threshold. It can only silence messages that
 /// the compile-time `std.log_level` already kept.
 pub fn setLevel(threshold: std.log.Level) void {
-    level_filter.store(@intFromEnum(threshold), .release);
+    level_filter.store(@backingInt(threshold), .release);
 }
 
 pub fn level() std.log.Level {
-    return @enumFromInt(level_filter.load(.acquire));
+    return @fromBackingInt(@intCast(level_filter.load(.acquire)));
 }
 
 pub fn enabled(comptime message_level: std.log.Level) bool {
     return std.log.logEnabled(message_level, scope) and
-        @intFromEnum(message_level) <= level_filter.load(.monotonic);
+        @backingInt(message_level) <= level_filter.load(.monotonic);
 }
 
 pub fn debug(comptime fmt: []const u8, args: anytype) void {

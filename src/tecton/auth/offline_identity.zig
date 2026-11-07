@@ -57,12 +57,14 @@ test "valid display names pass" {
     try validateDisplayName("TestBot0000");
     try validateDisplayName("a");
     try validateDisplayName("name with space");
-    try validateDisplayName("x" ** max_display_name_length);
+    const max_name: [max_display_name_length]u8 = @splat('x');
+    try validateDisplayName(&max_name);
 }
 
 test "display names that would confuse the server are refused" {
     try testing.expectError(error.EmptyDisplayName, validateDisplayName(""));
-    try testing.expectError(error.DisplayNameTooLong, validateDisplayName("x" ** (max_display_name_length + 1)));
+    const too_long: [max_display_name_length + 1]u8 = @splat('x');
+    try testing.expectError(error.DisplayNameTooLong, validateDisplayName(&too_long));
     try testing.expectError(error.DisplayNameHasControlCharacters, validateDisplayName("bad\nname"));
     try testing.expectError(error.DisplayNameHasControlCharacters, validateDisplayName("ansi\x1b[31m"));
     try testing.expectError(error.DisplayNameHasControlCharacters, validateDisplayName("null\x00byte"));

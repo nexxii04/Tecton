@@ -17,7 +17,7 @@ pub const SubChunk = struct {
             .allocator = allocator,
             .version = VERSION,
             .index = index,
-            .layers = .{ .items = &.{}, .capacity = 0 },
+            .layers = .empty,
             .biomes = BiomeStorage.init(allocator),
         };
     }
@@ -88,7 +88,7 @@ pub const SubChunk = struct {
         const count = try stream.readUint8();
         const index: i8 = if (version == 9) try stream.readInt8() else 0;
 
-        var layers = std.ArrayList(BlockStorage){ .items = &.{}, .capacity = 0 };
+        var layers = @as(std.ArrayList(BlockStorage), .empty);
         errdefer {
             for (layers.items) |*layer| layer.deinit();
             layers.deinit(allocator);

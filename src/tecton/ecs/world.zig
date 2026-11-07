@@ -11,7 +11,7 @@ pub const WorldError = error{ CapacityExceeded, InvalidEntity };
 fn StoreTuple(comptime components: anytype) type {
     var types: [components.len]type = undefined;
     for (components, 0..) |C, i| types[i] = DenseStore(C);
-    return std.meta.Tuple(&types);
+    return @Tuple(&types);
 }
 
 pub fn World(comptime components: anytype) type {

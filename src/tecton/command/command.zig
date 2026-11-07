@@ -47,13 +47,13 @@ pub const Command = struct {
             .description = description,
             .permission = permission,
             .aliases = aliases,
-            .overloads = std.ArrayList(CommandOverload){ .items = &.{}, .capacity = 0 },
+            .overloads = @as(std.ArrayList(CommandOverload), .empty),
             .subcommands = std.StringHashMap(*SubCommand).init(allocator),
             .handler = handler,
             .userdata = null,
             .subcommand_enum = null,
-            .subcommand_overload_params = std.ArrayList([]const CommandParameter){ .items = &.{}, .capacity = 0 },
-            .subcommand_param_copies = std.ArrayList([]const CommandParameter){ .items = &.{}, .capacity = 0 },
+            .subcommand_overload_params = @as(std.ArrayList([]const CommandParameter), .empty),
+            .subcommand_param_copies = @as(std.ArrayList([]const CommandParameter), .empty),
         };
         return cmd;
     }
@@ -139,7 +139,7 @@ pub const Command = struct {
             self.allocator.free(se.values);
             self.subcommand_enum = null;
         }
-        var unique_names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+        var unique_names = @as(std.ArrayList([]const u8), .empty);
         defer unique_names.deinit(self.allocator);
         var seen = std.StringHashMap(void).init(self.allocator);
         defer seen.deinit();
@@ -155,7 +155,7 @@ pub const Command = struct {
         const enum_values = try self.allocator.alloc([]const u8, unique_names.items.len);
         @memcpy(enum_values, unique_names.items);
         self.subcommand_enum = .{
-            .name = try std.fmt.allocPrint(self.allocator, "{s}SubCommands", .{self.name}),
+            .name = try self.allocator.print("{s}SubCommands", .{self.name}),
             .values = enum_values,
         };
         var added = std.StringHashMap(void).init(self.allocator);

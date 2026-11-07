@@ -30,7 +30,7 @@ pub const TickScheduler = struct {
             .allocator = allocator,
         };
         for (&sched.ring) |*slot| {
-            slot.* = std.ArrayList(ScheduledTick){ .items = &.{}, .capacity = 0 };
+            slot.* = @as(std.ArrayList(ScheduledTick), .empty);
         }
         return sched;
     }

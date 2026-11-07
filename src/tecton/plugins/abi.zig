@@ -172,8 +172,8 @@ pub const packet_priority_normal: u32 = 0;
 pub const packet_priority_immediate: u32 = 1;
 pub const event_custom_base: u32 = 0x1000;
 
-pub const schema_server_tick: u32 = (@intFromEnum(EventId.server_tick) << 8) | 1;
-pub const schema_player: u32 = (@intFromEnum(EventId.player_join) << 8) | 1;
+pub const schema_server_tick: u32 = (@backingInt(EventId.server_tick) << 8) | 1;
+pub const schema_player: u32 = (@backingInt(EventId.player_join) << 8) | 1;
 
 pub const StringView = extern struct {
     data: ?[*]const u8 = null,
@@ -388,7 +388,7 @@ pub fn eventMeta(event: EventId) EventMeta {
         .player_chat, .player_move, .damage, .entity_combust, .enchantment_apply, .entity_damage => true,
         else => false,
     };
-    const id = @intFromEnum(event);
+    const id = @backingInt(event);
     const version: u32 = if (payload == .none) 0 else 1;
     return .{
         .external_id = id,
@@ -1232,23 +1232,23 @@ fn fpConstants() u64 {
     h ^= mix(abi_fp_seed ^ 1099, block_flag_apply_traits);
     h ^= mix(abi_fp_seed ^ 1100, block_flag_update_clients);
     h ^= mix(abi_fp_seed ^ 1101, block_flag_silent);
-    h ^= mix(abi_fp_seed ^ 1034, @intFromEnum(EventId.server_start));
-    h ^= mix(abi_fp_seed ^ 1035, @intFromEnum(EventId.server_shutdown));
-    h ^= mix(abi_fp_seed ^ 1036, @intFromEnum(EventId.server_tick));
-    h ^= mix(abi_fp_seed ^ 1037, @intFromEnum(EventId.player_join));
-    h ^= mix(abi_fp_seed ^ 1038, @intFromEnum(EventId.player_disconnect));
-    h ^= mix(abi_fp_seed ^ 1039, @intFromEnum(EventId.player_chat));
-    h ^= mix(abi_fp_seed ^ 1040, @intFromEnum(EventId.item_use));
-    h ^= mix(abi_fp_seed ^ 1041, @intFromEnum(EventId.player_move));
-    h ^= mix(abi_fp_seed ^ 1042, @intFromEnum(EventId.damage));
-    h ^= mix(abi_fp_seed ^ 1043, @intFromEnum(EventId.block_place));
-    h ^= mix(abi_fp_seed ^ 1044, @intFromEnum(EventId.block_break));
-    h ^= mix(abi_fp_seed ^ 1045, @intFromEnum(EventId.inventory_open));
-    h ^= mix(abi_fp_seed ^ 1046, @intFromEnum(EventId.inventory_click));
-    h ^= mix(abi_fp_seed ^ 1047, @intFromEnum(EventId.inventory_close));
-    h ^= mix(abi_fp_seed ^ 1048, @intFromEnum(EventId.transaction_prepare));
-    h ^= mix(abi_fp_seed ^ 1049, @intFromEnum(EventId.transaction_commit));
-    h ^= mix(abi_fp_seed ^ 1050, @intFromEnum(EventId.transaction_abort));
+    h ^= mix(abi_fp_seed ^ 1034, @backingInt(EventId.server_start));
+    h ^= mix(abi_fp_seed ^ 1035, @backingInt(EventId.server_shutdown));
+    h ^= mix(abi_fp_seed ^ 1036, @backingInt(EventId.server_tick));
+    h ^= mix(abi_fp_seed ^ 1037, @backingInt(EventId.player_join));
+    h ^= mix(abi_fp_seed ^ 1038, @backingInt(EventId.player_disconnect));
+    h ^= mix(abi_fp_seed ^ 1039, @backingInt(EventId.player_chat));
+    h ^= mix(abi_fp_seed ^ 1040, @backingInt(EventId.item_use));
+    h ^= mix(abi_fp_seed ^ 1041, @backingInt(EventId.player_move));
+    h ^= mix(abi_fp_seed ^ 1042, @backingInt(EventId.damage));
+    h ^= mix(abi_fp_seed ^ 1043, @backingInt(EventId.block_place));
+    h ^= mix(abi_fp_seed ^ 1044, @backingInt(EventId.block_break));
+    h ^= mix(abi_fp_seed ^ 1045, @backingInt(EventId.inventory_open));
+    h ^= mix(abi_fp_seed ^ 1046, @backingInt(EventId.inventory_click));
+    h ^= mix(abi_fp_seed ^ 1047, @backingInt(EventId.inventory_close));
+    h ^= mix(abi_fp_seed ^ 1048, @backingInt(EventId.transaction_prepare));
+    h ^= mix(abi_fp_seed ^ 1049, @backingInt(EventId.transaction_commit));
+    h ^= mix(abi_fp_seed ^ 1050, @backingInt(EventId.transaction_abort));
     h ^= mix(abi_fp_seed ^ 1051, event_flag_cancelable);
     h ^= mix(abi_fp_seed ^ 1052, event_flag_mutable);
     h ^= mix(abi_fp_seed ^ 1053, event_flag_callback_only);
@@ -1298,14 +1298,14 @@ fn fpConstants() u64 {
     h ^= mix(abi_fp_seed ^ 1083, interface_commands);
     h ^= mix(abi_fp_seed ^ 1086, custom_payload_max);
     h ^= mix(abi_fp_seed ^ 1087, max_custom_events);
-    h ^= mix(abi_fp_seed ^ 1088, @intFromEnum(EventId.entity_combust));
-    h ^= mix(abi_fp_seed ^ 1089, @intFromEnum(EventId.enchantment_apply));
-    h ^= mix(abi_fp_seed ^ 1090, @intFromEnum(EventId.enchantment_remove));
-    h ^= mix(abi_fp_seed ^ 1091, @intFromEnum(EventId.entity_spawn));
-    h ^= mix(abi_fp_seed ^ 1092, @intFromEnum(EventId.entity_despawn));
-    h ^= mix(abi_fp_seed ^ 1093, @intFromEnum(EventId.entity_damage));
-    h ^= mix(abi_fp_seed ^ 1094, @intFromEnum(EventId.entity_death));
-    h ^= mix(abi_fp_seed ^ 1095, @intFromEnum(EventId.entity_interact));
+    h ^= mix(abi_fp_seed ^ 1088, @backingInt(EventId.entity_combust));
+    h ^= mix(abi_fp_seed ^ 1089, @backingInt(EventId.enchantment_apply));
+    h ^= mix(abi_fp_seed ^ 1090, @backingInt(EventId.enchantment_remove));
+    h ^= mix(abi_fp_seed ^ 1091, @backingInt(EventId.entity_spawn));
+    h ^= mix(abi_fp_seed ^ 1092, @backingInt(EventId.entity_despawn));
+    h ^= mix(abi_fp_seed ^ 1093, @backingInt(EventId.entity_damage));
+    h ^= mix(abi_fp_seed ^ 1094, @backingInt(EventId.entity_death));
+    h ^= mix(abi_fp_seed ^ 1095, @backingInt(EventId.entity_interact));
     return h;
 }
 

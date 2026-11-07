@@ -15,7 +15,7 @@ pub fn writeBlockEntities(provider: anytype, chunk: anytype, dimension: anytype)
 
     const chunk_blocks = dimension.getBlocksInChunk(chunk.x, chunk.z);
 
-    var tags = std.ArrayList(NBT.Tag){ .items = &.{}, .capacity = 0 };
+    var tags = @as(std.ArrayList(NBT.Tag), .empty);
     defer {
         for (tags.items) |*t| {
             switch (t.*) {
@@ -60,7 +60,7 @@ pub fn writeBlockEntities(provider: anytype, chunk: anytype, dimension: anytype)
             continue;
         };
 
-        var trait_tags = std.ArrayList(NBT.Tag){ .items = &.{}, .capacity = 0 };
+        var trait_tags = @as(std.ArrayList(NBT.Tag), .empty);
         defer trait_tags.deinit(provider.allocator);
         for (block.traits.items) |instance| {
             const duped = provider.allocator.dupe(u8, instance.identifier) catch continue;

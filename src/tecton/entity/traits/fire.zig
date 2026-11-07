@@ -149,7 +149,7 @@ fn onSerialize(state: *State, tag: *CompoundTag) void {
     if (state.fire_ticks <= 0) return;
     tag.set("FireTicks", .{ .Int = IntTag.init(state.fire_ticks, null) }) catch return;
     tag.set("FireDamageTimer", .{ .Int = IntTag.init(state.damage_timer, null) }) catch return;
-    tag.set("FireBurnSource", .{ .Int = IntTag.init(@intFromEnum(state.burn_source), null) }) catch {};
+    tag.set("FireBurnSource", .{ .Int = IntTag.init(@backingInt(state.burn_source), null) }) catch {};
 }
 
 fn onDeserialize(state: *State, tag: *const CompoundTag) void {

@@ -20,7 +20,7 @@ pub const PhysicsProfile = enum(u8) {
     projectile = 2,
 
     pub fn index(self: PhysicsProfile) u8 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

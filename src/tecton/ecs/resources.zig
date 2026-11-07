@@ -21,7 +21,7 @@ pub const DimensionEcs = struct {
     runtime_index: protocol_mod.RuntimeIndex,
     sync: EntitySync,
     chunk_index: EcsChunkIndex,
-    damage_queue: std.ArrayListUnmanaged(@import("mobs.zig").DamageRequest) = .empty,
+    damage_queue: std.ArrayList(@import("mobs.zig").DamageRequest) = .empty,
     damage_overflow: usize = 0,
     unique_ids: std.AutoHashMapUnmanaged(i64, void) = .empty,
     rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15),

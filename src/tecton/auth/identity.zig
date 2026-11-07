@@ -237,8 +237,7 @@ test "the xuid-derived uuid matches the one the login decoder derives" {
     const derived = try uuidFromXuid(allocator, xuid);
     defer allocator.free(derived);
 
-    const payload = try std.fmt.allocPrint(
-        allocator,
+    const payload = try allocator.print(
         "{{\"xid\":\"{s}\",\"xname\":\"Steve\",\"tid\":\"89692877\",\"cpk\":\"AQ==\"}}",
         .{xuid},
     );

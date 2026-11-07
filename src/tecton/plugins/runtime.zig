@@ -29,7 +29,7 @@ const ItemType = @import("../items/item_type.zig").ItemType;
 const EntityTypeRegistry = @import("../entity/entity_type_registry.zig").EntityTypeRegistry;
 
 const MAX_PLUGIN_PACKET_BYTES: usize = 1 << 20;
-const event_count = std.meta.fields(Events.Event).len;
+const event_count = @typeInfo(Events.Event).@"enum".field_names.len;
 const custom_event_count: usize = abi.max_custom_events;
 const bucket_count = event_count + custom_event_count;
 const deferred_capacity: usize = 1024;
@@ -37,7 +37,7 @@ const timer_wheel_slots: usize = 4096;
 const timer_capacity: usize = 4096;
 const timer_none: u32 = std.math.maxInt(u32);
 const max_emit_depth: u32 = 16;
-const allocation_checks = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
+const allocation_checks = builtin.mode == .debug or builtin.mode == .release_safe;
 
 const LiveBlock = struct {
     size: usize,
@@ -59,7 +59,7 @@ pub const LoadCounters = struct {
     loaded: u32 = 0,
     failed: u32 = 0,
     unloaded: u32 = 0,
-    by_reason: [abi.load_reason_count]u32 = [_]u32{0} ** abi.load_reason_count,
+    by_reason: [abi.load_reason_count]u32 = @splat(0),
 };
 
 pub const PluginSnapshot = struct {
@@ -460,7 +460,7 @@ pub const PluginRuntime = struct {
         }.lessThan);
 
         for (names.items) |name| {
-            const path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ directory_path, name }) catch {
+            const path = self.allocator.print("{s}/{s}", .{ directory_path, name }) catch {
                 logger.err("Unable to allocate plugin path for {s}", .{name});
                 continue;
             };
@@ -825,7 +825,7 @@ pub const PluginRuntime = struct {
         }
         logger.info("[plugin:{s}] unload: {s} handles={d} timers={d} commands={d}", .{
             slot.name,
-            abi.shutdownReasonName(@intFromEnum(reason)),
+            abi.shutdownReasonName(@backingInt(reason)),
             handles,
             timers,
             commands,
@@ -979,7 +979,7 @@ pub const PluginRuntime = struct {
         }
         if (self.bridges[event_index][phase_index]) self.uninstallBridgeListener(event_index, phase_index);
         const internal = internalEvent(@intCast(event_index)) orelse return error.UnknownEvent;
-        const event_phase: Events.EventPhase = @enumFromInt(phase_index);
+        const event_phase: Events.EventPhase = @fromBackingInt(@intCast(phase_index));
         switch (internal) {
             inline else => |tag| _ = try events.subscribeWithContext(tag, event_phase, self.bridge_priority[event_index][phase_index], NATIVE_BRIDGE_OWNER_ID, bridgeCallback(tag), self),
         }
@@ -994,7 +994,7 @@ pub const PluginRuntime = struct {
         if (self.bridge_total > 0) self.bridge_total -= 1;
         const events = self.events orelse return;
         const internal = internalEvent(@intCast(event_index)) orelse return;
-        const event_phase: Events.EventPhase = @enumFromInt(phase_index);
+        const event_phase: Events.EventPhase = @fromBackingInt(@intCast(phase_index));
         switch (internal) {
             inline else => |tag| events.removeOwnerFor(tag, event_phase, NATIVE_BRIDGE_OWNER_ID),
         }
@@ -1156,10 +1156,10 @@ pub const PluginRuntime = struct {
         const meta = maybe_meta orelse return .continue_;
         const external_event_id = meta.external_id;
         const event_index: usize = external_event_id;
-        const phase: usize = @intFromEnum(context.phase);
+        const phase: usize = @backingInt(context.phase);
         if (self.active[event_index][phase] == 0) return .continue_;
 
-        var result: i32 = @intFromEnum(abi.EventResult.continue_);
+        var result: i32 = @backingInt(abi.EventResult.continue_);
         var payload: abi.EventPayload = undefined;
         var payload_ptr: ?*const anyopaque = null;
         var payload_size: usize = 0;
@@ -1210,7 +1210,7 @@ pub const PluginRuntime = struct {
                     .victim_runtime = data.victim.runtime_id,
                     .attacker_runtime = if (data.attacker) |attacker| attacker.runtime_id else 0,
                     .amount = data.amount,
-                    .cause = @intFromEnum(data.cause),
+                    .cause = @backingInt(data.cause),
                     .reserved = 0,
                 } };
                 payload_ptr = @ptrCast(&payload.damage);
@@ -1221,7 +1221,7 @@ pub const PluginRuntime = struct {
                     .runtime_id = data.entity.runtime_id,
                     .instigator_runtime = if (data.instigator) |instigator| instigator.runtime_id else 0,
                     .duration = data.duration,
-                    .source = @intFromEnum(data.source),
+                    .source = @backingInt(data.source),
                 } };
                 payload_ptr = @ptrCast(&payload.entity_combust);
                 payload_size = meta.payload_size;
@@ -1272,7 +1272,7 @@ pub const PluginRuntime = struct {
                     .enchantment_id = data.definition.id,
                     .previous_level = data.previous_level orelse 0,
                     .level = data.level,
-                    .source = @intFromEnum(data.source),
+                    .source = @backingInt(data.source),
                     .reserved = 0,
                 } };
                 payload_ptr = @ptrCast(&payload.enchant);
@@ -1285,7 +1285,7 @@ pub const PluginRuntime = struct {
                     .enchantment_id = if (data.definition) |definition| definition.id else data.definition_id,
                     .previous_level = data.previous_level,
                     .level = 0,
-                    .source = @intFromEnum(data.source),
+                    .source = @backingInt(data.source),
                     .reserved = 0,
                 } };
                 payload_ptr = @ptrCast(&payload.enchant);
@@ -1297,7 +1297,7 @@ pub const PluginRuntime = struct {
                 payload_size = meta.payload_size;
             },
             .EntityDespawn => {
-                payload = .{ .entity_despawn = .{ .runtime_id = data.runtime_id, .cause = @intFromEnum(data.cause), .reserved = 0 } };
+                payload = .{ .entity_despawn = .{ .runtime_id = data.runtime_id, .cause = @backingInt(data.cause), .reserved = 0 } };
                 payload_ptr = @ptrCast(&payload.entity_despawn);
                 payload_size = meta.payload_size;
             },
@@ -1306,7 +1306,7 @@ pub const PluginRuntime = struct {
                     .target_runtime = data.target_runtime,
                     .source_runtime = data.source_runtime orelse 0,
                     .amount = data.amount,
-                    .cause = @intFromEnum(data.cause),
+                    .cause = @backingInt(data.cause),
                     .reserved = 0,
                 } };
                 payload_ptr = @ptrCast(&payload.entity_damage);
@@ -1328,7 +1328,7 @@ pub const PluginRuntime = struct {
                 payload = .{ .entity_interact = .{
                     .target_runtime = data.target_runtime,
                     .player_runtime = data.player.entity.runtime_id,
-                    .action = @intFromEnum(data.action),
+                    .action = @backingInt(data.action),
                     .reserved = 0,
                 } };
                 payload_ptr = @ptrCast(&payload.entity_interact);
@@ -1336,7 +1336,7 @@ pub const PluginRuntime = struct {
             },
         }
 
-        defer if (builtin.mode == .Debug and payload_ptr != null) @memset(@as([*]u8, @ptrCast(&payload))[0..payload_size], 0xDD);
+        defer if (builtin.mode == .debug and payload_ptr != null) @memset(@as([*]u8, @ptrCast(&payload))[0..payload_size], 0xDD);
 
         const view = abi.EventView{
             .data = payload_ptr,
@@ -1385,7 +1385,7 @@ pub const PluginRuntime = struct {
                     else => {},
                 }
             }
-            if (result != @intFromEnum(abi.EventResult.continue_) and (meta.flags & abi.event_flag_cancelable) != 0) return .cancel;
+            if (result != @backingInt(abi.EventResult.continue_) and (meta.flags & abi.event_flag_cancelable) != 0) return .cancel;
         }
         return .continue_;
     }
@@ -1703,31 +1703,31 @@ pub const PluginRuntime = struct {
 
     fn internalEvent(event_id: u32) ?Events.Event {
         return switch (event_id) {
-            @intFromEnum(abi.EventId.server_start) => .ServerStart,
-            @intFromEnum(abi.EventId.server_shutdown) => .ServerShutdown,
-            @intFromEnum(abi.EventId.server_tick) => .ServerTick,
-            @intFromEnum(abi.EventId.player_join) => .PlayerJoin,
-            @intFromEnum(abi.EventId.player_disconnect) => .PlayerDisconnect,
-            @intFromEnum(abi.EventId.player_chat) => .PlayerChat,
-            @intFromEnum(abi.EventId.item_use) => .ItemUse,
-            @intFromEnum(abi.EventId.player_move) => .PlayerMove,
-            @intFromEnum(abi.EventId.damage) => .Damage,
-            @intFromEnum(abi.EventId.block_place) => .BlockPlace,
-            @intFromEnum(abi.EventId.block_break) => .BlockBreak,
-            @intFromEnum(abi.EventId.inventory_open) => .InventoryOpen,
-            @intFromEnum(abi.EventId.inventory_click) => .InventoryClick,
-            @intFromEnum(abi.EventId.inventory_close) => .InventoryClose,
-            @intFromEnum(abi.EventId.transaction_prepare) => .TransactionPrepare,
-            @intFromEnum(abi.EventId.transaction_commit) => .TransactionCommit,
-            @intFromEnum(abi.EventId.transaction_abort) => .TransactionAbort,
-            @intFromEnum(abi.EventId.entity_combust) => .EntityCombust,
-            @intFromEnum(abi.EventId.enchantment_apply) => .EnchantmentApply,
-            @intFromEnum(abi.EventId.enchantment_remove) => .EnchantmentRemove,
-            @intFromEnum(abi.EventId.entity_spawn) => .EntitySpawn,
-            @intFromEnum(abi.EventId.entity_despawn) => .EntityDespawn,
-            @intFromEnum(abi.EventId.entity_damage) => .EntityDamage,
-            @intFromEnum(abi.EventId.entity_death) => .EntityDeath,
-            @intFromEnum(abi.EventId.entity_interact) => .EntityInteract,
+            @backingInt(abi.EventId.server_start) => .ServerStart,
+            @backingInt(abi.EventId.server_shutdown) => .ServerShutdown,
+            @backingInt(abi.EventId.server_tick) => .ServerTick,
+            @backingInt(abi.EventId.player_join) => .PlayerJoin,
+            @backingInt(abi.EventId.player_disconnect) => .PlayerDisconnect,
+            @backingInt(abi.EventId.player_chat) => .PlayerChat,
+            @backingInt(abi.EventId.item_use) => .ItemUse,
+            @backingInt(abi.EventId.player_move) => .PlayerMove,
+            @backingInt(abi.EventId.damage) => .Damage,
+            @backingInt(abi.EventId.block_place) => .BlockPlace,
+            @backingInt(abi.EventId.block_break) => .BlockBreak,
+            @backingInt(abi.EventId.inventory_open) => .InventoryOpen,
+            @backingInt(abi.EventId.inventory_click) => .InventoryClick,
+            @backingInt(abi.EventId.inventory_close) => .InventoryClose,
+            @backingInt(abi.EventId.transaction_prepare) => .TransactionPrepare,
+            @backingInt(abi.EventId.transaction_commit) => .TransactionCommit,
+            @backingInt(abi.EventId.transaction_abort) => .TransactionAbort,
+            @backingInt(abi.EventId.entity_combust) => .EntityCombust,
+            @backingInt(abi.EventId.enchantment_apply) => .EnchantmentApply,
+            @backingInt(abi.EventId.enchantment_remove) => .EnchantmentRemove,
+            @backingInt(abi.EventId.entity_spawn) => .EntitySpawn,
+            @backingInt(abi.EventId.entity_despawn) => .EntityDespawn,
+            @backingInt(abi.EventId.entity_damage) => .EntityDamage,
+            @backingInt(abi.EventId.entity_death) => .EntityDeath,
+            @backingInt(abi.EventId.entity_interact) => .EntityInteract,
             else => null,
         };
     }
@@ -1825,7 +1825,7 @@ pub const PluginRuntime = struct {
         const slot = slotFrom(context) orelse return null;
         const self = slot.runtime;
         if (size == 0) return null;
-        
+
         const aligned = @max(alignment, 1);
         const memory = self.allocator.rawAlloc(size, .fromByteUnits(aligned), @returnAddress()) orelse return null;
         if (comptime allocation_checks) {
@@ -2080,7 +2080,7 @@ pub const PluginRuntime = struct {
         const custom = event_id - abi.event_custom_base;
         if (custom >= abi.max_custom_events) return;
         const event_index: usize = event_count + custom;
-        var result: i32 = @intFromEnum(abi.EventResult.continue_);
+        var result: i32 = @backingInt(abi.EventResult.continue_);
         const previous_emit = self.in_emit;
         self.in_emit = true;
         self.depth += 1;
@@ -2127,7 +2127,7 @@ pub const PluginRuntime = struct {
                     self.deferred_len -= 1;
                     const payload: ?*const anyopaque = if (entry.size == 0) null else @ptrCast(&entry.payload);
                     if (self.schemaLive(entry.schema)) self.dispatchCustom(entry.schema, payload, entry.size, entry.flags);
-                    if (builtin.mode == .Debug) @memset(entry.payload[0..entry.size], 0xDD);
+                    if (builtin.mode == .debug) @memset(entry.payload[0..entry.size], 0xDD);
                 }
             }
         }
@@ -2459,7 +2459,7 @@ pub const PluginRuntime = struct {
             .network_id = item.network_id,
             .max_stack_size = item.max_stack_size,
             .stackable = if (item.stackable) 1 else 0,
-            .reserved = .{0} ** 5,
+            .reserved = @splat(0),
             .identifier = stringView(item.identifier),
         };
     }
@@ -2568,9 +2568,9 @@ pub const PluginRuntime = struct {
         if (slot_index >= state.container.base.getSize()) return abi.result_not_found;
         const item = state.container.base.getItem(slot_index);
         if (item) |value| {
-            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.InventoryItemSnapshot), .version = 1, .reserved = 0 }, .present = 1, .reserved = .{0} ** 3, .count = value.stack_size, .reserved_count = 0, .network_id = value.item_type.network_id, .metadata = value.metadata, .identifier = .{ .data = value.item_type.identifier.ptr, .length = value.item_type.identifier.len } };
+            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.InventoryItemSnapshot), .version = 1, .reserved = 0 }, .present = 1, .reserved = @splat(0), .count = value.stack_size, .reserved_count = 0, .network_id = value.item_type.network_id, .metadata = value.metadata, .identifier = .{ .data = value.item_type.identifier.ptr, .length = value.item_type.identifier.len } };
         } else {
-            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.InventoryItemSnapshot), .version = 1, .reserved = 0 }, .present = 0, .reserved = .{0} ** 3, .count = 0, .reserved_count = 0, .network_id = 0, .metadata = 0, .identifier = .{} };
+            output.* = .{ .header = .{ .struct_size = @sizeOf(abi.InventoryItemSnapshot), .version = 1, .reserved = 0 }, .present = 0, .reserved = @splat(0), .count = 0, .reserved_count = 0, .network_id = 0, .metadata = 0, .identifier = .{} };
         }
         return abi.result_ok;
     }
@@ -2612,7 +2612,7 @@ pub const PluginRuntime = struct {
             .z = player.entity.position.z,
             .yaw = player.entity.rotation.y,
             .pitch = player.entity.rotation.x,
-            .gamemode = @intCast(@intFromEnum(player.gamemode)),
+            .gamemode = @intCast(@backingInt(player.gamemode)),
             .spawned = if (player.spawned) 1 else 0,
         };
     }
@@ -3210,7 +3210,7 @@ test "dispatch with zero subscribers installs no bridge" {
     _ = events.emit(.ServerTick, &tick);
     try std.testing.expectEqual(@as(u32, 0), runtime.depth);
     try std.testing.expect(!events.hasListeners(.ServerTick));
-    try std.testing.expectEqual(@as(u32, 0), runtime.active[@intFromEnum(abi.EventId.server_tick)][abi.event_phase_pre]);
+    try std.testing.expectEqual(@as(u32, 0), runtime.active[@backingInt(abi.EventId.server_tick)][abi.event_phase_pre]);
     try std.testing.expectEqual(@as(u32, 0), runtime.bridge_total);
 }
 
@@ -3235,7 +3235,7 @@ test "thirty two subscribers on one event never enter dispatch for another" {
     for (&subscriptions) |*subscription| {
         try std.testing.expectEqual(
             abi.result_ok,
-            PluginRuntime.eventSubscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.callback, &probe, subscription),
+            PluginRuntime.eventSubscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.callback, &probe, subscription),
         );
     }
 
@@ -3261,7 +3261,7 @@ test "unsubscribe is owner scoped and compacts the bucket" {
     var runtime = PluginRuntime.init(std.testing.allocator);
     defer runtime.deinit();
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     const phase_index = abi.event_phase_pre;
     const callback = struct {
         fn call(_: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {}
@@ -3304,7 +3304,7 @@ test "nested dispatch restores depth and does not duplicate the bucket" {
     defer runtime.deinit();
     var probe = Probe{ .runtime = &runtime };
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     const phase_index = abi.event_phase_pre;
     try runtime.buckets[event_index][phase_index].append(runtime.allocator, .{
         .subscription_id = 9,
@@ -3347,12 +3347,12 @@ test "unsubscribe from a callback retires the bridge" {
     var sub: u64 = 0;
     try std.testing.expectEqual(
         abi.result_ok,
-        PluginRuntime.eventSubscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.callback, &probe, &sub),
+        PluginRuntime.eventSubscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.callback, &probe, &sub),
     );
     probe.sub = sub;
     try std.testing.expect(events.hasListeners(.ServerTick));
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     const phase_index = abi.event_phase_pre;
     var tick = Events.types.ServerTickEvent{ .tick = 1 };
     _ = events.emit(.ServerTick, &tick);
@@ -3391,10 +3391,10 @@ test "unload requested from a callback drains at depth zero" {
     var sub: u64 = 0;
     try std.testing.expectEqual(
         abi.result_ok,
-        PluginRuntime.eventSubscribe(@ptrCast(slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.callback, &probe, &sub),
+        PluginRuntime.eventSubscribe(@ptrCast(slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.callback, &probe, &sub),
     );
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     const phase_index = abi.event_phase_pre;
     var tick = Events.types.ServerTickEvent{ .tick = 1 };
     _ = events.emit(.ServerTick, &tick);
@@ -3429,7 +3429,7 @@ test "subscription during dispatch is ordered at depth zero" {
             const probe: *@This() = @ptrCast(@alignCast(userdata.?));
             probe.push(1);
             if (probe.len == 1) {
-                _ = PluginRuntime.eventSubscribe(@ptrCast(probe.slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 100, second, probe, &probe.sub);
+                _ = PluginRuntime.eventSubscribe(@ptrCast(probe.slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 100, second, probe, &probe.sub);
             }
         }
 
@@ -3440,7 +3440,7 @@ test "subscription during dispatch is ordered at depth zero" {
     };
     var probe = Probe{ .runtime = &runtime, .slot = &slot };
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     const phase_index = abi.event_phase_pre;
     try runtime.buckets[event_index][phase_index].append(runtime.allocator, .{
         .subscription_id = 1,
@@ -3495,7 +3495,7 @@ test "bridge priority upgrade applies after the outermost emit" {
             if (!probe.added) {
                 probe.added = true;
                 var second_sub: u64 = 0;
-                _ = PluginRuntime.eventSubscribe(@ptrCast(probe.slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 100, second, probe, &second_sub);
+                _ = PluginRuntime.eventSubscribe(@ptrCast(probe.slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 100, second, probe, &second_sub);
             }
         }
 
@@ -3508,7 +3508,7 @@ test "bridge priority upgrade applies after the outermost emit" {
     var sub: u64 = 0;
     try std.testing.expectEqual(
         abi.result_ok,
-        PluginRuntime.eventSubscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.first, &probe, &sub),
+        PluginRuntime.eventSubscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.first, &probe, &sub),
     );
 
     var tick = Events.types.ServerTickEvent{ .tick = 1 };
@@ -3548,10 +3548,10 @@ test "unloadAll requested from a callback is not lost" {
     var sub: u64 = 0;
     try std.testing.expectEqual(
         abi.result_ok,
-        PluginRuntime.eventSubscribe(@ptrCast(slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.callback, &probe, &sub),
+        PluginRuntime.eventSubscribe(@ptrCast(slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.callback, &probe, &sub),
     );
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     const phase_index = abi.event_phase_pre;
     var tick = Events.types.ServerTickEvent{ .tick = 1 };
     _ = events.emit(.ServerTick, &tick);
@@ -3601,10 +3601,10 @@ test "bridge priority follows the highest active subscriber after compaction" {
     var slot = PluginRuntime.HostSlot{ .runtime = &runtime, .plugin_id = 2, .state = .running };
     var high: u64 = 0;
     var low: u64 = 0;
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.eventSubscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 100, Trace.pluginHigh, &trace, &high));
-    try std.testing.expectEqual(abi.result_ok, PluginRuntime.eventSubscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Trace.pluginLow, &trace, &low));
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.eventSubscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 100, Trace.pluginHigh, &trace, &high));
+    try std.testing.expectEqual(abi.result_ok, PluginRuntime.eventSubscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 0, Trace.pluginLow, &trace, &low));
 
-    const event_index = @intFromEnum(abi.EventId.server_tick);
+    const event_index = @backingInt(abi.EventId.server_tick);
     const phase_index = abi.event_phase_pre;
     try std.testing.expectEqual(@as(i16, 100), runtime.bridge_priority[event_index][phase_index]);
 

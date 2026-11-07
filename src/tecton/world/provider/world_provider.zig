@@ -7,7 +7,7 @@ const Player = @import("../../player/player.zig").Player;
 
 pub const ChunkColumnData = struct {
     has_version: bool = false,
-    subchunks: [chunk_mod.MAX_SUBCHUNKS]?[]const u8 = .{null} ** chunk_mod.MAX_SUBCHUNKS,
+    subchunks: [chunk_mod.MAX_SUBCHUNKS]?[]const u8 = @splat(null),
     block_entity_data: ?[]const u8 = null,
 
     pub fn deinit(self: *ChunkColumnData, allocator: std.mem.Allocator) void {

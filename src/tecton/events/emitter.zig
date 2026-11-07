@@ -31,16 +31,17 @@ pub fn Listener(comptime event: Event) type {
 }
 
 pub fn Emitter() type {
-    const event_fields = @typeInfo(Event).@"enum".fields;
+    const event_info = @typeInfo(Event).@"enum";
+    const event_fields = event_info.field_names;
 
     const ListenerArrays = blk: {
         var names: [event_fields.len * 3][]const u8 = undefined;
         var field_types: [event_fields.len * 3]type = undefined;
-        for (event_fields, 0..) |field, i| {
-            names[i * 3] = field.name ++ "_pre";
-            names[i * 3 + 1] = field.name ++ "_commit";
-            names[i * 3 + 2] = field.name ++ "_post";
-            const event: Event = @enumFromInt(field.value);
+        for (event_fields, 0..) |name, i| {
+            names[i * 3] = name ++ "_pre";
+            names[i * 3 + 1] = name ++ "_commit";
+            names[i * 3 + 2] = name ++ "_post";
+            const event: Event = @fromBackingInt(event_info.field_values[i]);
             field_types[i * 3] = std.ArrayList(Listener(event));
             field_types[i * 3 + 1] = std.ArrayList(Listener(event));
             field_types[i * 3 + 2] = std.ArrayList(Listener(event));
@@ -60,10 +61,10 @@ pub fn Emitter() type {
 
         pub fn init(allocator: std.mem.Allocator) Self {
             var listeners: ListenerArrays = undefined;
-            inline for (event_fields) |field| {
-                @field(listeners, field.name ++ "_pre") = .empty;
-                @field(listeners, field.name ++ "_commit") = .empty;
-                @field(listeners, field.name ++ "_post") = .empty;
+            inline for (event_fields) |name| {
+                @field(listeners, name ++ "_pre") = .empty;
+                @field(listeners, name ++ "_commit") = .empty;
+                @field(listeners, name ++ "_post") = .empty;
             }
             return .{ .allocator = allocator, .listeners = listeners };
         }
@@ -78,10 +79,10 @@ pub fn Emitter() type {
         }
 
         pub fn deinit(self: *Self) void {
-            inline for (event_fields) |field| {
-                @field(self.listeners, field.name ++ "_pre").deinit(self.allocator);
-                @field(self.listeners, field.name ++ "_commit").deinit(self.allocator);
-                @field(self.listeners, field.name ++ "_post").deinit(self.allocator);
+            inline for (event_fields) |name| {
+                @field(self.listeners, name ++ "_pre").deinit(self.allocator);
+                @field(self.listeners, name ++ "_commit").deinit(self.allocator);
+                @field(self.listeners, name ++ "_post").deinit(self.allocator);
             }
         }
 
@@ -122,10 +123,10 @@ pub fn Emitter() type {
         }
 
         pub fn removeOwner(self: *Self, owner_id: u32) void {
-            inline for (event_fields) |field| {
-                self.removeOwnerFrom(&@field(self.listeners, field.name ++ "_pre"), owner_id);
-                self.removeOwnerFrom(&@field(self.listeners, field.name ++ "_commit"), owner_id);
-                self.removeOwnerFrom(&@field(self.listeners, field.name ++ "_post"), owner_id);
+            inline for (event_fields) |name| {
+                self.removeOwnerFrom(&@field(self.listeners, name ++ "_pre"), owner_id);
+                self.removeOwnerFrom(&@field(self.listeners, name ++ "_commit"), owner_id);
+                self.removeOwnerFrom(&@field(self.listeners, name ++ "_post"), owner_id);
             }
         }
 

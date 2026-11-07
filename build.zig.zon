@@ -2,33 +2,33 @@
     .name = .Tecton,
     .version = "0.4.0",
     .fingerprint = 0x450bb029679e1fba,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zlib = .{
             .url = "git+https://github.com/allyourcodebase/zlib.git#d3b5519d3b73616a6bfece0712f080029d2a9244",
             .hash = "zlib-1.3.2-ZZQ7lc8NAAAHm9MDfplvwoesXvk4tVm6VCsiI8KnIbT0",
         },
-        .nbt = .{
-            .url = "git+https://github.com/tecton-mc/Nbt.git#c585051a99f4aa84fe82962af54ed68230022a3c",
-            .hash = "nbt-0.0.0-lsUufBbRAADwshsxsdoTDCgpvBLDRo-QUa8QdhdKQMGW",
-        },
         .BinaryStream = .{
-            .url = "git+https://github.com/tecton-mc/BinaryStream?ref=master#b0953025800d6069ceccaad2315a1c8a818105b1",
-            .hash = "BinaryStream-0.0.0-gn8mmkJfAQB7hx3EiIoUs228mEqfXMqE78Fjf_Bdq7We",
+            .url = "git+https://github.com/tecton-mc/BinaryStream.git#eeb1f51fc8671a400326b3f251c4d939ca3706c7",
+            .hash = "BinaryStream-0.0.0-gn8mmutlAQBoMDwXz2kdWZrOgsQ5T0AFeoYRGs_yMDVa",
         },
 
         // Same pin `webrtc` uses, so the cache and the C build are shared.
         .mbedtls = .{
-            .url = "git+https://github.com/allyourcodebase/mbedtls.git#55f2af148634945e9508a3a50de2ccfe65eb971f",
-            .hash = "mbedtls-3.6.6-E4NUR4cWAACCHFSwZ5urTBPK4A6EZlm3pSUjfg4c3QAw",
+            .url = "git+https://github.com/tecton-mc/mbedtls.git#c7c30fa817fce95dd6e7cb23713ed7d4b565cb4e",
+            .hash = "mbedtls-3.6.6-E4NUR54WAAByItirw5cqvmyEyAve-yC_eOHADrLf-nv3",
         },
         .nethernet_zig = .{
-            .url = "git+https://github.com/VantStudios/nethernet-zig.git#04a01365dd052a526cdc3be0c8180ce52a4294fd",
-            .hash = "nethernet_zig-0.1.0-y6Rr0VElDABzEiCRsrQ3PwEG1Z8IyrKkn_C-tHpVgB-L",
+            .url = "git+https://github.com/tecton-mc/nethernet-zig.git#ce61169b5806acc95caea98e180ddb18ac8cc0a4",
+            .hash = "nethernet_zig-0.1.0-y6Rr0UkhDAAw8q8uqSN_rC7cO3jAjTe7I1dmsnjjp3TO",
         },
         .protocol = .{
-            .url = "git+https://github.com/tecton-mc/Protocol.git#54988548017c4a1943e232a56127ef410d2ded4e",
-            .hash = "protocol-0.0.0-129wXr3AeQAzamOIMiDfXf0PPINgmfIHkFr0MgJ_W0_C",
+            .url = "git+https://github.com/tecton-mc/Protocol.git#4dc79c8fe5935c60c4e8a547b38d2454feb9fd14",
+            .hash = "protocol-0.0.0-129wXsm_eQAzVEU4WEwSzkSyV8vYBHcViFUrKhwo9ARr",
+        },
+        .nbt = .{
+            .url = "git+https://github.com/tecton-mc/Nbt.git#8fa140e8832e2b3bd7bbcd76894b6b5e3626e436",
+            .hash = "nbt-0.0.0-lsUufOXQAAAm9aRHocGm9FYZMjgKHgahqkscqQlPICZB",
         },
     },
     .paths = .{

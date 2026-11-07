@@ -105,7 +105,7 @@ fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !WriteItemsRe
     var temp_stream = BinaryStream.init(allocator, null, null);
     defer temp_stream.deinit();
 
-    var ids = std.ArrayList(i32){ .items = &.{}, .capacity = 0 };
+    var ids = @as(std.ArrayList(i32), .empty);
 
     var count: usize = 0;
     for (arr) |entry| {

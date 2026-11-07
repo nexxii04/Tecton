@@ -24,7 +24,7 @@ pub const CommandContext = struct {
     raw_line: []const u8 = "",
 
     origin_type: []const u8 = "player",
-    uuid: [16]u8 = .{0} ** 16,
+    uuid: [16]u8 = @splat(0),
     request_id: []const u8 = "",
 
     single_target_buf: [1]*Player = undefined,

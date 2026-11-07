@@ -5,7 +5,7 @@ const EntityId = entity_id.EntityId;
 
 pub const EcsChunkIndex = struct {
     allocator: std.mem.Allocator,
-    by_chunk: std.AutoHashMapUnmanaged(i64, std.ArrayListUnmanaged(EntityId)) = .empty,
+    by_chunk: std.AutoHashMapUnmanaged(i64, std.ArrayList(EntityId)) = .empty,
     chunk_of: std.AutoHashMapUnmanaged(u64, i64) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) EcsChunkIndex {

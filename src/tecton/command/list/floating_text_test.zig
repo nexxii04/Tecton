@@ -22,9 +22,9 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectError(error.MissingName, parseAddArgs(""));
             try std.testing.expectError(error.MissingName, parseAddArgs("onlyname"));
             try std.testing.expectError(error.MissingText, parseAddArgs("shop   "));
-            const long_name = "x" ** (MAX_NAME_LENGTH + 1);
+            const long_name: [MAX_NAME_LENGTH + 1]u8 = @splat('x');
             try std.testing.expectError(error.NameTooLong, parseAddArgs(long_name ++ " text"));
-            const long_text = "y" ** (MAX_TEXT_LENGTH + 1);
+            const long_text: [MAX_TEXT_LENGTH + 1]u8 = @splat('y');
             try std.testing.expectError(error.TextTooLong, parseAddArgs("shop " ++ long_text));
         }
 
@@ -38,8 +38,8 @@ pub fn Suite(comptime scope: type) type {
         pub fn case_003() !void {
             try std.testing.expectEqualStrings("shop", try parseRemoveArgs("  shop  "));
             try std.testing.expectError(error.MissingName, parseRemoveArgs("   "));
-            const long_name = "x" ** (MAX_NAME_LENGTH + 1);
-            try std.testing.expectError(error.NameTooLong, parseRemoveArgs(long_name));
+            const long_name: [MAX_NAME_LENGTH + 1]u8 = @splat('x');
+            try std.testing.expectError(error.NameTooLong, parseRemoveArgs(&long_name));
             try std.testing.expectError(error.InvalidName, parseRemoveArgs("bad/name"));
         }
 

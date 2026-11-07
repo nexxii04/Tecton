@@ -33,7 +33,7 @@ pub fn buildAbilities(
 
     const layers = try allocator.alloc(Protocol.AbilityLayer, 1);
     layers[0] = .{
-        .layer_type = @intFromEnum(Protocol.AbilityLayerType.Base),
+        .layer_type = @backingInt(Protocol.AbilityLayerType.Base),
         .abilities = abilities,
         .fly_speed = 0.05,
         .vertical_fly_speed = 1.0,
@@ -43,7 +43,7 @@ pub fn buildAbilities(
     return Protocol.UpdateAbilitiesPacket.init(
         allocator,
         runtime_id,
-        if (is_operator) @intFromEnum(Protocol.PermissionLevel.Operator) else @intFromEnum(Protocol.PermissionLevel.Member),
+        if (is_operator) @backingInt(Protocol.PermissionLevel.Operator) else @backingInt(Protocol.PermissionLevel.Member),
         if (is_operator) 1 else 0,
         layers,
     );

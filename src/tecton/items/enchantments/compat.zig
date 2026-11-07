@@ -111,8 +111,8 @@ pub const ArmorAggregate = struct {
     }
 
     pub fn isEnchanted(self: *const ArmorAggregate) bool {
-        inline for (std.meta.fields(ArmorAggregate)) |field| {
-            if (@field(self, field.name) != 0) return true;
+        inline for (@typeInfo(ArmorAggregate).@"struct".field_names) |name| {
+            if (@field(self, name) != 0) return true;
         }
         return false;
     }

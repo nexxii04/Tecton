@@ -23,7 +23,7 @@ pub const EntityActorFlags = struct {
     }
 
     pub fn getFlag(self: *const EntityActorFlags, flag: ActorFlags) bool {
-        const index = @intFromEnum(flag);
+        const index = @backingInt(flag);
         if (index < 64) {
             return self.flags_one & (@as(i64, 1) << @intCast(index)) != 0;
         } else {
@@ -61,7 +61,7 @@ pub const EntityActorFlags = struct {
     }
 
     fn setFlagRaw(self: *EntityActorFlags, flag: ActorFlags, value: bool) void {
-        const index = @intFromEnum(flag);
+        const index = @backingInt(flag);
         if (index < 64) {
             const mask = @as(i64, 1) << @intCast(index);
             if (value) {

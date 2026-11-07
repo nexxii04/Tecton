@@ -33,7 +33,7 @@ pub fn readBlockEntities(provider: *LevelDBProvider, chunk: *Chunk, dimension: *
         pos: Protocol.BlockPosition,
         tag_data: []const u8,
     };
-    var pending = std.ArrayList(PendingEntity){ .items = &.{}, .capacity = 0 };
+    var pending = @as(std.ArrayList(PendingEntity), .empty);
     defer {
         for (pending.items) |p| provider.allocator.free(p.tag_data);
         pending.deinit(provider.allocator);

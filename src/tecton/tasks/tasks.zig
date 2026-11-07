@@ -17,7 +17,7 @@ pub const TaskQueue = struct {
 
     pub fn init(allocator: std.mem.Allocator) TaskQueue {
         return .{
-            .tasks = std.ArrayList(Task){ .items = &.{}, .capacity = 0 },
+            .tasks = @as(std.ArrayList(Task), .empty),
             .allocator = allocator,
         };
     }

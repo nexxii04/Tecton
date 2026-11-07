@@ -104,7 +104,7 @@ pub fn Suite(comptime scope: type) type {
             const conn_b = try registry.create(&backend_b);
 
             const h = host(&tecton);
-            h.replyTo(7, "player", .{0} ** 16, "req", true, "hello");
+            h.replyTo(7, "player", @splat(0), "req", true, "hello");
             try std.testing.expectEqual(@as(usize, 0), fake.sent.items.len);
 
             var player_a = fakePlayer(7, conn_a);
@@ -112,11 +112,11 @@ pub fn Suite(comptime scope: type) type {
             try tecton.players.insert(&player_a);
             try tecton.players.insert(&player_b);
 
-            h.replyTo(7, "player", .{0} ** 16, "req", true, "hello");
+            h.replyTo(7, "player", @splat(0), "req", true, "hello");
             try std.testing.expectEqual(@as(usize, 1), fake.sentTo(conn_a.id));
             try std.testing.expectEqual(@as(usize, 0), fake.sentTo(conn_b.id));
 
-            h.replyTo(8, "player", .{0} ** 16, "req", true, "hello");
+            h.replyTo(8, "player", @splat(0), "req", true, "hello");
             try std.testing.expectEqual(@as(usize, 1), fake.sentTo(conn_b.id));
 
             var big: [2048]u8 = undefined;
@@ -124,7 +124,7 @@ pub fn Suite(comptime scope: type) type {
             const marker = "marker-3210";
             @memcpy(big[0..marker.len], marker);
             tecton.network = &plain;
-            h.replyTo(7, "player", .{0} ** 16, "req", true, &big);
+            h.replyTo(7, "player", @splat(0), "req", true, &big);
 
             try std.testing.expectEqual(@as(usize, 2), fake.sentTo(conn_a.id));
             const last = fake.sent.items[fake.sent.items.len - 1];

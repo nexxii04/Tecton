@@ -19,14 +19,14 @@ pub fn main(init: std.process.Init) !void {
     if (builtin.os.tag == .windows) {
         _ = winmm.timeBeginPeriod(1);
     }
-    const is_debug = @import("builtin").mode == .Debug;
+    const is_debug = @import("builtin").mode == .debug;
 
     if (is_debug) {
-        var gpa = std.heap.DebugAllocator(.{}){};
+        var gpa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
         const allocator = gpa.allocator();
         defer {
             const leaked = gpa.deinit();
-            if (leaked == .leak) {
+            if (leaked != 0) {
                 std.debug.print("Memory leak detected!\n", .{});
             } else {
                 std.debug.print("No memory leak detected!\n", .{});

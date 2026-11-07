@@ -451,7 +451,7 @@ pub fn Suite(comptime scope: type) type {
             runtime.endTick();
             try std.testing.expectEqual(@as(u32, 1), probe.first_calls);
             try std.testing.expectEqual(@as(u32, 1), probe.second_calls);
-            const custom_index: usize = @typeInfo(Events.Event).@"enum".fields.len + @as(usize, schema >> 8) - @as(usize, abi.event_custom_base);
+            const custom_index: usize = @typeInfo(Events.Event).@"enum".field_names.len + @as(usize, schema >> 8) - @as(usize, abi.event_custom_base);
             try std.testing.expectEqual(@as(usize, 1), runtime.buckets[custom_index][abi.event_phase_pre].items.len);
             try std.testing.expectEqual(@as(u32, 0), runtime.dead_total);
 
@@ -481,7 +481,7 @@ pub fn Suite(comptime scope: type) type {
                 fn cancel(userdata: ?*anyopaque, event: *const abi.EventView) callconv(.c) void {
                     const probe: *@This() = @ptrCast(@alignCast(userdata.?));
                     probe.push(1);
-                    event.result.* = @intFromEnum(abi.EventResult.cancel);
+                    event.result.* = @backingInt(abi.EventResult.cancel);
                 }
 
                 fn observe(userdata: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {
@@ -492,8 +492,8 @@ pub fn Suite(comptime scope: type) type {
             var probe = Probe{};
             var first: u64 = 0;
             var second: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.cancel, &probe, &first));
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.observe, &probe, &second));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.cancel, &probe, &first));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.observe, &probe, &second));
 
             var player: @import("../player/player.zig").Player = undefined;
             player.entity.runtime_id = 7;
@@ -503,8 +503,8 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(u8, 1), probe.calls[0]);
 
             probe.len = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.cancel, &probe, &first));
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.observe, &probe, &second));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.cancel, &probe, &first));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_tick), abi.event_phase_pre, 0, Probe.observe, &probe, &second));
 
             var tick = Events.types.ServerTickEvent{ .tick = 1 };
             try std.testing.expect(events.emit(.ServerTick, &tick));
@@ -561,11 +561,11 @@ pub fn Suite(comptime scope: type) type {
             var probe = Probe{};
             var subscriptions: [32]u64 = undefined;
             for (&subscriptions) |*subscription| {
-                try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.callback, &probe, subscription));
+                try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.callback, &probe, subscription));
             }
             try std.testing.expectEqual(@as(u32, 1), runtime.bridge_total);
-            try std.testing.expect(runtime.bridges[@intFromEnum(abi.EventId.server_start)][abi.event_phase_pre]);
-            try std.testing.expect(!runtime.bridges[@intFromEnum(abi.EventId.server_tick)][abi.event_phase_pre]);
+            try std.testing.expect(runtime.bridges[@backingInt(abi.EventId.server_start)][abi.event_phase_pre]);
+            try std.testing.expect(!runtime.bridges[@backingInt(abi.EventId.server_tick)][abi.event_phase_pre]);
             try std.testing.expectEqual(@as(u32, 0), runtime.bridge_refresh_total);
             try std.testing.expect(events.idle_hook == null);
 
@@ -614,7 +614,7 @@ pub fn Suite(comptime scope: type) type {
             var probe = Probe{};
             var subscriptions: [32]u64 = undefined;
             for (&subscriptions) |*subscription| {
-                try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.callback, &probe, subscription));
+                try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.callback, &probe, subscription));
             }
 
             var start = Events.types.ServerStartEvent{};
@@ -648,7 +648,7 @@ pub fn Suite(comptime scope: type) type {
             for (subscriptions[1..]) |subscription| {
                 try std.testing.expectEqual(abi.result_ok, runtime.events_api.unsubscribe(@ptrCast(&slot), subscription));
             }
-            try std.testing.expectEqual(@as(u32, 1), runtime.active[@intFromEnum(abi.EventId.server_start)][abi.event_phase_pre]);
+            try std.testing.expectEqual(@as(u32, 1), runtime.active[@backingInt(abi.EventId.server_start)][abi.event_phase_pre]);
 
             var iteration: usize = 0;
             while (iteration < 1000) : (iteration += 1) {
@@ -717,7 +717,7 @@ pub fn Suite(comptime scope: type) type {
                     if (probe.subscribed) return;
                     probe.subscribed = true;
                     var subscription: u64 = 0;
-                    _ = probe.slot.runtime.events_api.subscribe(@ptrCast(probe.slot), @intFromEnum(abi.EventId.server_start), abi.event_phase_pre, 0, core, probe, &subscription);
+                    _ = probe.slot.runtime.events_api.subscribe(@ptrCast(probe.slot), @backingInt(abi.EventId.server_start), abi.event_phase_pre, 0, core, probe, &subscription);
                 }
 
                 fn core(userdata: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {
@@ -732,7 +732,7 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(&slot), schema, null, 0, 0));
             runtime.endTick();
 
-            const start_index = @intFromEnum(abi.EventId.server_start);
+            const start_index = @backingInt(abi.EventId.server_start);
             try std.testing.expectEqual(@as(u32, 1), runtime.active[start_index][abi.event_phase_pre]);
             try std.testing.expectEqual(@as(u32, 1), runtime.bridge_total);
             try std.testing.expect(events.hasListeners(.ServerStart));
@@ -767,7 +767,7 @@ pub fn Suite(comptime scope: type) type {
             };
             var probe = Probe{ .slot = &slot };
             var core_sub: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.core, &probe, &core_sub));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.server_start), abi.event_phase_pre, 0, Probe.core, &probe, &core_sub));
             probe.core_sub = core_sub;
 
             const name = "phase03.custom.bridge.retire";
@@ -780,7 +780,7 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(abi.result_ok, runtime.events_api.emit(@ptrCast(&slot), schema, null, 0, 0));
             runtime.endTick();
 
-            const start_index = @intFromEnum(abi.EventId.server_start);
+            const start_index = @backingInt(abi.EventId.server_start);
             try std.testing.expectEqual(@as(u32, 0), runtime.active[start_index][abi.event_phase_pre]);
             try std.testing.expectEqual(@as(u32, 0), runtime.bridge_total);
             try std.testing.expectEqual(@as(usize, 0), runtime.retire_count);
@@ -795,9 +795,9 @@ pub fn Suite(comptime scope: type) type {
             const sizes = [_]usize{ 0, 0, 8, 16, 16, 32, 32, 40, 32, 32, 32, 16, 16, 16, 32, 32, 32, 24, 24, 24, 16, 16, 32, 32, 24 };
             const cancelable = [_]bool{ false, false, false, true, false, true, true, true, true, true, true, false, false, false, false, false, false, true, true, true, false, false, true, false, false };
             const mutable = [_]bool{ false, false, false, false, false, true, false, true, true, false, false, false, false, false, false, false, false, true, true, false, false, false, true, false, false };
-            try std.testing.expectEqual(@as(usize, 25), std.meta.fields(abi.EventId).len);
+            try std.testing.expectEqual(@as(usize, 25), @typeInfo(abi.EventId).@"enum".field_names.len);
             for (0..25) |id| {
-                const event: abi.EventId = @enumFromInt(id);
+                const event: abi.EventId = @fromBackingInt(@intCast(id));
                 const meta = abi.eventMeta(event);
                 try std.testing.expectEqual(@as(u32, @intCast(id)), meta.external_id);
                 try std.testing.expectEqual((@as(u32, @intCast(id)) << 8) | @as(u32, if (id < 2) 0 else 1), meta.schema);
@@ -878,7 +878,7 @@ pub fn Suite(comptime scope: type) type {
             var open = Events.types.InventoryOpenEvent{ .player = &player, .container_id = 4 };
             var click = Events.types.InventoryClickEvent{ .player = &player, .slot = 5, .button = 2 };
             var close = Events.types.InventoryCloseEvent{ .player = &player, .container_id = 4 };
-            var transaction = Events.types.TransactionEvent{ .transaction_id = [_]u8{1} ** 16, .player = &player, .committed = true };
+            var transaction = Events.types.TransactionEvent{ .transaction_id = @splat(1), .player = &player, .committed = true };
             var combust = Events.types.EntityCombustEvent{ .entity = &entity, .duration = 100, .instigator = &instigator, .source = .lava };
             var apply = Events.types.EnchantmentApplyEvent{ .stack = &stack, .definition = &enchantment, .previous_level = 1, .level = 2, .source = .plugin, .actor = &player };
             var remove = Events.types.EnchantmentRemoveEvent{ .stack = &stack, .definition = null, .definition_id = 88, .previous_level = 2, .source = .plugin, .actor = &player };
@@ -886,7 +886,7 @@ pub fn Suite(comptime scope: type) type {
             var despawn = Events.types.EntityDespawnEvent{ .id = entity_id, .runtime_id = 12, .cause = .expired };
             var entity_damage = Events.types.EntityDamageEvent{ .target = entity_id, .target_runtime = 9, .amount = 4.5, .source = null, .source_runtime = null, .cause = .magic };
             var death = Events.types.EntityDeathEvent{ .id = entity_id, .runtime_id = 9, .killer_runtime = 10, .position = .{ .x = 1, .y = 2, .z = 3 } };
-            var interact = Events.types.EntityInteractEvent{ .target = entity_id, .target_runtime = 9, .player = &player, .action = @enumFromInt(0) };
+            var interact = Events.types.EntityInteractEvent{ .target = entity_id, .target_runtime = 9, .player = &player, .action = @fromBackingInt(0) };
 
             var context = Events.EventContext{ .event = .ServerStart, .phase = .pre };
             _ = private_pluginruntime_dispatch(&runtime, .ServerStart, &context, &start);
@@ -1056,7 +1056,7 @@ pub fn Suite(comptime scope: type) type {
                 fn call(_: ?*anyopaque, _: *const abi.EventView) callconv(.c) void {}
             };
             var subscription: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_move), abi.event_phase_pre, 0, Callback.call, null, &subscription));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_move), abi.event_phase_pre, 0, Callback.call, null, &subscription));
             var player: Player = undefined;
             player.entity.runtime_id = 7;
             player.on_ground = true;
@@ -1091,7 +1091,7 @@ pub fn Suite(comptime scope: type) type {
                 }
             };
             var probe = Probe{};
-            const ids = [_]u32{ @intFromEnum(abi.EventId.player_move), @intFromEnum(abi.EventId.damage), @intFromEnum(abi.EventId.entity_damage), @intFromEnum(abi.EventId.server_tick) };
+            const ids = [_]u32{ @backingInt(abi.EventId.player_move), @backingInt(abi.EventId.damage), @backingInt(abi.EventId.entity_damage), @backingInt(abi.EventId.server_tick) };
             var subscriptions: [ids.len]u64 = undefined;
             for (ids, 0..) |id, index| {
                 try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), id, abi.event_phase_pre, 0, Probe.callback, &probe, &subscriptions[index]));
@@ -1138,7 +1138,7 @@ pub fn Suite(comptime scope: type) type {
                 }
             };
             var sub: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.callback, null, &sub));
 
             var player: Player = undefined;
             player.entity.runtime_id = 7;
@@ -1174,8 +1174,8 @@ pub fn Suite(comptime scope: type) type {
             };
             var pre: u64 = 0;
             var commit: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_move), abi.event_phase_pre, 0, Probe.callback, null, &pre));
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_move), abi.event_phase_commit, 0, Probe.callback, null, &commit));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_move), abi.event_phase_pre, 0, Probe.callback, null, &pre));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_move), abi.event_phase_commit, 0, Probe.callback, null, &commit));
 
             var player: Player = undefined;
             player.entity.runtime_id = 7;
@@ -1203,7 +1203,7 @@ pub fn Suite(comptime scope: type) type {
                 }
             };
             var sub: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.damage), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.damage), abi.event_phase_pre, 0, Probe.callback, null, &sub));
 
             var victim: Entity = undefined;
             victim.runtime_id = 9;
@@ -1228,7 +1228,7 @@ pub fn Suite(comptime scope: type) type {
                 }
             };
             var sub: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.entity_combust), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.entity_combust), abi.event_phase_pre, 0, Probe.callback, null, &sub));
 
             var entity: Entity = undefined;
             entity.runtime_id = 9;
@@ -1254,7 +1254,7 @@ pub fn Suite(comptime scope: type) type {
                 }
             };
             var sub: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.enchantment_apply), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.enchantment_apply), abi.event_phase_pre, 0, Probe.callback, null, &sub));
             try std.testing.expectEqual(@as(u16, 0), abi.eventMeta(.enchantment_remove).flags & abi.event_flag_mutable);
 
             var stack: ItemStack = undefined;
@@ -1280,7 +1280,7 @@ pub fn Suite(comptime scope: type) type {
                 }
             };
             var sub: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.entity_damage), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.entity_damage), abi.event_phase_pre, 0, Probe.callback, null, &sub));
 
             var damage = Events.types.EntityDamageEvent{ .target = undefined, .target_runtime = 9, .amount = 1, .cause = .fall };
             try std.testing.expect(events.emit(.EntityDamage, &damage));
@@ -1299,11 +1299,11 @@ pub fn Suite(comptime scope: type) type {
 
             const Probe = struct {
                 fn callback(_: ?*anyopaque, view: *const abi.EventView) callconv(.c) void {
-                    view.result.* = @intFromEnum(abi.EventResult.cancel);
+                    view.result.* = @backingInt(abi.EventResult.cancel);
                 }
             };
             var sub: u64 = 0;
-            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @intFromEnum(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.callback, null, &sub));
+            try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(&slot), @backingInt(abi.EventId.player_chat), abi.event_phase_pre, 0, Probe.callback, null, &sub));
 
             var player: Player = undefined;
             player.entity.runtime_id = 7;
@@ -1435,7 +1435,7 @@ pub fn Suite(comptime scope: type) type {
 
             runtime.unloadPlugin(1);
 
-            const custom_index = std.meta.fields(Events.Event).len + @as(usize, schema >> 8) - @as(usize, abi.event_custom_base);
+            const custom_index = @typeInfo(Events.Event).@"enum".field_names.len + @as(usize, schema >> 8) - @as(usize, abi.event_custom_base);
             try std.testing.expectEqual(@as(usize, 0), runtime.buckets[custom_index][abi.event_phase_pre].items.len);
             try std.testing.expectEqual(@as(u32, 0), runtime.active[custom_index][abi.event_phase_pre]);
 
@@ -1490,7 +1490,7 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expect((fresh >> 8) != (old >> 8));
             try std.testing.expectEqual(abi.result_not_found, runtime.events_api.emit(@ptrCast(second), old, null, 0, 0));
 
-            const fresh_index = std.meta.fields(Events.Event).len + @as(usize, fresh >> 8) - @as(usize, abi.event_custom_base);
+            const fresh_index = @typeInfo(Events.Event).@"enum".field_names.len + @as(usize, fresh >> 8) - @as(usize, abi.event_custom_base);
             var fresh_probe = Probe{};
             var fresh_subscription: u64 = 0;
             try std.testing.expectEqual(abi.result_ok, runtime.events_api.subscribe(@ptrCast(second), fresh >> 8, abi.event_phase_pre, 0, Probe.callback, &fresh_probe, &fresh_subscription));
@@ -1608,7 +1608,7 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqual(@as(f32, 1.5), player_snapshot.x);
             try std.testing.expectEqual(@as(f32, 64), player_snapshot.y);
             try std.testing.expectEqual(@as(f32, -3.5), player_snapshot.z);
-            try std.testing.expectEqual(@as(u8, @intFromEnum(Protocol.GameMode.Creative)), player_snapshot.gamemode);
+            try std.testing.expectEqual(@as(u8, @backingInt(Protocol.GameMode.Creative)), player_snapshot.gamemode);
             try std.testing.expectEqual(@as(u8, 1), player_snapshot.spawned);
             try std.testing.expectEqualStrings("phase5", player_snapshot.name.slice());
 
@@ -1682,7 +1682,7 @@ pub fn Suite(comptime scope: type) type {
             try std.testing.expectEqualStrings("minecraft:phase5", entity_snapshot.type.slice());
 
             for (0..2000) |index| {
-                const name = try std.fmt.allocPrint(allocator, "phase5:item{d}", .{index});
+                const name = try allocator.print("phase5:item{d}", .{index});
                 const item = try ItemType.init(allocator, name, @intCast(10_000 + index), 64, true, &.{}, false, 0, .{ .Compound = NBT.CompoundTag.init(allocator, null) });
                 try item.register();
             }
@@ -2048,7 +2048,7 @@ pub fn Suite(comptime scope: type) type {
             var handle: u64 = 0;
             try std.testing.expectEqual(abi.result_ok, PluginRuntime.commandRegister(@ptrCast(&slot), &desc, &handle));
 
-            const result = registry.dispatch(null, undefined, undefined, "/phase5-exec alpha beta", "console", .{0} ** 16, "");
+            const result = registry.dispatch(null, undefined, undefined, "/phase5-exec alpha beta", "console", @splat(0), "");
             try std.testing.expect(result.success);
             try std.testing.expectEqual(@as(u32, 1), probe.called);
             try std.testing.expectEqual(@as(u32, 3), probe.argc);
@@ -2060,7 +2060,7 @@ pub fn Suite(comptime scope: type) type {
 
             runtime.unregisterCommandsFor(9);
             try std.testing.expect(registry.findCommand("phase5-exec") == null);
-            const missing = registry.dispatch(null, undefined, undefined, "/phase5-exec alpha", "console", .{0} ** 16, "");
+            const missing = registry.dispatch(null, undefined, undefined, "/phase5-exec alpha", "console", @splat(0), "");
             try std.testing.expect(!missing.success);
             try std.testing.expectEqual(@as(u32, 1), probe.called);
         }

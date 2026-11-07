@@ -24,7 +24,7 @@ pub fn register(registry: *CommandRegistry, tecton: *Tecton) !void {
 }
 
 fn registerWorldEnum(registry: *CommandRegistry, tecton: *Tecton) !u32 {
-    var names = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
+    var names = @as(std.ArrayList([]const u8), .empty);
     defer if (names.capacity > 0) names.deinit(registry.allocator);
 
     var it = tecton.worlds.keyIterator();
